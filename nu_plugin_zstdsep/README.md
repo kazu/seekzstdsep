@@ -28,6 +28,24 @@ plugin use zstdsep
 `cargo install nu_plugin_zstdsep` works too. The plugin's protocol version has to match the
 nushell it runs under; build it against the same release.
 
+### Which nushell a revision supports
+
+The current revision targets **nushell 0.115**. One build serves one nushell minor: the `Hello`
+handshake compares both sides with a semver caret, and under `0.y.z` that requires `y` to match, so
+a plugin built against 0.115 is refused by 0.114 and by 0.116.
+
+Which revision to check out for a given nushell is recorded in git tags named `nu_v.<version>`. A
+port is bracketed by two of them, cut on the commits either side of it: `nu_v.0.114` is the last
+commit that builds against 0.114, `nu_v.0.115` the first that builds against 0.115:
+
+```sh
+git tag -l 'nu_v*'
+git checkout nu_v.0.114     # the newest revision that still speaks nushell 0.114
+```
+
+A tag that has a successor therefore bounds that nushell's stretch of history from above. The
+newest one only says where the current nushell was adopted; the work since is on the branch.
+
 ## Commands
 
 ### `zstdsep inspect <path>`
