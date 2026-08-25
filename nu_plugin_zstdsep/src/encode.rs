@@ -144,7 +144,7 @@ fn write_record(
 fn text_bytes(value: Value) -> Result<Vec<u8>, Value> {
     match value {
         Value::String { val, .. } => Ok(val.into_bytes()),
-        Value::Binary { val, .. } => Ok(val),
+        Value::Binary { val, .. } => Ok(val.into_owned()),
         other => Err(other),
     }
 }
