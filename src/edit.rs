@@ -1,0 +1,391 @@
+//! Operations that modify an existing file at frame boundaries.
+//!
+//! Each is destructive and rewrites nothing before the first byte it affects. Non-destructive use
+//! is the caller's job: clone the file first. See
+//! `docs/design/2026-08-24-truncate-append-split-concat.md`.
+//!
+//! Every operation validates the separator against the file before it writes, since cutting with
+//! the wrong one cuts in the wrong place and the file does not record which one it was built with.
+//! The first frame and the last one that is not allowed to be short have to hold the same number of
+//! separators, and that number is the records per frame. All of them therefore refuse a separator
+//! that does not occur in the first frame, a count that differs between the two, and a file of
+//! fewer than three frames, where the comparison cannot be made.
+use std::{
+    fs::File,
+    io::{Read, Seek, SeekFrom, Write},
+};
+
+use crate::record;
+use crate::seekzstdsep_lib::{READ_BUF_SIZE, decompressed_range, frame_encoder};
+use anyhow::bail;
+use memchr::memmem::Finder;
+use zeekstd::{DecodeOptions, SeekTable};
+
+/// What to do with a file whose last byte is not the separator, so that it ends in a fragment
+/// rather than in a record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnMissingSeparator {
+    /// Refuse to join. Joining would merge the fragment with the first appended record and shift
+    /// every later record index by one, silently.
+    #[default]
+    Refuse,
+    /// Write one separator at the join, making the fragment a record of its own.
+    Insert,
+}
+
+/// Shortens `f` to `record_len` records, which is the length that remains, not the number removed.
+///
+/// The cut lands immediately after a separator, so the result always ends with one and a trailing
+/// fragment is dropped. `f` is rewritten from the frame the cut falls in; earlier bytes are left
+/// byte for byte as they were.
+///
+/// # Errors
+///
+/// Refuses a `record_len` of 0 or one past the records `f` holds, along with the refusals every
+/// operation in [this module](crate::edit) shares.
+pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Result<()> {
+    let (finder, table) = open_target(f, separator)?;
+    let frames = table.num_frames();
+
+    let n = validate_separator(f, &table, &finder)?;
+    let last = record::count(&decode_frame(f, &table, frames - 1)?, &finder) as u64;
+    let before_last = n * u64::from(frames - 1);
+    let total = before_last + last;
+
+    if record_len == 0 {
+        bail!("refusing to truncate to 0 records: a file of no frames cannot be read back");
+    }
+    if record_len > total {
+        bail!("refusing to truncate to {record_len} records: the file holds {total}");
+    }
+
+    // A cut past every frame but the last one falls inside the last, whatever it holds. Dividing
+    // there would place it by a record count the last frame does not have to obey.
+    let (k, rem) = if record_len > before_last {
+        (u64::from(frames - 1), record_len - before_last)
+    } else {
+        (record_len / n, record_len % n)
+    };
+
+    let tail = if rem == 0 {
+        None
+    } else {
+        let frame = decode_frame(f, &table, k as u32)?;
+        let Some(end) = record::nth_end(&frame, &finder, separator.len(), rem as usize - 1) else {
+            bail!("frame {k} holds fewer than the {rem} records the truncation cuts it at");
+        };
+        Some(encode_frame(
+            &frame[..end],
+            frame_has_checksum(f, &table, k as u32)?,
+        )?)
+    };
+
+    let cut = if k == 0 {
+        0
+    } else {
+        table.frame_end_comp(k as u32 - 1)?
+    };
+    cut_at(f, cut)?;
+
+    let mut out = SeekTable::new();
+    log_frames(&mut out, &table, k as u32)?;
+    if let Some((bytes, c_size, d_size)) = tail {
+        f.write_all(&bytes)?;
+        out.log_frame(c_size, d_size)?;
+    }
+
+    write_seek_table(f, out)
+}
+
+/// Appends the records `data` holds to `f`, keeping every frame but the last at the records per
+/// frame the file was built with.
+///
+/// The last data frame generally holds fewer records than the rest, so appending after it would
+/// leave a short frame in the interior. It is decoded, joined with `data` and cut again instead;
+/// nothing before it is read or written. An empty `data` rewrites nothing.
+///
+/// # Errors
+///
+/// Refuses a file that does not end with a whole record unless `on_missing` is
+/// [`OnMissingSeparator::Insert`], which refuses in turn where writing one separator leaves
+/// another fragment. Along with the refusals every operation in [this module](crate::edit) shares.
+pub fn append(
+    f: &mut File,
+    mut data: impl Read,
+    separator: &[u8],
+    on_missing: OnMissingSeparator,
+) -> anyhow::Result<()> {
+    let (finder, table) = open_target(f, separator)?;
+
+    // Before the subtraction below: a seek table can hold no entries at all, and validation is
+    // what refuses that.
+    let n = validate_separator(f, &table, &finder)? as usize;
+    // A frame carrying nothing is what zeekstd's finish() writes after an end_frame(), and the
+    // record the file ends with is then in the frame before it. Replace that one; the set_len
+    // below drops the empty frames along with it.
+    let mut last = table.num_frames() - 1;
+    while last > 0 && table.frame_size_decomp(last)? == 0 {
+        last -= 1;
+    }
+
+    // Before anything is decoded, so that appending nothing costs one read and rewrites nothing.
+    let mut head = vec![0u8; READ_BUF_SIZE];
+    let read = data.read(&mut head)?;
+    if read == 0 {
+        return Ok(());
+    }
+    head.truncate(read);
+
+    let checksum = frame_has_checksum(f, &table, last)?;
+    let mut tail = decode_frame(f, &table, last)?;
+    if !record::ends_whole(&tail, &finder, separator.len()) {
+        match on_missing {
+            OnMissingSeparator::Refuse => bail!(
+                "refusing to append to a file that does not end with a whole record: the first \
+                 appended record would merge with the fragment it ends in"
+            ),
+            OnMissingSeparator::Insert => {
+                tail.extend_from_slice(separator);
+                if !record::ends_whole(&tail, &finder, separator.len()) {
+                    bail!(
+                        "refusing to append: writing a separator leaves the fragment the file \
+                         ends in a fragment, which is what a separator overlapping itself does"
+                    );
+                }
+            }
+        }
+    }
+    tail.extend_from_slice(&head);
+
+    // The records already in the file go in front of the ones being appended, so the join is cut
+    // like any other record boundary.
+    let mut cutter = Cutter::new(
+        std::io::Cursor::new(tail).chain(data),
+        &finder,
+        separator.len(),
+        n,
+    );
+    // The first frame holds the records the file already has, and they exist nowhere else between
+    // the set_len below and the write that follows it. Compress it first, so that window is a
+    // write rather than a compression.
+    let (first, whole) = match cutter.next_group()? {
+        Some(group) => (group, true),
+        None => (cutter.take_remainder(), false),
+    };
+    let (first_bytes, first_comp, first_decomp) = encode_frame(&first, checksum)?;
+
+    let cut = table.frame_start_comp(last)?;
+    cut_at(f, cut)?;
+    f.write_all(&first_bytes)?;
+
+    let mut out = SeekTable::new();
+    log_frames(&mut out, &table, last)?;
+    out.log_frame(first_comp, first_decomp)?;
+
+    if whole {
+        let mut encoder = frame_encoder(&mut *f, checksum)?;
+        let mut frames = 0;
+        while let Some(group) = cutter.next_group()? {
+            encoder.write_all(&group)?;
+            encoder.end_frame()?;
+            frames += 1;
+        }
+        let remainder = cutter.take_remainder();
+        if !remainder.is_empty() {
+            encoder.write_all(&remainder)?;
+            encoder.end_frame()?;
+            frames += 1;
+        }
+        if frames > 0 {
+            encoder.flush()?;
+            let written = encoder.into_seek_table();
+            if written.num_frames() as usize != frames {
+                bail!(
+                    "compressing {frames} frames of {n} records produced {}: a frame of that many \
+                     records is larger than one zstd frame can hold",
+                    written.num_frames()
+                );
+            }
+            log_frames(&mut out, &written, written.num_frames())?;
+        }
+    }
+
+    write_seek_table(f, out)
+}
+
+/// Cuts a stream into groups of exactly `records` records.
+///
+/// A record ends with the separator, so a group ends immediately after its last one. What is left
+/// when the stream runs out is the remainder, which is shorter than a group and belongs in the
+/// frame the file ends with.
+struct Cutter<'a, R> {
+    stream: record::Stream<'a, R>,
+    records: usize,
+    found: usize,
+}
+
+impl<'a, R: Read> Cutter<'a, R> {
+    fn new(reader: R, finder: &'a Finder<'a>, separator_len: usize, records: usize) -> Self {
+        Self {
+            stream: record::Stream::with_capacity(reader, finder, separator_len, READ_BUF_SIZE),
+            records,
+            found: 0,
+        }
+    }
+
+    /// The next group, or `None` once what is left cannot fill one.
+    fn next_group(&mut self) -> anyhow::Result<Option<Vec<u8>>> {
+        loop {
+            while let Some(end) = self.stream.next_end() {
+                self.found += 1;
+                if self.found == self.records {
+                    let group = self.stream.buffered()[..end].to_vec();
+                    self.stream.drop_to_last_end();
+                    self.found = 0;
+                    return Ok(Some(group));
+                }
+            }
+            if !self.stream.fill()? {
+                return Ok(None);
+            }
+        }
+    }
+
+    /// The bytes that fill no group, leaving the cutter empty.
+    fn take_remainder(&mut self) -> Vec<u8> {
+        self.stream.take_buffered()
+    }
+}
+
+/// The separator search and the seek table, which is what every operation reads before it writes.
+///
+/// The table is kept rather than read again: [`cut_at`] destroys the copy on disk.
+///
+/// # Errors
+///
+/// An empty `separator`, and a file whose seek table cannot be read.
+fn open_target<'a>(f: &mut File, separator: &'a [u8]) -> anyhow::Result<(Finder<'a>, SeekTable)> {
+    record::check_separator(separator)?;
+    Ok((Finder::new(separator), SeekTable::from_seekable(f)?))
+}
+
+/// Shortens `f` to `cut` and positions it there, which is where the replacement frames go.
+///
+/// This opens the window in which the file cannot be read: it carries no seek table from here
+/// until [`write_seek_table`] has finished.
+fn cut_at(f: &mut File, cut: u64) -> anyhow::Result<()> {
+    f.set_len(cut)?;
+    f.seek(SeekFrom::Start(cut))?;
+    Ok(())
+}
+
+/// Confirms `finder`'s separator is the one `f` was built with, and returns the records per frame.
+///
+/// Compares the first frame against the last one that is not allowed to be short, so a count that
+/// drifts anywhere between them is caught. Only those two are decoded: a frame in the middle that
+/// differs from both is not detected, and finding it would mean decompressing the whole file.
+fn validate_separator(f: &File, table: &SeekTable, finder: &Finder) -> anyhow::Result<u64> {
+    let frames = table.num_frames();
+    if frames < 3 {
+        bail!(
+            "refusing to validate the separator against {frames} frames: the last frame is \
+             legitimately short, so fewer than three cannot be compared"
+        );
+    }
+
+    let first = record::count(&decode_frame(f, table, 0)?, finder);
+    if first == 0 {
+        bail!("the separator does not occur in frame 0");
+    }
+    let last_full = frames - 2;
+    let second = record::count(&decode_frame(f, table, last_full)?, finder);
+    if first != second {
+        bail!(
+            "frame 0 holds {first} separators and frame {last_full} holds {second}: either the \
+             separator is wrong or the file does not hold a uniform count"
+        );
+    }
+
+    Ok(first as u64)
+}
+
+/// The four bytes every zstd frame starts with.
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
+
+/// Whether frame `index` ends with a content checksum, read from bit 2 of its frame header
+/// descriptor.
+///
+/// Public because it is the only way to ask: the seek table does not record it, and an operation
+/// that rewrites a frame has to match whatever the file already carries.
+///
+/// # Errors
+///
+/// A frame that does not start with the zstd magic number.
+pub fn frame_has_checksum(mut f: &File, table: &SeekTable, index: u32) -> anyhow::Result<bool> {
+    f.seek(SeekFrom::Start(table.frame_start_comp(index)?))?;
+    let mut head = [0u8; 5];
+    f.read_exact(&mut head)?;
+    if head[..4] != ZSTD_MAGIC {
+        bail!("frame {index} does not start with the zstd magic number");
+    }
+    Ok(head[4] & 0b100 != 0)
+}
+
+/// Decompresses one frame.
+fn decode_frame(f: &File, table: &SeekTable, index: u32) -> anyhow::Result<Vec<u8>> {
+    let mut decoder = DecodeOptions::new(f)
+        .seek_table(table.clone())
+        .into_decoder()?;
+
+    decompressed_range(
+        &mut decoder,
+        table.frame_start_decomp(index)?,
+        table.frame_size_decomp(index)?,
+    )
+}
+
+/// Compresses `data` as a single frame, returning its bytes and the sizes its seek table entry
+/// needs.
+fn encode_frame(data: &[u8], checksum: bool) -> anyhow::Result<(Vec<u8>, u32, u32)> {
+    let mut out = Vec::new();
+    let mut encoder = frame_encoder(&mut out, checksum)?;
+
+    encoder.write_all(data)?;
+    encoder.end_frame()?;
+    encoder.flush()?;
+
+    let table = encoder.into_seek_table();
+    if table.num_frames() != 1 {
+        bail!(
+            "re-encoding {} bytes produced {} frames, not one",
+            data.len(),
+            table.num_frames()
+        );
+    }
+
+    Ok((
+        out,
+        table.frame_size_comp(0)? as u32,
+        table.frame_size_decomp(0)? as u32,
+    ))
+}
+
+/// Copies the first `frames` entries of `table` into `out`.
+///
+/// Rebuilding is the only way to drop an entry: no zeekstd API removes one from a `SeekTable`.
+fn log_frames(out: &mut SeekTable, table: &SeekTable, frames: u32) -> anyhow::Result<()> {
+    for i in 0..frames {
+        out.log_frame(
+            table.frame_size_comp(i)? as u32,
+            table.frame_size_decomp(i)? as u32,
+        )?;
+    }
+    Ok(())
+}
+
+fn write_seek_table(f: &mut File, table: SeekTable) -> anyhow::Result<()> {
+    let mut serializer = table.into_serializer();
+    let mut buf = vec![0u8; serializer.encoded_len()];
+    let n = serializer.write_into(&mut buf);
+    Ok(f.write_all(&buf[..n])?)
+}

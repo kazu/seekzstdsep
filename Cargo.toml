@@ -1,0 +1,47 @@
+[workspace]
+members = ["nu_plugin_zstdsep"]
+
+[package]
+name = "seekzstdsep"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Kazuhisa TAKEI <kazuhisa@gmail.com>"]
+description = "Separator-aware seekable Zstandard compression. Frames are cut at separator boundaries and hold a uniform separator count, so record ranges are addressable by arithmetic instead of a scan."
+repository = "https://github.com/kazu/seekzstdsep"
+license = "MIT"
+readme = "README.md"
+keywords = ["zstd", "seekable", "compression", "jsonl", "zstandard"]
+categories = ["compression", "command-line-utilities"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+zeekstd = "0.6.2"
+zstd = "0.13"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1.0"
+tempfile = "3.24.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-log = "0.1"
+tracing-logfmt = "0.3"
+reflink-copy = "0.1.28"
+memchr = "2.7.6"
+
+[dev-dependencies]
+criterion = "0.5"
+rand = "0.9"
+
+[[bench]]
+name = "compress"
+harness = false
+
+[[bench]]
+name = "read"
+harness = false

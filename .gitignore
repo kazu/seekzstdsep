@@ -1,0 +1,9 @@
+._*
+target/
+logs
+*.jsonl
+*.seek.zst
+tmp/
+
+# Test fixtures are data, not build output.
+!tests/fixtures/*.jsonl

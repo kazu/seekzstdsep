@@ -1,0 +1,600 @@
+{"ts":"2026-08-24T00:00:00Z","lvl":"info","seq":0,"op":"open","path":"/var/log/app.log","took_us":0,"msg":"open"}
+{"ts":"2026-08-24T00:00:01Z","lvl":"info","seq":1,"op":"read","path":"/srv/data/000123.seek.zst","took_us":37,"msg":"read read"}
+{"ts":"2026-08-24T00:00:02Z","lvl":"info","seq":2,"op":"write","path":"/tmp/staging/frame-0007","took_us":74,"msg":"write write write"}
+{"ts":"2026-08-24T00:00:03Z","lvl":"info","seq":3,"op":"close","path":"/mnt/store/shard-42/index","took_us":111,"msg":"close close close close"}
+{"ts":"2026-08-24T00:00:04Z","lvl":"info","seq":4,"op":"flush","path":"/etc/seekzstdsep/config.toml","took_us":148,"msg":"flush flush flush flush flush"}
+{"ts":"2026-08-24T00:00:05Z","lvl":"info","seq":5,"op":"sync","path":"/var/log/app.log","took_us":185,"msg":"sync"}
+{"ts":"2026-08-24T00:00:06Z","lvl":"info","seq":6,"op":"retry","path":"/srv/data/000123.seek.zst","took_us":222,"msg":"retry retry"}
+{"ts":"2026-08-24T00:00:07Z","lvl":"warn","seq":7,"op":"commit","path":"/tmp/staging/frame-0007","took_us":259,"msg":"commit commit commit"}
+{"ts":"2026-08-24T00:00:08Z","lvl":"warn","seq":8,"op":"rollback","path":"/mnt/store/shard-42/index","took_us":296,"msg":"rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:00:09Z","lvl":"warn","seq":9,"op":"compact","path":"/etc/seekzstdsep/config.toml","took_us":333,"msg":"compact compact compact compact compact"}
+{"ts":"2026-08-24T00:00:10Z","lvl":"warn","seq":10,"op":"evict","path":"/var/log/app.log","took_us":370,"msg":"evict"}
+{"ts":"2026-08-24T00:00:11Z","lvl":"warn","seq":11,"op":"reload","path":"/srv/data/000123.seek.zst","took_us":407,"msg":"reload reload"}
+{"ts":"2026-08-24T00:00:12Z","lvl":"warn","seq":12,"op":"open","path":"/tmp/staging/frame-0007","took_us":444,"msg":"open open open"}
+{"ts":"2026-08-24T00:00:13Z","lvl":"warn","seq":13,"op":"read","path":"/mnt/store/shard-42/index","took_us":481,"msg":"read read read read"}
+{"ts":"2026-08-24T00:00:14Z","lvl":"error","seq":14,"op":"write","path":"/etc/seekzstdsep/config.toml","took_us":518,"msg":"write write write write write"}
+{"ts":"2026-08-24T00:00:15Z","lvl":"error","seq":15,"op":"close","path":"/var/log/app.log","took_us":555,"msg":"close"}
+{"ts":"2026-08-24T00:00:16Z","lvl":"error","seq":16,"op":"flush","path":"/srv/data/000123.seek.zst","took_us":592,"msg":"flush flush"}
+{"ts":"2026-08-24T00:00:17Z","lvl":"error","seq":17,"op":"sync","path":"/tmp/staging/frame-0007","took_us":629,"msg":"sync sync sync"}
+{"ts":"2026-08-24T00:00:18Z","lvl":"error","seq":18,"op":"retry","path":"/mnt/store/shard-42/index","took_us":666,"msg":"retry retry retry retry"}
+{"ts":"2026-08-24T00:00:19Z","lvl":"error","seq":19,"op":"commit","path":"/etc/seekzstdsep/config.toml","took_us":703,"msg":"commit commit commit commit commit"}
+{"ts":"2026-08-24T00:00:20Z","lvl":"error","seq":20,"op":"rollback","path":"/var/log/app.log","took_us":740,"msg":"rollback"}
+{"ts":"2026-08-24T00:00:21Z","lvl":"debug","seq":21,"op":"compact","path":"/srv/data/000123.seek.zst","took_us":777,"msg":"compact compact"}
+{"ts":"2026-08-24T00:00:22Z","lvl":"debug","seq":22,"op":"evict","path":"/tmp/staging/frame-0007","took_us":814,"msg":"evict evict evict"}
+{"ts":"2026-08-24T00:00:23Z","lvl":"debug","seq":23,"op":"reload","path":"/mnt/store/shard-42/index","took_us":851,"msg":"reload reload reload reload"}
+{"ts":"2026-08-24T00:00:24Z","lvl":"debug","seq":24,"op":"open","path":"/etc/seekzstdsep/config.toml","took_us":888,"msg":"open open open open open"}
+{"ts":"2026-08-24T00:00:25Z","lvl":"debug","seq":25,"op":"read","path":"/var/log/app.log","took_us":925,"msg":"read"}
+{"ts":"2026-08-24T00:00:26Z","lvl":"debug","seq":26,"op":"write","path":"/srv/data/000123.seek.zst","took_us":962,"msg":"write write"}
+{"ts":"2026-08-24T00:00:27Z","lvl":"debug","seq":27,"op":"close","path":"/tmp/staging/frame-0007","took_us":999,"msg":"close close close"}
+{"ts":"2026-08-24T00:00:28Z","lvl":"info","seq":28,"op":"flush","path":"/mnt/store/shard-42/index","took_us":1036,"msg":"flush flush flush flush"}
+{"ts":"2026-08-24T00:00:29Z","lvl":"info","seq":29,"op":"sync","path":"/etc/seekzstdsep/config.toml","took_us":1073,"msg":"sync sync sync sync sync"}
+{"ts":"2026-08-24T00:00:30Z","lvl":"info","seq":30,"op":"retry","path":"/var/log/app.log","took_us":1110,"msg":"retry"}
+{"ts":"2026-08-24T00:00:31Z","lvl":"info","seq":31,"op":"commit","path":"/srv/data/000123.seek.zst","took_us":1147,"msg":"commit commit"}
+{"ts":"2026-08-24T00:00:32Z","lvl":"info","seq":32,"op":"rollback","path":"/tmp/staging/frame-0007","took_us":1184,"msg":"rollback rollback rollback"}
+{"ts":"2026-08-24T00:00:33Z","lvl":"info","seq":33,"op":"compact","path":"/mnt/store/shard-42/index","took_us":1221,"msg":"compact compact compact compact"}
+{"ts":"2026-08-24T00:00:34Z","lvl":"info","seq":34,"op":"evict","path":"/etc/seekzstdsep/config.toml","took_us":1258,"msg":"evict evict evict evict evict"}
+{"ts":"2026-08-24T00:00:35Z","lvl":"warn","seq":35,"op":"reload","path":"/var/log/app.log","took_us":1295,"msg":"reload"}
+{"ts":"2026-08-24T00:00:36Z","lvl":"warn","seq":36,"op":"open","path":"/srv/data/000123.seek.zst","took_us":1332,"msg":"open open"}
+{"ts":"2026-08-24T00:00:37Z","lvl":"warn","seq":37,"op":"read","path":"/tmp/staging/frame-0007","took_us":1369,"msg":"read read read"}
+{"ts":"2026-08-24T00:00:38Z","lvl":"warn","seq":38,"op":"write","path":"/mnt/store/shard-42/index","took_us":1406,"msg":"write write write write"}
+{"ts":"2026-08-24T00:00:39Z","lvl":"warn","seq":39,"op":"close","path":"/etc/seekzstdsep/config.toml","took_us":1443,"msg":"close close close close close"}
+{"ts":"2026-08-24T00:00:40Z","lvl":"warn","seq":40,"op":"flush","path":"/var/log/app.log","took_us":1480,"msg":"flush"}
+{"ts":"2026-08-24T00:00:41Z","lvl":"warn","seq":41,"op":"sync","path":"/srv/data/000123.seek.zst","took_us":1517,"msg":"sync sync"}
+{"ts":"2026-08-24T00:00:42Z","lvl":"error","seq":42,"op":"retry","path":"/tmp/staging/frame-0007","took_us":1554,"msg":"retry retry retry"}
+{"ts":"2026-08-24T00:00:43Z","lvl":"error","seq":43,"op":"commit","path":"/mnt/store/shard-42/index","took_us":1591,"msg":"commit commit commit commit"}
+{"ts":"2026-08-24T00:00:44Z","lvl":"error","seq":44,"op":"rollback","path":"/etc/seekzstdsep/config.toml","took_us":1628,"msg":"rollback rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:00:45Z","lvl":"error","seq":45,"op":"compact","path":"/var/log/app.log","took_us":1665,"msg":"compact"}
+{"ts":"2026-08-24T00:00:46Z","lvl":"error","seq":46,"op":"evict","path":"/srv/data/000123.seek.zst","took_us":1702,"msg":"evict evict"}
+{"ts":"2026-08-24T00:00:47Z","lvl":"error","seq":47,"op":"reload","path":"/tmp/staging/frame-0007","took_us":1739,"msg":"reload reload reload"}
+{"ts":"2026-08-24T00:00:48Z","lvl":"error","seq":48,"op":"open","path":"/mnt/store/shard-42/index","took_us":1776,"msg":"open open open open"}
+{"ts":"2026-08-24T00:00:49Z","lvl":"debug","seq":49,"op":"read","path":"/etc/seekzstdsep/config.toml","took_us":1813,"msg":"read read read read read"}
+{"ts":"2026-08-24T00:00:50Z","lvl":"debug","seq":50,"op":"write","path":"/var/log/app.log","took_us":1850,"msg":"write"}
+{"ts":"2026-08-24T00:00:51Z","lvl":"debug","seq":51,"op":"close","path":"/srv/data/000123.seek.zst","took_us":1887,"msg":"close close"}
+{"ts":"2026-08-24T00:00:52Z","lvl":"debug","seq":52,"op":"flush","path":"/tmp/staging/frame-0007","took_us":1924,"msg":"flush flush flush"}
+{"ts":"2026-08-24T00:00:53Z","lvl":"debug","seq":53,"op":"sync","path":"/mnt/store/shard-42/index","took_us":1961,"msg":"sync sync sync sync"}
+{"ts":"2026-08-24T00:00:54Z","lvl":"debug","seq":54,"op":"retry","path":"/etc/seekzstdsep/config.toml","took_us":1998,"msg":"retry retry retry retry retry"}
+{"ts":"2026-08-24T00:00:55Z","lvl":"debug","seq":55,"op":"commit","path":"/var/log/app.log","took_us":2035,"msg":"commit"}
+{"ts":"2026-08-24T00:00:56Z","lvl":"info","seq":56,"op":"rollback","path":"/srv/data/000123.seek.zst","took_us":2072,"msg":"rollback rollback"}
+{"ts":"2026-08-24T00:00:57Z","lvl":"info","seq":57,"op":"compact","path":"/tmp/staging/frame-0007","took_us":2109,"msg":"compact compact compact"}
+{"ts":"2026-08-24T00:00:58Z","lvl":"info","seq":58,"op":"evict","path":"/mnt/store/shard-42/index","took_us":2146,"msg":"evict evict evict evict"}
+{"ts":"2026-08-24T00:00:59Z","lvl":"info","seq":59,"op":"reload","path":"/etc/seekzstdsep/config.toml","took_us":2183,"msg":"reload reload reload reload reload"}
+{"ts":"2026-08-24T00:01:00Z","lvl":"info","seq":60,"op":"open","path":"/var/log/app.log","took_us":2220,"msg":"open"}
+{"ts":"2026-08-24T00:01:01Z","lvl":"info","seq":61,"op":"read","path":"/srv/data/000123.seek.zst","took_us":2257,"msg":"read read"}
+{"ts":"2026-08-24T00:01:02Z","lvl":"info","seq":62,"op":"write","path":"/tmp/staging/frame-0007","took_us":2294,"msg":"write write write"}
+{"ts":"2026-08-24T00:01:03Z","lvl":"warn","seq":63,"op":"close","path":"/mnt/store/shard-42/index","took_us":2331,"msg":"close close close close"}
+{"ts":"2026-08-24T00:01:04Z","lvl":"warn","seq":64,"op":"flush","path":"/etc/seekzstdsep/config.toml","took_us":2368,"msg":"flush flush flush flush flush"}
+{"ts":"2026-08-24T00:01:05Z","lvl":"warn","seq":65,"op":"sync","path":"/var/log/app.log","took_us":2405,"msg":"sync"}
+{"ts":"2026-08-24T00:01:06Z","lvl":"warn","seq":66,"op":"retry","path":"/srv/data/000123.seek.zst","took_us":2442,"msg":"retry retry"}
+{"ts":"2026-08-24T00:01:07Z","lvl":"warn","seq":67,"op":"commit","path":"/tmp/staging/frame-0007","took_us":2479,"msg":"commit commit commit"}
+{"ts":"2026-08-24T00:01:08Z","lvl":"warn","seq":68,"op":"rollback","path":"/mnt/store/shard-42/index","took_us":2516,"msg":"rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:01:09Z","lvl":"warn","seq":69,"op":"compact","path":"/etc/seekzstdsep/config.toml","took_us":2553,"msg":"compact compact compact compact compact"}
+{"ts":"2026-08-24T00:01:10Z","lvl":"error","seq":70,"op":"evict","path":"/var/log/app.log","took_us":2590,"msg":"evict"}
+{"ts":"2026-08-24T00:01:11Z","lvl":"error","seq":71,"op":"reload","path":"/srv/data/000123.seek.zst","took_us":2627,"msg":"reload reload"}
+{"ts":"2026-08-24T00:01:12Z","lvl":"error","seq":72,"op":"open","path":"/tmp/staging/frame-0007","took_us":2664,"msg":"open open open"}
+{"ts":"2026-08-24T00:01:13Z","lvl":"error","seq":73,"op":"read","path":"/mnt/store/shard-42/index","took_us":2701,"msg":"read read read read"}
+{"ts":"2026-08-24T00:01:14Z","lvl":"error","seq":74,"op":"write","path":"/etc/seekzstdsep/config.toml","took_us":2738,"msg":"write write write write write"}
+{"ts":"2026-08-24T00:01:15Z","lvl":"error","seq":75,"op":"close","path":"/var/log/app.log","took_us":2775,"msg":"close"}
+{"ts":"2026-08-24T00:01:16Z","lvl":"error","seq":76,"op":"flush","path":"/srv/data/000123.seek.zst","took_us":2812,"msg":"flush flush"}
+{"ts":"2026-08-24T00:01:17Z","lvl":"debug","seq":77,"op":"sync","path":"/tmp/staging/frame-0007","took_us":2849,"msg":"sync sync sync"}
+{"ts":"2026-08-24T00:01:18Z","lvl":"debug","seq":78,"op":"retry","path":"/mnt/store/shard-42/index","took_us":2886,"msg":"retry retry retry retry"}
+{"ts":"2026-08-24T00:01:19Z","lvl":"debug","seq":79,"op":"commit","path":"/etc/seekzstdsep/config.toml","took_us":2923,"msg":"commit commit commit commit commit"}
+{"ts":"2026-08-24T00:01:20Z","lvl":"debug","seq":80,"op":"rollback","path":"/var/log/app.log","took_us":2960,"msg":"rollback"}
+{"ts":"2026-08-24T00:01:21Z","lvl":"debug","seq":81,"op":"compact","path":"/srv/data/000123.seek.zst","took_us":2997,"msg":"compact compact"}
+{"ts":"2026-08-24T00:01:22Z","lvl":"debug","seq":82,"op":"evict","path":"/tmp/staging/frame-0007","took_us":3034,"msg":"evict evict evict"}
+{"ts":"2026-08-24T00:01:23Z","lvl":"debug","seq":83,"op":"reload","path":"/mnt/store/shard-42/index","took_us":3071,"msg":"reload reload reload reload"}
+{"ts":"2026-08-24T00:01:24Z","lvl":"info","seq":84,"op":"open","path":"/etc/seekzstdsep/config.toml","took_us":3108,"msg":"open open open open open"}
+{"ts":"2026-08-24T00:01:25Z","lvl":"info","seq":85,"op":"read","path":"/var/log/app.log","took_us":3145,"msg":"read"}
+{"ts":"2026-08-24T00:01:26Z","lvl":"info","seq":86,"op":"write","path":"/srv/data/000123.seek.zst","took_us":3182,"msg":"write write"}
+{"ts":"2026-08-24T00:01:27Z","lvl":"info","seq":87,"op":"close","path":"/tmp/staging/frame-0007","took_us":3219,"msg":"close close close"}
+{"ts":"2026-08-24T00:01:28Z","lvl":"info","seq":88,"op":"flush","path":"/mnt/store/shard-42/index","took_us":3256,"msg":"flush flush flush flush"}
+{"ts":"2026-08-24T00:01:29Z","lvl":"info","seq":89,"op":"sync","path":"/etc/seekzstdsep/config.toml","took_us":3293,"msg":"sync sync sync sync sync"}
+{"ts":"2026-08-24T00:01:30Z","lvl":"info","seq":90,"op":"retry","path":"/var/log/app.log","took_us":3330,"msg":"retry"}
+{"ts":"2026-08-24T00:01:31Z","lvl":"warn","seq":91,"op":"commit","path":"/srv/data/000123.seek.zst","took_us":3367,"msg":"commit commit"}
+{"ts":"2026-08-24T00:01:32Z","lvl":"warn","seq":92,"op":"rollback","path":"/tmp/staging/frame-0007","took_us":3404,"msg":"rollback rollback rollback"}
+{"ts":"2026-08-24T00:01:33Z","lvl":"warn","seq":93,"op":"compact","path":"/mnt/store/shard-42/index","took_us":3441,"msg":"compact compact compact compact"}
+{"ts":"2026-08-24T00:01:34Z","lvl":"warn","seq":94,"op":"evict","path":"/etc/seekzstdsep/config.toml","took_us":3478,"msg":"evict evict evict evict evict"}
+{"ts":"2026-08-24T00:01:35Z","lvl":"warn","seq":95,"op":"reload","path":"/var/log/app.log","took_us":3515,"msg":"reload"}
+{"ts":"2026-08-24T00:01:36Z","lvl":"warn","seq":96,"op":"open","path":"/srv/data/000123.seek.zst","took_us":3552,"msg":"open open"}
+{"ts":"2026-08-24T00:01:37Z","lvl":"warn","seq":97,"op":"read","path":"/tmp/staging/frame-0007","took_us":3589,"msg":"read read read"}
+{"ts":"2026-08-24T00:01:38Z","lvl":"error","seq":98,"op":"write","path":"/mnt/store/shard-42/index","took_us":3626,"msg":"write write write write"}
+{"ts":"2026-08-24T00:01:39Z","lvl":"error","seq":99,"op":"close","path":"/etc/seekzstdsep/config.toml","took_us":3663,"msg":"close close close close close"}
+{"ts":"2026-08-24T00:01:40Z","lvl":"error","seq":100,"op":"flush","path":"/var/log/app.log","took_us":3700,"msg":"flush"}
+{"ts":"2026-08-24T00:01:41Z","lvl":"error","seq":101,"op":"sync","path":"/srv/data/000123.seek.zst","took_us":3737,"msg":"sync sync"}
+{"ts":"2026-08-24T00:01:42Z","lvl":"error","seq":102,"op":"retry","path":"/tmp/staging/frame-0007","took_us":3774,"msg":"retry retry retry"}
+{"ts":"2026-08-24T00:01:43Z","lvl":"error","seq":103,"op":"commit","path":"/mnt/store/shard-42/index","took_us":3811,"msg":"commit commit commit commit"}
+{"ts":"2026-08-24T00:01:44Z","lvl":"error","seq":104,"op":"rollback","path":"/etc/seekzstdsep/config.toml","took_us":3848,"msg":"rollback rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:01:45Z","lvl":"debug","seq":105,"op":"compact","path":"/var/log/app.log","took_us":3885,"msg":"compact"}
+{"ts":"2026-08-24T00:01:46Z","lvl":"debug","seq":106,"op":"evict","path":"/srv/data/000123.seek.zst","took_us":3922,"msg":"evict evict"}
+{"ts":"2026-08-24T00:01:47Z","lvl":"debug","seq":107,"op":"reload","path":"/tmp/staging/frame-0007","took_us":3959,"msg":"reload reload reload"}
+{"ts":"2026-08-24T00:01:48Z","lvl":"debug","seq":108,"op":"open","path":"/mnt/store/shard-42/index","took_us":3996,"msg":"open open open open"}
+{"ts":"2026-08-24T00:01:49Z","lvl":"debug","seq":109,"op":"read","path":"/etc/seekzstdsep/config.toml","took_us":4033,"msg":"read read read read read"}
+{"ts":"2026-08-24T00:01:50Z","lvl":"debug","seq":110,"op":"write","path":"/var/log/app.log","took_us":4070,"msg":"write"}
+{"ts":"2026-08-24T00:01:51Z","lvl":"debug","seq":111,"op":"close","path":"/srv/data/000123.seek.zst","took_us":4107,"msg":"close close"}
+{"ts":"2026-08-24T00:01:52Z","lvl":"info","seq":112,"op":"flush","path":"/tmp/staging/frame-0007","took_us":4144,"msg":"flush flush flush"}
+{"ts":"2026-08-24T00:01:53Z","lvl":"info","seq":113,"op":"sync","path":"/mnt/store/shard-42/index","took_us":4181,"msg":"sync sync sync sync"}
+{"ts":"2026-08-24T00:01:54Z","lvl":"info","seq":114,"op":"retry","path":"/etc/seekzstdsep/config.toml","took_us":4218,"msg":"retry retry retry retry retry"}
+{"ts":"2026-08-24T00:01:55Z","lvl":"info","seq":115,"op":"commit","path":"/var/log/app.log","took_us":4255,"msg":"commit"}
+{"ts":"2026-08-24T00:01:56Z","lvl":"info","seq":116,"op":"rollback","path":"/srv/data/000123.seek.zst","took_us":4292,"msg":"rollback rollback"}
+{"ts":"2026-08-24T00:01:57Z","lvl":"info","seq":117,"op":"compact","path":"/tmp/staging/frame-0007","took_us":4329,"msg":"compact compact compact"}
+{"ts":"2026-08-24T00:01:58Z","lvl":"info","seq":118,"op":"evict","path":"/mnt/store/shard-42/index","took_us":4366,"msg":"evict evict evict evict"}
+{"ts":"2026-08-24T00:01:59Z","lvl":"warn","seq":119,"op":"reload","path":"/etc/seekzstdsep/config.toml","took_us":4403,"msg":"reload reload reload reload reload"}
+{"ts":"2026-08-24T00:02:00Z","lvl":"warn","seq":120,"op":"open","path":"/var/log/app.log","took_us":4440,"msg":"open"}
+{"ts":"2026-08-24T00:02:01Z","lvl":"warn","seq":121,"op":"read","path":"/srv/data/000123.seek.zst","took_us":4477,"msg":"read read"}
+{"ts":"2026-08-24T00:02:02Z","lvl":"warn","seq":122,"op":"write","path":"/tmp/staging/frame-0007","took_us":4514,"msg":"write write write"}
+{"ts":"2026-08-24T00:02:03Z","lvl":"warn","seq":123,"op":"close","path":"/mnt/store/shard-42/index","took_us":4551,"msg":"close close close close"}
+{"ts":"2026-08-24T00:02:04Z","lvl":"warn","seq":124,"op":"flush","path":"/etc/seekzstdsep/config.toml","took_us":4588,"msg":"flush flush flush flush flush"}
+{"ts":"2026-08-24T00:02:05Z","lvl":"warn","seq":125,"op":"sync","path":"/var/log/app.log","took_us":4625,"msg":"sync"}
+{"ts":"2026-08-24T00:02:06Z","lvl":"error","seq":126,"op":"retry","path":"/srv/data/000123.seek.zst","took_us":4662,"msg":"retry retry"}
+{"ts":"2026-08-24T00:02:07Z","lvl":"error","seq":127,"op":"commit","path":"/tmp/staging/frame-0007","took_us":4699,"msg":"commit commit commit"}
+{"ts":"2026-08-24T00:02:08Z","lvl":"error","seq":128,"op":"rollback","path":"/mnt/store/shard-42/index","took_us":4736,"msg":"rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:02:09Z","lvl":"error","seq":129,"op":"compact","path":"/etc/seekzstdsep/config.toml","took_us":4773,"msg":"compact compact compact compact compact"}
+{"ts":"2026-08-24T00:02:10Z","lvl":"error","seq":130,"op":"evict","path":"/var/log/app.log","took_us":4810,"msg":"evict"}
+{"ts":"2026-08-24T00:02:11Z","lvl":"error","seq":131,"op":"reload","path":"/srv/data/000123.seek.zst","took_us":4847,"msg":"reload reload"}
+{"ts":"2026-08-24T00:02:12Z","lvl":"error","seq":132,"op":"open","path":"/tmp/staging/frame-0007","took_us":4884,"msg":"open open open"}
+{"ts":"2026-08-24T00:02:13Z","lvl":"debug","seq":133,"op":"read","path":"/mnt/store/shard-42/index","took_us":4921,"msg":"read read read read"}
+{"ts":"2026-08-24T00:02:14Z","lvl":"debug","seq":134,"op":"write","path":"/etc/seekzstdsep/config.toml","took_us":4958,"msg":"write write write write write"}
+{"ts":"2026-08-24T00:02:15Z","lvl":"debug","seq":135,"op":"close","path":"/var/log/app.log","took_us":4995,"msg":"close"}
+{"ts":"2026-08-24T00:02:16Z","lvl":"debug","seq":136,"op":"flush","path":"/srv/data/000123.seek.zst","took_us":5032,"msg":"flush flush"}
+{"ts":"2026-08-24T00:02:17Z","lvl":"debug","seq":137,"op":"sync","path":"/tmp/staging/frame-0007","took_us":5069,"msg":"sync sync sync"}
+{"ts":"2026-08-24T00:02:18Z","lvl":"debug","seq":138,"op":"retry","path":"/mnt/store/shard-42/index","took_us":5106,"msg":"retry retry retry retry"}
+{"ts":"2026-08-24T00:02:19Z","lvl":"debug","seq":139,"op":"commit","path":"/etc/seekzstdsep/config.toml","took_us":5143,"msg":"commit commit commit commit commit"}
+{"ts":"2026-08-24T00:02:20Z","lvl":"info","seq":140,"op":"rollback","path":"/var/log/app.log","took_us":5180,"msg":"rollback"}
+{"ts":"2026-08-24T00:02:21Z","lvl":"info","seq":141,"op":"compact","path":"/srv/data/000123.seek.zst","took_us":5217,"msg":"compact compact"}
+{"ts":"2026-08-24T00:02:22Z","lvl":"info","seq":142,"op":"evict","path":"/tmp/staging/frame-0007","took_us":5254,"msg":"evict evict evict"}
+{"ts":"2026-08-24T00:02:23Z","lvl":"info","seq":143,"op":"reload","path":"/mnt/store/shard-42/index","took_us":5291,"msg":"reload reload reload reload"}
+{"ts":"2026-08-24T00:02:24Z","lvl":"info","seq":144,"op":"open","path":"/etc/seekzstdsep/config.toml","took_us":5328,"msg":"open open open open open"}
+{"ts":"2026-08-24T00:02:25Z","lvl":"info","seq":145,"op":"read","path":"/var/log/app.log","took_us":5365,"msg":"read"}
+{"ts":"2026-08-24T00:02:26Z","lvl":"info","seq":146,"op":"write","path":"/srv/data/000123.seek.zst","took_us":5402,"msg":"write write"}
+{"ts":"2026-08-24T00:02:27Z","lvl":"warn","seq":147,"op":"close","path":"/tmp/staging/frame-0007","took_us":5439,"msg":"close close close"}
+{"ts":"2026-08-24T00:02:28Z","lvl":"warn","seq":148,"op":"flush","path":"/mnt/store/shard-42/index","took_us":5476,"msg":"flush flush flush flush"}
+{"ts":"2026-08-24T00:02:29Z","lvl":"warn","seq":149,"op":"sync","path":"/etc/seekzstdsep/config.toml","took_us":5513,"msg":"sync sync sync sync sync"}
+{"ts":"2026-08-24T00:02:30Z","lvl":"warn","seq":150,"op":"retry","path":"/var/log/app.log","took_us":5550,"msg":"retry"}
+{"ts":"2026-08-24T00:02:31Z","lvl":"warn","seq":151,"op":"commit","path":"/srv/data/000123.seek.zst","took_us":5587,"msg":"commit commit"}
+{"ts":"2026-08-24T00:02:32Z","lvl":"warn","seq":152,"op":"rollback","path":"/tmp/staging/frame-0007","took_us":5624,"msg":"rollback rollback rollback"}
+{"ts":"2026-08-24T00:02:33Z","lvl":"warn","seq":153,"op":"compact","path":"/mnt/store/shard-42/index","took_us":5661,"msg":"compact compact compact compact"}
+{"ts":"2026-08-24T00:02:34Z","lvl":"error","seq":154,"op":"evict","path":"/etc/seekzstdsep/config.toml","took_us":5698,"msg":"evict evict evict evict evict"}
+{"ts":"2026-08-24T00:02:35Z","lvl":"error","seq":155,"op":"reload","path":"/var/log/app.log","took_us":5735,"msg":"reload"}
+{"ts":"2026-08-24T00:02:36Z","lvl":"error","seq":156,"op":"open","path":"/srv/data/000123.seek.zst","took_us":5772,"msg":"open open"}
+{"ts":"2026-08-24T00:02:37Z","lvl":"error","seq":157,"op":"read","path":"/tmp/staging/frame-0007","took_us":5809,"msg":"read read read"}
+{"ts":"2026-08-24T00:02:38Z","lvl":"error","seq":158,"op":"write","path":"/mnt/store/shard-42/index","took_us":5846,"msg":"write write write write"}
+{"ts":"2026-08-24T00:02:39Z","lvl":"error","seq":159,"op":"close","path":"/etc/seekzstdsep/config.toml","took_us":5883,"msg":"close close close close close"}
+{"ts":"2026-08-24T00:02:40Z","lvl":"error","seq":160,"op":"flush","path":"/var/log/app.log","took_us":5920,"msg":"flush"}
+{"ts":"2026-08-24T00:02:41Z","lvl":"debug","seq":161,"op":"sync","path":"/srv/data/000123.seek.zst","took_us":5957,"msg":"sync sync"}
+{"ts":"2026-08-24T00:02:42Z","lvl":"debug","seq":162,"op":"retry","path":"/tmp/staging/frame-0007","took_us":5994,"msg":"retry retry retry"}
+{"ts":"2026-08-24T00:02:43Z","lvl":"debug","seq":163,"op":"commit","path":"/mnt/store/shard-42/index","took_us":6031,"msg":"commit commit commit commit"}
+{"ts":"2026-08-24T00:02:44Z","lvl":"debug","seq":164,"op":"rollback","path":"/etc/seekzstdsep/config.toml","took_us":6068,"msg":"rollback rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:02:45Z","lvl":"debug","seq":165,"op":"compact","path":"/var/log/app.log","took_us":6105,"msg":"compact"}
+{"ts":"2026-08-24T00:02:46Z","lvl":"debug","seq":166,"op":"evict","path":"/srv/data/000123.seek.zst","took_us":6142,"msg":"evict evict"}
+{"ts":"2026-08-24T00:02:47Z","lvl":"debug","seq":167,"op":"reload","path":"/tmp/staging/frame-0007","took_us":6179,"msg":"reload reload reload"}
+{"ts":"2026-08-24T00:02:48Z","lvl":"info","seq":168,"op":"open","path":"/mnt/store/shard-42/index","took_us":6216,"msg":"open open open open"}
+{"ts":"2026-08-24T00:02:49Z","lvl":"info","seq":169,"op":"read","path":"/etc/seekzstdsep/config.toml","took_us":6253,"msg":"read read read read read"}
+{"ts":"2026-08-24T00:02:50Z","lvl":"info","seq":170,"op":"write","path":"/var/log/app.log","took_us":6290,"msg":"write"}
+{"ts":"2026-08-24T00:02:51Z","lvl":"info","seq":171,"op":"close","path":"/srv/data/000123.seek.zst","took_us":6327,"msg":"close close"}
+{"ts":"2026-08-24T00:02:52Z","lvl":"info","seq":172,"op":"flush","path":"/tmp/staging/frame-0007","took_us":6364,"msg":"flush flush flush"}
+{"ts":"2026-08-24T00:02:53Z","lvl":"info","seq":173,"op":"sync","path":"/mnt/store/shard-42/index","took_us":6401,"msg":"sync sync sync sync"}
+{"ts":"2026-08-24T00:02:54Z","lvl":"info","seq":174,"op":"retry","path":"/etc/seekzstdsep/config.toml","took_us":6438,"msg":"retry retry retry retry retry"}
+{"ts":"2026-08-24T00:02:55Z","lvl":"warn","seq":175,"op":"commit","path":"/var/log/app.log","took_us":6475,"msg":"commit"}
+{"ts":"2026-08-24T00:02:56Z","lvl":"warn","seq":176,"op":"rollback","path":"/srv/data/000123.seek.zst","took_us":6512,"msg":"rollback rollback"}
+{"ts":"2026-08-24T00:02:57Z","lvl":"warn","seq":177,"op":"compact","path":"/tmp/staging/frame-0007","took_us":6549,"msg":"compact compact compact"}
+{"ts":"2026-08-24T00:02:58Z","lvl":"warn","seq":178,"op":"evict","path":"/mnt/store/shard-42/index","took_us":6586,"msg":"evict evict evict evict"}
+{"ts":"2026-08-24T00:02:59Z","lvl":"warn","seq":179,"op":"reload","path":"/etc/seekzstdsep/config.toml","took_us":6623,"msg":"reload reload reload reload reload"}
+{"ts":"2026-08-24T00:03:00Z","lvl":"warn","seq":180,"op":"open","path":"/var/log/app.log","took_us":6660,"msg":"open"}
+{"ts":"2026-08-24T00:03:01Z","lvl":"warn","seq":181,"op":"read","path":"/srv/data/000123.seek.zst","took_us":6697,"msg":"read read"}
+{"ts":"2026-08-24T00:03:02Z","lvl":"error","seq":182,"op":"write","path":"/tmp/staging/frame-0007","took_us":6734,"msg":"write write write"}
+{"ts":"2026-08-24T00:03:03Z","lvl":"error","seq":183,"op":"close","path":"/mnt/store/shard-42/index","took_us":6771,"msg":"close close close close"}
+{"ts":"2026-08-24T00:03:04Z","lvl":"error","seq":184,"op":"flush","path":"/etc/seekzstdsep/config.toml","took_us":6808,"msg":"flush flush flush flush flush"}
+{"ts":"2026-08-24T00:03:05Z","lvl":"error","seq":185,"op":"sync","path":"/var/log/app.log","took_us":6845,"msg":"sync"}
+{"ts":"2026-08-24T00:03:06Z","lvl":"error","seq":186,"op":"retry","path":"/srv/data/000123.seek.zst","took_us":6882,"msg":"retry retry"}
+{"ts":"2026-08-24T00:03:07Z","lvl":"error","seq":187,"op":"commit","path":"/tmp/staging/frame-0007","took_us":6919,"msg":"commit commit commit"}
+{"ts":"2026-08-24T00:03:08Z","lvl":"error","seq":188,"op":"rollback","path":"/mnt/store/shard-42/index","took_us":6956,"msg":"rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:03:09Z","lvl":"debug","seq":189,"op":"compact","path":"/etc/seekzstdsep/config.toml","took_us":6993,"msg":"compact compact compact compact compact"}
+{"ts":"2026-08-24T00:03:10Z","lvl":"debug","seq":190,"op":"evict","path":"/var/log/app.log","took_us":7030,"msg":"evict"}
+{"ts":"2026-08-24T00:03:11Z","lvl":"debug","seq":191,"op":"reload","path":"/srv/data/000123.seek.zst","took_us":7067,"msg":"reload reload"}
+{"ts":"2026-08-24T00:03:12Z","lvl":"debug","seq":192,"op":"open","path":"/tmp/staging/frame-0007","took_us":7104,"msg":"open open open"}
+{"ts":"2026-08-24T00:03:13Z","lvl":"debug","seq":193,"op":"read","path":"/mnt/store/shard-42/index","took_us":7141,"msg":"read read read read"}
+{"ts":"2026-08-24T00:03:14Z","lvl":"debug","seq":194,"op":"write","path":"/etc/seekzstdsep/config.toml","took_us":7178,"msg":"write write write write write"}
+{"ts":"2026-08-24T00:03:15Z","lvl":"debug","seq":195,"op":"close","path":"/var/log/app.log","took_us":7215,"msg":"close"}
+{"ts":"2026-08-24T00:03:16Z","lvl":"info","seq":196,"op":"flush","path":"/srv/data/000123.seek.zst","took_us":7252,"msg":"flush flush"}
+{"ts":"2026-08-24T00:03:17Z","lvl":"info","seq":197,"op":"sync","path":"/tmp/staging/frame-0007","took_us":7289,"msg":"sync sync sync"}
+{"ts":"2026-08-24T00:03:18Z","lvl":"info","seq":198,"op":"retry","path":"/mnt/store/shard-42/index","took_us":7326,"msg":"retry retry retry retry"}
+{"ts":"2026-08-24T00:03:19Z","lvl":"info","seq":199,"op":"commit","path":"/etc/seekzstdsep/config.toml","took_us":7363,"msg":"commit commit commit commit commit"}
+{"ts":"2026-08-24T00:03:20Z","lvl":"info","seq":200,"op":"rollback","path":"/var/log/app.log","took_us":7400,"msg":"rollback"}
+{"ts":"2026-08-24T00:03:21Z","lvl":"info","seq":201,"op":"compact","path":"/srv/data/000123.seek.zst","took_us":7437,"msg":"compact compact"}
+{"ts":"2026-08-24T00:03:22Z","lvl":"info","seq":202,"op":"evict","path":"/tmp/staging/frame-0007","took_us":7474,"msg":"evict evict evict"}
+{"ts":"2026-08-24T00:03:23Z","lvl":"warn","seq":203,"op":"reload","path":"/mnt/store/shard-42/index","took_us":7511,"msg":"reload reload reload reload"}
+{"ts":"2026-08-24T00:03:24Z","lvl":"warn","seq":204,"op":"open","path":"/etc/seekzstdsep/config.toml","took_us":7548,"msg":"open open open open open"}
+{"ts":"2026-08-24T00:03:25Z","lvl":"warn","seq":205,"op":"read","path":"/var/log/app.log","took_us":7585,"msg":"read"}
+{"ts":"2026-08-24T00:03:26Z","lvl":"warn","seq":206,"op":"write","path":"/srv/data/000123.seek.zst","took_us":7622,"msg":"write write"}
+{"ts":"2026-08-24T00:03:27Z","lvl":"warn","seq":207,"op":"close","path":"/tmp/staging/frame-0007","took_us":7659,"msg":"close close close"}
+{"ts":"2026-08-24T00:03:28Z","lvl":"warn","seq":208,"op":"flush","path":"/mnt/store/shard-42/index","took_us":7696,"msg":"flush flush flush flush"}
+{"ts":"2026-08-24T00:03:29Z","lvl":"warn","seq":209,"op":"sync","path":"/etc/seekzstdsep/config.toml","took_us":7733,"msg":"sync sync sync sync sync"}
+{"ts":"2026-08-24T00:03:30Z","lvl":"error","seq":210,"op":"retry","path":"/var/log/app.log","took_us":7770,"msg":"retry"}
+{"ts":"2026-08-24T00:03:31Z","lvl":"error","seq":211,"op":"commit","path":"/srv/data/000123.seek.zst","took_us":7807,"msg":"commit commit"}
+{"ts":"2026-08-24T00:03:32Z","lvl":"error","seq":212,"op":"rollback","path":"/tmp/staging/frame-0007","took_us":7844,"msg":"rollback rollback rollback"}
+{"ts":"2026-08-24T00:03:33Z","lvl":"error","seq":213,"op":"compact","path":"/mnt/store/shard-42/index","took_us":7881,"msg":"compact compact compact compact"}
+{"ts":"2026-08-24T00:03:34Z","lvl":"error","seq":214,"op":"evict","path":"/etc/seekzstdsep/config.toml","took_us":7918,"msg":"evict evict evict evict evict"}
+{"ts":"2026-08-24T00:03:35Z","lvl":"error","seq":215,"op":"reload","path":"/var/log/app.log","took_us":7955,"msg":"reload"}
+{"ts":"2026-08-24T00:03:36Z","lvl":"error","seq":216,"op":"open","path":"/srv/data/000123.seek.zst","took_us":7992,"msg":"open open"}
+{"ts":"2026-08-24T00:03:37Z","lvl":"debug","seq":217,"op":"read","path":"/tmp/staging/frame-0007","took_us":8029,"msg":"read read read"}
+{"ts":"2026-08-24T00:03:38Z","lvl":"debug","seq":218,"op":"write","path":"/mnt/store/shard-42/index","took_us":8066,"msg":"write write write write"}
+{"ts":"2026-08-24T00:03:39Z","lvl":"debug","seq":219,"op":"close","path":"/etc/seekzstdsep/config.toml","took_us":8103,"msg":"close close close close close"}
+{"ts":"2026-08-24T00:03:40Z","lvl":"debug","seq":220,"op":"flush","path":"/var/log/app.log","took_us":8140,"msg":"flush"}
+{"ts":"2026-08-24T00:03:41Z","lvl":"debug","seq":221,"op":"sync","path":"/srv/data/000123.seek.zst","took_us":8177,"msg":"sync sync"}
+{"ts":"2026-08-24T00:03:42Z","lvl":"debug","seq":222,"op":"retry","path":"/tmp/staging/frame-0007","took_us":8214,"msg":"retry retry retry"}
+{"ts":"2026-08-24T00:03:43Z","lvl":"debug","seq":223,"op":"commit","path":"/mnt/store/shard-42/index","took_us":8251,"msg":"commit commit commit commit"}
+{"ts":"2026-08-24T00:03:44Z","lvl":"info","seq":224,"op":"rollback","path":"/etc/seekzstdsep/config.toml","took_us":8288,"msg":"rollback rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:03:45Z","lvl":"info","seq":225,"op":"compact","path":"/var/log/app.log","took_us":8325,"msg":"compact"}
+{"ts":"2026-08-24T00:03:46Z","lvl":"info","seq":226,"op":"evict","path":"/srv/data/000123.seek.zst","took_us":8362,"msg":"evict evict"}
+{"ts":"2026-08-24T00:03:47Z","lvl":"info","seq":227,"op":"reload","path":"/tmp/staging/frame-0007","took_us":8399,"msg":"reload reload reload"}
+{"ts":"2026-08-24T00:03:48Z","lvl":"info","seq":228,"op":"open","path":"/mnt/store/shard-42/index","took_us":8436,"msg":"open open open open"}
+{"ts":"2026-08-24T00:03:49Z","lvl":"info","seq":229,"op":"read","path":"/etc/seekzstdsep/config.toml","took_us":8473,"msg":"read read read read read"}
+{"ts":"2026-08-24T00:03:50Z","lvl":"info","seq":230,"op":"write","path":"/var/log/app.log","took_us":8510,"msg":"write"}
+{"ts":"2026-08-24T00:03:51Z","lvl":"warn","seq":231,"op":"close","path":"/srv/data/000123.seek.zst","took_us":8547,"msg":"close close"}
+{"ts":"2026-08-24T00:03:52Z","lvl":"warn","seq":232,"op":"flush","path":"/tmp/staging/frame-0007","took_us":8584,"msg":"flush flush flush"}
+{"ts":"2026-08-24T00:03:53Z","lvl":"warn","seq":233,"op":"sync","path":"/mnt/store/shard-42/index","took_us":8621,"msg":"sync sync sync sync"}
+{"ts":"2026-08-24T00:03:54Z","lvl":"warn","seq":234,"op":"retry","path":"/etc/seekzstdsep/config.toml","took_us":8658,"msg":"retry retry retry retry retry"}
+{"ts":"2026-08-24T00:03:55Z","lvl":"warn","seq":235,"op":"commit","path":"/var/log/app.log","took_us":8695,"msg":"commit"}
+{"ts":"2026-08-24T00:03:56Z","lvl":"warn","seq":236,"op":"rollback","path":"/srv/data/000123.seek.zst","took_us":8732,"msg":"rollback rollback"}
+{"ts":"2026-08-24T00:03:57Z","lvl":"warn","seq":237,"op":"compact","path":"/tmp/staging/frame-0007","took_us":8769,"msg":"compact compact compact"}
+{"ts":"2026-08-24T00:03:58Z","lvl":"error","seq":238,"op":"evict","path":"/mnt/store/shard-42/index","took_us":8806,"msg":"evict evict evict evict"}
+{"ts":"2026-08-24T00:03:59Z","lvl":"error","seq":239,"op":"reload","path":"/etc/seekzstdsep/config.toml","took_us":8843,"msg":"reload reload reload reload reload"}
+{"ts":"2026-08-24T00:04:00Z","lvl":"error","seq":240,"op":"open","path":"/var/log/app.log","took_us":8880,"msg":"open"}
+{"ts":"2026-08-24T00:04:01Z","lvl":"error","seq":241,"op":"read","path":"/srv/data/000123.seek.zst","took_us":8917,"msg":"read read"}
+{"ts":"2026-08-24T00:04:02Z","lvl":"error","seq":242,"op":"write","path":"/tmp/staging/frame-0007","took_us":8954,"msg":"write write write"}
+{"ts":"2026-08-24T00:04:03Z","lvl":"error","seq":243,"op":"close","path":"/mnt/store/shard-42/index","took_us":8991,"msg":"close close close close"}
+{"ts":"2026-08-24T00:04:04Z","lvl":"error","seq":244,"op":"flush","path":"/etc/seekzstdsep/config.toml","took_us":9028,"msg":"flush flush flush flush flush"}
+{"ts":"2026-08-24T00:04:05Z","lvl":"debug","seq":245,"op":"sync","path":"/var/log/app.log","took_us":9065,"msg":"sync"}
+{"ts":"2026-08-24T00:04:06Z","lvl":"debug","seq":246,"op":"retry","path":"/srv/data/000123.seek.zst","took_us":9102,"msg":"retry retry"}
+{"ts":"2026-08-24T00:04:07Z","lvl":"debug","seq":247,"op":"commit","path":"/tmp/staging/frame-0007","took_us":9139,"msg":"commit commit commit"}
+{"ts":"2026-08-24T00:04:08Z","lvl":"debug","seq":248,"op":"rollback","path":"/mnt/store/shard-42/index","took_us":9176,"msg":"rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:04:09Z","lvl":"debug","seq":249,"op":"compact","path":"/etc/seekzstdsep/config.toml","took_us":9213,"msg":"compact compact compact compact compact"}
+{"ts":"2026-08-24T00:04:10Z","lvl":"debug","seq":250,"op":"evict","path":"/var/log/app.log","took_us":9250,"msg":"evict"}
+{"ts":"2026-08-24T00:04:11Z","lvl":"debug","seq":251,"op":"reload","path":"/srv/data/000123.seek.zst","took_us":9287,"msg":"reload reload"}
+{"ts":"2026-08-24T00:04:12Z","lvl":"info","seq":252,"op":"open","path":"/tmp/staging/frame-0007","took_us":9324,"msg":"open open open"}
+{"ts":"2026-08-24T00:04:13Z","lvl":"info","seq":253,"op":"read","path":"/mnt/store/shard-42/index","took_us":9361,"msg":"read read read read"}
+{"ts":"2026-08-24T00:04:14Z","lvl":"info","seq":254,"op":"write","path":"/etc/seekzstdsep/config.toml","took_us":9398,"msg":"write write write write write"}
+{"ts":"2026-08-24T00:04:15Z","lvl":"info","seq":255,"op":"close","path":"/var/log/app.log","took_us":9435,"msg":"close"}
+{"ts":"2026-08-24T00:04:16Z","lvl":"info","seq":256,"op":"flush","path":"/srv/data/000123.seek.zst","took_us":9472,"msg":"flush flush"}
+{"ts":"2026-08-24T00:04:17Z","lvl":"info","seq":257,"op":"sync","path":"/tmp/staging/frame-0007","took_us":9509,"msg":"sync sync sync"}
+{"ts":"2026-08-24T00:04:18Z","lvl":"info","seq":258,"op":"retry","path":"/mnt/store/shard-42/index","took_us":9546,"msg":"retry retry retry retry"}
+{"ts":"2026-08-24T00:04:19Z","lvl":"warn","seq":259,"op":"commit","path":"/etc/seekzstdsep/config.toml","took_us":9583,"msg":"commit commit commit commit commit"}
+{"ts":"2026-08-24T00:04:20Z","lvl":"warn","seq":260,"op":"rollback","path":"/var/log/app.log","took_us":9620,"msg":"rollback"}
+{"ts":"2026-08-24T00:04:21Z","lvl":"warn","seq":261,"op":"compact","path":"/srv/data/000123.seek.zst","took_us":9657,"msg":"compact compact"}
+{"ts":"2026-08-24T00:04:22Z","lvl":"warn","seq":262,"op":"evict","path":"/tmp/staging/frame-0007","took_us":9694,"msg":"evict evict evict"}
+{"ts":"2026-08-24T00:04:23Z","lvl":"warn","seq":263,"op":"reload","path":"/mnt/store/shard-42/index","took_us":9731,"msg":"reload reload reload reload"}
+{"ts":"2026-08-24T00:04:24Z","lvl":"warn","seq":264,"op":"open","path":"/etc/seekzstdsep/config.toml","took_us":9768,"msg":"open open open open open"}
+{"ts":"2026-08-24T00:04:25Z","lvl":"warn","seq":265,"op":"read","path":"/var/log/app.log","took_us":9805,"msg":"read"}
+{"ts":"2026-08-24T00:04:26Z","lvl":"error","seq":266,"op":"write","path":"/srv/data/000123.seek.zst","took_us":9842,"msg":"write write"}
+{"ts":"2026-08-24T00:04:27Z","lvl":"error","seq":267,"op":"close","path":"/tmp/staging/frame-0007","took_us":9879,"msg":"close close close"}
+{"ts":"2026-08-24T00:04:28Z","lvl":"error","seq":268,"op":"flush","path":"/mnt/store/shard-42/index","took_us":9916,"msg":"flush flush flush flush"}
+{"ts":"2026-08-24T00:04:29Z","lvl":"error","seq":269,"op":"sync","path":"/etc/seekzstdsep/config.toml","took_us":9953,"msg":"sync sync sync sync sync"}
+{"ts":"2026-08-24T00:04:30Z","lvl":"error","seq":270,"op":"retry","path":"/var/log/app.log","took_us":17,"msg":"retry"}
+{"ts":"2026-08-24T00:04:31Z","lvl":"error","seq":271,"op":"commit","path":"/srv/data/000123.seek.zst","took_us":54,"msg":"commit commit"}
+{"ts":"2026-08-24T00:04:32Z","lvl":"error","seq":272,"op":"rollback","path":"/tmp/staging/frame-0007","took_us":91,"msg":"rollback rollback rollback"}
+{"ts":"2026-08-24T00:04:33Z","lvl":"debug","seq":273,"op":"compact","path":"/mnt/store/shard-42/index","took_us":128,"msg":"compact compact compact compact"}
+{"ts":"2026-08-24T00:04:34Z","lvl":"debug","seq":274,"op":"evict","path":"/etc/seekzstdsep/config.toml","took_us":165,"msg":"evict evict evict evict evict"}
+{"ts":"2026-08-24T00:04:35Z","lvl":"debug","seq":275,"op":"reload","path":"/var/log/app.log","took_us":202,"msg":"reload"}
+{"ts":"2026-08-24T00:04:36Z","lvl":"debug","seq":276,"op":"open","path":"/srv/data/000123.seek.zst","took_us":239,"msg":"open open"}
+{"ts":"2026-08-24T00:04:37Z","lvl":"debug","seq":277,"op":"read","path":"/tmp/staging/frame-0007","took_us":276,"msg":"read read read"}
+{"ts":"2026-08-24T00:04:38Z","lvl":"debug","seq":278,"op":"write","path":"/mnt/store/shard-42/index","took_us":313,"msg":"write write write write"}
+{"ts":"2026-08-24T00:04:39Z","lvl":"debug","seq":279,"op":"close","path":"/etc/seekzstdsep/config.toml","took_us":350,"msg":"close close close close close"}
+{"ts":"2026-08-24T00:04:40Z","lvl":"info","seq":280,"op":"flush","path":"/var/log/app.log","took_us":387,"msg":"flush"}
+{"ts":"2026-08-24T00:04:41Z","lvl":"info","seq":281,"op":"sync","path":"/srv/data/000123.seek.zst","took_us":424,"msg":"sync sync"}
+{"ts":"2026-08-24T00:04:42Z","lvl":"info","seq":282,"op":"retry","path":"/tmp/staging/frame-0007","took_us":461,"msg":"retry retry retry"}
+{"ts":"2026-08-24T00:04:43Z","lvl":"info","seq":283,"op":"commit","path":"/mnt/store/shard-42/index","took_us":498,"msg":"commit commit commit commit"}
+{"ts":"2026-08-24T00:04:44Z","lvl":"info","seq":284,"op":"rollback","path":"/etc/seekzstdsep/config.toml","took_us":535,"msg":"rollback rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:04:45Z","lvl":"info","seq":285,"op":"compact","path":"/var/log/app.log","took_us":572,"msg":"compact"}
+{"ts":"2026-08-24T00:04:46Z","lvl":"info","seq":286,"op":"evict","path":"/srv/data/000123.seek.zst","took_us":609,"msg":"evict evict"}
+{"ts":"2026-08-24T00:04:47Z","lvl":"warn","seq":287,"op":"reload","path":"/tmp/staging/frame-0007","took_us":646,"msg":"reload reload reload"}
+{"ts":"2026-08-24T00:04:48Z","lvl":"warn","seq":288,"op":"open","path":"/mnt/store/shard-42/index","took_us":683,"msg":"open open open open"}
+{"ts":"2026-08-24T00:04:49Z","lvl":"warn","seq":289,"op":"read","path":"/etc/seekzstdsep/config.toml","took_us":720,"msg":"read read read read read"}
+{"ts":"2026-08-24T00:04:50Z","lvl":"warn","seq":290,"op":"write","path":"/var/log/app.log","took_us":757,"msg":"write"}
+{"ts":"2026-08-24T00:04:51Z","lvl":"warn","seq":291,"op":"close","path":"/srv/data/000123.seek.zst","took_us":794,"msg":"close close"}
+{"ts":"2026-08-24T00:04:52Z","lvl":"warn","seq":292,"op":"flush","path":"/tmp/staging/frame-0007","took_us":831,"msg":"flush flush flush"}
+{"ts":"2026-08-24T00:04:53Z","lvl":"warn","seq":293,"op":"sync","path":"/mnt/store/shard-42/index","took_us":868,"msg":"sync sync sync sync"}
+{"ts":"2026-08-24T00:04:54Z","lvl":"error","seq":294,"op":"retry","path":"/etc/seekzstdsep/config.toml","took_us":905,"msg":"retry retry retry retry retry"}
+{"ts":"2026-08-24T00:04:55Z","lvl":"error","seq":295,"op":"commit","path":"/var/log/app.log","took_us":942,"msg":"commit"}
+{"ts":"2026-08-24T00:04:56Z","lvl":"error","seq":296,"op":"rollback","path":"/srv/data/000123.seek.zst","took_us":979,"msg":"rollback rollback"}
+{"ts":"2026-08-24T00:04:57Z","lvl":"error","seq":297,"op":"compact","path":"/tmp/staging/frame-0007","took_us":1016,"msg":"compact compact compact"}
+{"ts":"2026-08-24T00:04:58Z","lvl":"error","seq":298,"op":"evict","path":"/mnt/store/shard-42/index","took_us":1053,"msg":"evict evict evict evict"}
+{"ts":"2026-08-24T00:04:59Z","lvl":"error","seq":299,"op":"reload","path":"/etc/seekzstdsep/config.toml","took_us":1090,"msg":"reload reload reload reload reload"}
+{"ts":"2026-08-24T00:05:00Z","lvl":"error","seq":300,"op":"open","path":"/var/log/app.log","took_us":1127,"msg":"open"}
+{"ts":"2026-08-24T00:05:01Z","lvl":"debug","seq":301,"op":"read","path":"/srv/data/000123.seek.zst","took_us":1164,"msg":"read read"}
+{"ts":"2026-08-24T00:05:02Z","lvl":"debug","seq":302,"op":"write","path":"/tmp/staging/frame-0007","took_us":1201,"msg":"write write write"}
+{"ts":"2026-08-24T00:05:03Z","lvl":"debug","seq":303,"op":"close","path":"/mnt/store/shard-42/index","took_us":1238,"msg":"close close close close"}
+{"ts":"2026-08-24T00:05:04Z","lvl":"debug","seq":304,"op":"flush","path":"/etc/seekzstdsep/config.toml","took_us":1275,"msg":"flush flush flush flush flush"}
+{"ts":"2026-08-24T00:05:05Z","lvl":"debug","seq":305,"op":"sync","path":"/var/log/app.log","took_us":1312,"msg":"sync"}
+{"ts":"2026-08-24T00:05:06Z","lvl":"debug","seq":306,"op":"retry","path":"/srv/data/000123.seek.zst","took_us":1349,"msg":"retry retry"}
+{"ts":"2026-08-24T00:05:07Z","lvl":"debug","seq":307,"op":"commit","path":"/tmp/staging/frame-0007","took_us":1386,"msg":"commit commit commit"}
+{"ts":"2026-08-24T00:05:08Z","lvl":"info","seq":308,"op":"rollback","path":"/mnt/store/shard-42/index","took_us":1423,"msg":"rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:05:09Z","lvl":"info","seq":309,"op":"compact","path":"/etc/seekzstdsep/config.toml","took_us":1460,"msg":"compact compact compact compact compact"}
+{"ts":"2026-08-24T00:05:10Z","lvl":"info","seq":310,"op":"evict","path":"/var/log/app.log","took_us":1497,"msg":"evict"}
+{"ts":"2026-08-24T00:05:11Z","lvl":"info","seq":311,"op":"reload","path":"/srv/data/000123.seek.zst","took_us":1534,"msg":"reload reload"}
+{"ts":"2026-08-24T00:05:12Z","lvl":"info","seq":312,"op":"open","path":"/tmp/staging/frame-0007","took_us":1571,"msg":"open open open"}
+{"ts":"2026-08-24T00:05:13Z","lvl":"info","seq":313,"op":"read","path":"/mnt/store/shard-42/index","took_us":1608,"msg":"read read read read"}
+{"ts":"2026-08-24T00:05:14Z","lvl":"info","seq":314,"op":"write","path":"/etc/seekzstdsep/config.toml","took_us":1645,"msg":"write write write write write"}
+{"ts":"2026-08-24T00:05:15Z","lvl":"warn","seq":315,"op":"close","path":"/var/log/app.log","took_us":1682,"msg":"close"}
+{"ts":"2026-08-24T00:05:16Z","lvl":"warn","seq":316,"op":"flush","path":"/srv/data/000123.seek.zst","took_us":1719,"msg":"flush flush"}
+{"ts":"2026-08-24T00:05:17Z","lvl":"warn","seq":317,"op":"sync","path":"/tmp/staging/frame-0007","took_us":1756,"msg":"sync sync sync"}
+{"ts":"2026-08-24T00:05:18Z","lvl":"warn","seq":318,"op":"retry","path":"/mnt/store/shard-42/index","took_us":1793,"msg":"retry retry retry retry"}
+{"ts":"2026-08-24T00:05:19Z","lvl":"warn","seq":319,"op":"commit","path":"/etc/seekzstdsep/config.toml","took_us":1830,"msg":"commit commit commit commit commit"}
+{"ts":"2026-08-24T00:05:20Z","lvl":"warn","seq":320,"op":"rollback","path":"/var/log/app.log","took_us":1867,"msg":"rollback"}
+{"ts":"2026-08-24T00:05:21Z","lvl":"warn","seq":321,"op":"compact","path":"/srv/data/000123.seek.zst","took_us":1904,"msg":"compact compact"}
+{"ts":"2026-08-24T00:05:22Z","lvl":"error","seq":322,"op":"evict","path":"/tmp/staging/frame-0007","took_us":1941,"msg":"evict evict evict"}
+{"ts":"2026-08-24T00:05:23Z","lvl":"error","seq":323,"op":"reload","path":"/mnt/store/shard-42/index","took_us":1978,"msg":"reload reload reload reload"}
+{"ts":"2026-08-24T00:05:24Z","lvl":"error","seq":324,"op":"open","path":"/etc/seekzstdsep/config.toml","took_us":2015,"msg":"open open open open open"}
+{"ts":"2026-08-24T00:05:25Z","lvl":"error","seq":325,"op":"read","path":"/var/log/app.log","took_us":2052,"msg":"read"}
+{"ts":"2026-08-24T00:05:26Z","lvl":"error","seq":326,"op":"write","path":"/srv/data/000123.seek.zst","took_us":2089,"msg":"write write"}
+{"ts":"2026-08-24T00:05:27Z","lvl":"error","seq":327,"op":"close","path":"/tmp/staging/frame-0007","took_us":2126,"msg":"close close close"}
+{"ts":"2026-08-24T00:05:28Z","lvl":"error","seq":328,"op":"flush","path":"/mnt/store/shard-42/index","took_us":2163,"msg":"flush flush flush flush"}
+{"ts":"2026-08-24T00:05:29Z","lvl":"debug","seq":329,"op":"sync","path":"/etc/seekzstdsep/config.toml","took_us":2200,"msg":"sync sync sync sync sync"}
+{"ts":"2026-08-24T00:05:30Z","lvl":"debug","seq":330,"op":"retry","path":"/var/log/app.log","took_us":2237,"msg":"retry"}
+{"ts":"2026-08-24T00:05:31Z","lvl":"debug","seq":331,"op":"commit","path":"/srv/data/000123.seek.zst","took_us":2274,"msg":"commit commit"}
+{"ts":"2026-08-24T00:05:32Z","lvl":"debug","seq":332,"op":"rollback","path":"/tmp/staging/frame-0007","took_us":2311,"msg":"rollback rollback rollback"}
+{"ts":"2026-08-24T00:05:33Z","lvl":"debug","seq":333,"op":"compact","path":"/mnt/store/shard-42/index","took_us":2348,"msg":"compact compact compact compact"}
+{"ts":"2026-08-24T00:05:34Z","lvl":"debug","seq":334,"op":"evict","path":"/etc/seekzstdsep/config.toml","took_us":2385,"msg":"evict evict evict evict evict"}
+{"ts":"2026-08-24T00:05:35Z","lvl":"debug","seq":335,"op":"reload","path":"/var/log/app.log","took_us":2422,"msg":"reload"}
+{"ts":"2026-08-24T00:05:36Z","lvl":"info","seq":336,"op":"open","path":"/srv/data/000123.seek.zst","took_us":2459,"msg":"open open"}
+{"ts":"2026-08-24T00:05:37Z","lvl":"info","seq":337,"op":"read","path":"/tmp/staging/frame-0007","took_us":2496,"msg":"read read read"}
+{"ts":"2026-08-24T00:05:38Z","lvl":"info","seq":338,"op":"write","path":"/mnt/store/shard-42/index","took_us":2533,"msg":"write write write write"}
+{"ts":"2026-08-24T00:05:39Z","lvl":"info","seq":339,"op":"close","path":"/etc/seekzstdsep/config.toml","took_us":2570,"msg":"close close close close close"}
+{"ts":"2026-08-24T00:05:40Z","lvl":"info","seq":340,"op":"flush","path":"/var/log/app.log","took_us":2607,"msg":"flush"}
+{"ts":"2026-08-24T00:05:41Z","lvl":"info","seq":341,"op":"sync","path":"/srv/data/000123.seek.zst","took_us":2644,"msg":"sync sync"}
+{"ts":"2026-08-24T00:05:42Z","lvl":"info","seq":342,"op":"retry","path":"/tmp/staging/frame-0007","took_us":2681,"msg":"retry retry retry"}
+{"ts":"2026-08-24T00:05:43Z","lvl":"warn","seq":343,"op":"commit","path":"/mnt/store/shard-42/index","took_us":2718,"msg":"commit commit commit commit"}
+{"ts":"2026-08-24T00:05:44Z","lvl":"warn","seq":344,"op":"rollback","path":"/etc/seekzstdsep/config.toml","took_us":2755,"msg":"rollback rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:05:45Z","lvl":"warn","seq":345,"op":"compact","path":"/var/log/app.log","took_us":2792,"msg":"compact"}
+{"ts":"2026-08-24T00:05:46Z","lvl":"warn","seq":346,"op":"evict","path":"/srv/data/000123.seek.zst","took_us":2829,"msg":"evict evict"}
+{"ts":"2026-08-24T00:05:47Z","lvl":"warn","seq":347,"op":"reload","path":"/tmp/staging/frame-0007","took_us":2866,"msg":"reload reload reload"}
+{"ts":"2026-08-24T00:05:48Z","lvl":"warn","seq":348,"op":"open","path":"/mnt/store/shard-42/index","took_us":2903,"msg":"open open open open"}
+{"ts":"2026-08-24T00:05:49Z","lvl":"warn","seq":349,"op":"read","path":"/etc/seekzstdsep/config.toml","took_us":2940,"msg":"read read read read read"}
+{"ts":"2026-08-24T00:05:50Z","lvl":"error","seq":350,"op":"write","path":"/var/log/app.log","took_us":2977,"msg":"write"}
+{"ts":"2026-08-24T00:05:51Z","lvl":"error","seq":351,"op":"close","path":"/srv/data/000123.seek.zst","took_us":3014,"msg":"close close"}
+{"ts":"2026-08-24T00:05:52Z","lvl":"error","seq":352,"op":"flush","path":"/tmp/staging/frame-0007","took_us":3051,"msg":"flush flush flush"}
+{"ts":"2026-08-24T00:05:53Z","lvl":"error","seq":353,"op":"sync","path":"/mnt/store/shard-42/index","took_us":3088,"msg":"sync sync sync sync"}
+{"ts":"2026-08-24T00:05:54Z","lvl":"error","seq":354,"op":"retry","path":"/etc/seekzstdsep/config.toml","took_us":3125,"msg":"retry retry retry retry retry"}
+{"ts":"2026-08-24T00:05:55Z","lvl":"error","seq":355,"op":"commit","path":"/var/log/app.log","took_us":3162,"msg":"commit"}
+{"ts":"2026-08-24T00:05:56Z","lvl":"error","seq":356,"op":"rollback","path":"/srv/data/000123.seek.zst","took_us":3199,"msg":"rollback rollback"}
+{"ts":"2026-08-24T00:05:57Z","lvl":"debug","seq":357,"op":"compact","path":"/tmp/staging/frame-0007","took_us":3236,"msg":"compact compact compact"}
+{"ts":"2026-08-24T00:05:58Z","lvl":"debug","seq":358,"op":"evict","path":"/mnt/store/shard-42/index","took_us":3273,"msg":"evict evict evict evict"}
+{"ts":"2026-08-24T00:05:59Z","lvl":"debug","seq":359,"op":"reload","path":"/etc/seekzstdsep/config.toml","took_us":3310,"msg":"reload reload reload reload reload"}
+{"ts":"2026-08-24T00:06:00Z","lvl":"debug","seq":360,"op":"open","path":"/var/log/app.log","took_us":3347,"msg":"open"}
+{"ts":"2026-08-24T00:06:01Z","lvl":"debug","seq":361,"op":"read","path":"/srv/data/000123.seek.zst","took_us":3384,"msg":"read read"}
+{"ts":"2026-08-24T00:06:02Z","lvl":"debug","seq":362,"op":"write","path":"/tmp/staging/frame-0007","took_us":3421,"msg":"write write write"}
+{"ts":"2026-08-24T00:06:03Z","lvl":"debug","seq":363,"op":"close","path":"/mnt/store/shard-42/index","took_us":3458,"msg":"close close close close"}
+{"ts":"2026-08-24T00:06:04Z","lvl":"info","seq":364,"op":"flush","path":"/etc/seekzstdsep/config.toml","took_us":3495,"msg":"flush flush flush flush flush"}
+{"ts":"2026-08-24T00:06:05Z","lvl":"info","seq":365,"op":"sync","path":"/var/log/app.log","took_us":3532,"msg":"sync"}
+{"ts":"2026-08-24T00:06:06Z","lvl":"info","seq":366,"op":"retry","path":"/srv/data/000123.seek.zst","took_us":3569,"msg":"retry retry"}
+{"ts":"2026-08-24T00:06:07Z","lvl":"info","seq":367,"op":"commit","path":"/tmp/staging/frame-0007","took_us":3606,"msg":"commit commit commit"}
+{"ts":"2026-08-24T00:06:08Z","lvl":"info","seq":368,"op":"rollback","path":"/mnt/store/shard-42/index","took_us":3643,"msg":"rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:06:09Z","lvl":"info","seq":369,"op":"compact","path":"/etc/seekzstdsep/config.toml","took_us":3680,"msg":"compact compact compact compact compact"}
+{"ts":"2026-08-24T00:06:10Z","lvl":"info","seq":370,"op":"evict","path":"/var/log/app.log","took_us":3717,"msg":"evict"}
+{"ts":"2026-08-24T00:06:11Z","lvl":"warn","seq":371,"op":"reload","path":"/srv/data/000123.seek.zst","took_us":3754,"msg":"reload reload"}
+{"ts":"2026-08-24T00:06:12Z","lvl":"warn","seq":372,"op":"open","path":"/tmp/staging/frame-0007","took_us":3791,"msg":"open open open"}
+{"ts":"2026-08-24T00:06:13Z","lvl":"warn","seq":373,"op":"read","path":"/mnt/store/shard-42/index","took_us":3828,"msg":"read read read read"}
+{"ts":"2026-08-24T00:06:14Z","lvl":"warn","seq":374,"op":"write","path":"/etc/seekzstdsep/config.toml","took_us":3865,"msg":"write write write write write"}
+{"ts":"2026-08-24T00:06:15Z","lvl":"warn","seq":375,"op":"close","path":"/var/log/app.log","took_us":3902,"msg":"close"}
+{"ts":"2026-08-24T00:06:16Z","lvl":"warn","seq":376,"op":"flush","path":"/srv/data/000123.seek.zst","took_us":3939,"msg":"flush flush"}
+{"ts":"2026-08-24T00:06:17Z","lvl":"warn","seq":377,"op":"sync","path":"/tmp/staging/frame-0007","took_us":3976,"msg":"sync sync sync"}
+{"ts":"2026-08-24T00:06:18Z","lvl":"error","seq":378,"op":"retry","path":"/mnt/store/shard-42/index","took_us":4013,"msg":"retry retry retry retry"}
+{"ts":"2026-08-24T00:06:19Z","lvl":"error","seq":379,"op":"commit","path":"/etc/seekzstdsep/config.toml","took_us":4050,"msg":"commit commit commit commit commit"}
+{"ts":"2026-08-24T00:06:20Z","lvl":"error","seq":380,"op":"rollback","path":"/var/log/app.log","took_us":4087,"msg":"rollback"}
+{"ts":"2026-08-24T00:06:21Z","lvl":"error","seq":381,"op":"compact","path":"/srv/data/000123.seek.zst","took_us":4124,"msg":"compact compact"}
+{"ts":"2026-08-24T00:06:22Z","lvl":"error","seq":382,"op":"evict","path":"/tmp/staging/frame-0007","took_us":4161,"msg":"evict evict evict"}
+{"ts":"2026-08-24T00:06:23Z","lvl":"error","seq":383,"op":"reload","path":"/mnt/store/shard-42/index","took_us":4198,"msg":"reload reload reload reload"}
+{"ts":"2026-08-24T00:06:24Z","lvl":"error","seq":384,"op":"open","path":"/etc/seekzstdsep/config.toml","took_us":4235,"msg":"open open open open open"}
+{"ts":"2026-08-24T00:06:25Z","lvl":"debug","seq":385,"op":"read","path":"/var/log/app.log","took_us":4272,"msg":"read"}
+{"ts":"2026-08-24T00:06:26Z","lvl":"debug","seq":386,"op":"write","path":"/srv/data/000123.seek.zst","took_us":4309,"msg":"write write"}
+{"ts":"2026-08-24T00:06:27Z","lvl":"debug","seq":387,"op":"close","path":"/tmp/staging/frame-0007","took_us":4346,"msg":"close close close"}
+{"ts":"2026-08-24T00:06:28Z","lvl":"debug","seq":388,"op":"flush","path":"/mnt/store/shard-42/index","took_us":4383,"msg":"flush flush flush flush"}
+{"ts":"2026-08-24T00:06:29Z","lvl":"debug","seq":389,"op":"sync","path":"/etc/seekzstdsep/config.toml","took_us":4420,"msg":"sync sync sync sync sync"}
+{"ts":"2026-08-24T00:06:30Z","lvl":"debug","seq":390,"op":"retry","path":"/var/log/app.log","took_us":4457,"msg":"retry"}
+{"ts":"2026-08-24T00:06:31Z","lvl":"debug","seq":391,"op":"commit","path":"/srv/data/000123.seek.zst","took_us":4494,"msg":"commit commit"}
+{"ts":"2026-08-24T00:06:32Z","lvl":"info","seq":392,"op":"rollback","path":"/tmp/staging/frame-0007","took_us":4531,"msg":"rollback rollback rollback"}
+{"ts":"2026-08-24T00:06:33Z","lvl":"info","seq":393,"op":"compact","path":"/mnt/store/shard-42/index","took_us":4568,"msg":"compact compact compact compact"}
+{"ts":"2026-08-24T00:06:34Z","lvl":"info","seq":394,"op":"evict","path":"/etc/seekzstdsep/config.toml","took_us":4605,"msg":"evict evict evict evict evict"}
+{"ts":"2026-08-24T00:06:35Z","lvl":"info","seq":395,"op":"reload","path":"/var/log/app.log","took_us":4642,"msg":"reload"}
+{"ts":"2026-08-24T00:06:36Z","lvl":"info","seq":396,"op":"open","path":"/srv/data/000123.seek.zst","took_us":4679,"msg":"open open"}
+{"ts":"2026-08-24T00:06:37Z","lvl":"info","seq":397,"op":"read","path":"/tmp/staging/frame-0007","took_us":4716,"msg":"read read read"}
+{"ts":"2026-08-24T00:06:38Z","lvl":"info","seq":398,"op":"write","path":"/mnt/store/shard-42/index","took_us":4753,"msg":"write write write write"}
+{"ts":"2026-08-24T00:06:39Z","lvl":"warn","seq":399,"op":"close","path":"/etc/seekzstdsep/config.toml","took_us":4790,"msg":"close close close close close"}
+{"ts":"2026-08-24T00:06:40Z","lvl":"warn","seq":400,"op":"flush","path":"/var/log/app.log","took_us":4827,"msg":"flush"}
+{"ts":"2026-08-24T00:06:41Z","lvl":"warn","seq":401,"op":"sync","path":"/srv/data/000123.seek.zst","took_us":4864,"msg":"sync sync"}
+{"ts":"2026-08-24T00:06:42Z","lvl":"warn","seq":402,"op":"retry","path":"/tmp/staging/frame-0007","took_us":4901,"msg":"retry retry retry"}
+{"ts":"2026-08-24T00:06:43Z","lvl":"warn","seq":403,"op":"commit","path":"/mnt/store/shard-42/index","took_us":4938,"msg":"commit commit commit commit"}
+{"ts":"2026-08-24T00:06:44Z","lvl":"warn","seq":404,"op":"rollback","path":"/etc/seekzstdsep/config.toml","took_us":4975,"msg":"rollback rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:06:45Z","lvl":"warn","seq":405,"op":"compact","path":"/var/log/app.log","took_us":5012,"msg":"compact"}
+{"ts":"2026-08-24T00:06:46Z","lvl":"error","seq":406,"op":"evict","path":"/srv/data/000123.seek.zst","took_us":5049,"msg":"evict evict"}
+{"ts":"2026-08-24T00:06:47Z","lvl":"error","seq":407,"op":"reload","path":"/tmp/staging/frame-0007","took_us":5086,"msg":"reload reload reload"}
+{"ts":"2026-08-24T00:06:48Z","lvl":"error","seq":408,"op":"open","path":"/mnt/store/shard-42/index","took_us":5123,"msg":"open open open open"}
+{"ts":"2026-08-24T00:06:49Z","lvl":"error","seq":409,"op":"read","path":"/etc/seekzstdsep/config.toml","took_us":5160,"msg":"read read read read read"}
+{"ts":"2026-08-24T00:06:50Z","lvl":"error","seq":410,"op":"write","path":"/var/log/app.log","took_us":5197,"msg":"write"}
+{"ts":"2026-08-24T00:06:51Z","lvl":"error","seq":411,"op":"close","path":"/srv/data/000123.seek.zst","took_us":5234,"msg":"close close"}
+{"ts":"2026-08-24T00:06:52Z","lvl":"error","seq":412,"op":"flush","path":"/tmp/staging/frame-0007","took_us":5271,"msg":"flush flush flush"}
+{"ts":"2026-08-24T00:06:53Z","lvl":"debug","seq":413,"op":"sync","path":"/mnt/store/shard-42/index","took_us":5308,"msg":"sync sync sync sync"}
+{"ts":"2026-08-24T00:06:54Z","lvl":"debug","seq":414,"op":"retry","path":"/etc/seekzstdsep/config.toml","took_us":5345,"msg":"retry retry retry retry retry"}
+{"ts":"2026-08-24T00:06:55Z","lvl":"debug","seq":415,"op":"commit","path":"/var/log/app.log","took_us":5382,"msg":"commit"}
+{"ts":"2026-08-24T00:06:56Z","lvl":"debug","seq":416,"op":"rollback","path":"/srv/data/000123.seek.zst","took_us":5419,"msg":"rollback rollback"}
+{"ts":"2026-08-24T00:06:57Z","lvl":"debug","seq":417,"op":"compact","path":"/tmp/staging/frame-0007","took_us":5456,"msg":"compact compact compact"}
+{"ts":"2026-08-24T00:06:58Z","lvl":"debug","seq":418,"op":"evict","path":"/mnt/store/shard-42/index","took_us":5493,"msg":"evict evict evict evict"}
+{"ts":"2026-08-24T00:06:59Z","lvl":"debug","seq":419,"op":"reload","path":"/etc/seekzstdsep/config.toml","took_us":5530,"msg":"reload reload reload reload reload"}
+{"ts":"2026-08-24T00:07:00Z","lvl":"info","seq":420,"op":"open","path":"/var/log/app.log","took_us":5567,"msg":"open"}
+{"ts":"2026-08-24T00:07:01Z","lvl":"info","seq":421,"op":"read","path":"/srv/data/000123.seek.zst","took_us":5604,"msg":"read read"}
+{"ts":"2026-08-24T00:07:02Z","lvl":"info","seq":422,"op":"write","path":"/tmp/staging/frame-0007","took_us":5641,"msg":"write write write"}
+{"ts":"2026-08-24T00:07:03Z","lvl":"info","seq":423,"op":"close","path":"/mnt/store/shard-42/index","took_us":5678,"msg":"close close close close"}
+{"ts":"2026-08-24T00:07:04Z","lvl":"info","seq":424,"op":"flush","path":"/etc/seekzstdsep/config.toml","took_us":5715,"msg":"flush flush flush flush flush"}
+{"ts":"2026-08-24T00:07:05Z","lvl":"info","seq":425,"op":"sync","path":"/var/log/app.log","took_us":5752,"msg":"sync"}
+{"ts":"2026-08-24T00:07:06Z","lvl":"info","seq":426,"op":"retry","path":"/srv/data/000123.seek.zst","took_us":5789,"msg":"retry retry"}
+{"ts":"2026-08-24T00:07:07Z","lvl":"warn","seq":427,"op":"commit","path":"/tmp/staging/frame-0007","took_us":5826,"msg":"commit commit commit"}
+{"ts":"2026-08-24T00:07:08Z","lvl":"warn","seq":428,"op":"rollback","path":"/mnt/store/shard-42/index","took_us":5863,"msg":"rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:07:09Z","lvl":"warn","seq":429,"op":"compact","path":"/etc/seekzstdsep/config.toml","took_us":5900,"msg":"compact compact compact compact compact"}
+{"ts":"2026-08-24T00:07:10Z","lvl":"warn","seq":430,"op":"evict","path":"/var/log/app.log","took_us":5937,"msg":"evict"}
+{"ts":"2026-08-24T00:07:11Z","lvl":"warn","seq":431,"op":"reload","path":"/srv/data/000123.seek.zst","took_us":5974,"msg":"reload reload"}
+{"ts":"2026-08-24T00:07:12Z","lvl":"warn","seq":432,"op":"open","path":"/tmp/staging/frame-0007","took_us":6011,"msg":"open open open"}
+{"ts":"2026-08-24T00:07:13Z","lvl":"warn","seq":433,"op":"read","path":"/mnt/store/shard-42/index","took_us":6048,"msg":"read read read read"}
+{"ts":"2026-08-24T00:07:14Z","lvl":"error","seq":434,"op":"write","path":"/etc/seekzstdsep/config.toml","took_us":6085,"msg":"write write write write write"}
+{"ts":"2026-08-24T00:07:15Z","lvl":"error","seq":435,"op":"close","path":"/var/log/app.log","took_us":6122,"msg":"close"}
+{"ts":"2026-08-24T00:07:16Z","lvl":"error","seq":436,"op":"flush","path":"/srv/data/000123.seek.zst","took_us":6159,"msg":"flush flush"}
+{"ts":"2026-08-24T00:07:17Z","lvl":"error","seq":437,"op":"sync","path":"/tmp/staging/frame-0007","took_us":6196,"msg":"sync sync sync"}
+{"ts":"2026-08-24T00:07:18Z","lvl":"error","seq":438,"op":"retry","path":"/mnt/store/shard-42/index","took_us":6233,"msg":"retry retry retry retry"}
+{"ts":"2026-08-24T00:07:19Z","lvl":"error","seq":439,"op":"commit","path":"/etc/seekzstdsep/config.toml","took_us":6270,"msg":"commit commit commit commit commit"}
+{"ts":"2026-08-24T00:07:20Z","lvl":"error","seq":440,"op":"rollback","path":"/var/log/app.log","took_us":6307,"msg":"rollback"}
+{"ts":"2026-08-24T00:07:21Z","lvl":"debug","seq":441,"op":"compact","path":"/srv/data/000123.seek.zst","took_us":6344,"msg":"compact compact"}
+{"ts":"2026-08-24T00:07:22Z","lvl":"debug","seq":442,"op":"evict","path":"/tmp/staging/frame-0007","took_us":6381,"msg":"evict evict evict"}
+{"ts":"2026-08-24T00:07:23Z","lvl":"debug","seq":443,"op":"reload","path":"/mnt/store/shard-42/index","took_us":6418,"msg":"reload reload reload reload"}
+{"ts":"2026-08-24T00:07:24Z","lvl":"debug","seq":444,"op":"open","path":"/etc/seekzstdsep/config.toml","took_us":6455,"msg":"open open open open open"}
+{"ts":"2026-08-24T00:07:25Z","lvl":"debug","seq":445,"op":"read","path":"/var/log/app.log","took_us":6492,"msg":"read"}
+{"ts":"2026-08-24T00:07:26Z","lvl":"debug","seq":446,"op":"write","path":"/srv/data/000123.seek.zst","took_us":6529,"msg":"write write"}
+{"ts":"2026-08-24T00:07:27Z","lvl":"debug","seq":447,"op":"close","path":"/tmp/staging/frame-0007","took_us":6566,"msg":"close close close"}
+{"ts":"2026-08-24T00:07:28Z","lvl":"info","seq":448,"op":"flush","path":"/mnt/store/shard-42/index","took_us":6603,"msg":"flush flush flush flush"}
+{"ts":"2026-08-24T00:07:29Z","lvl":"info","seq":449,"op":"sync","path":"/etc/seekzstdsep/config.toml","took_us":6640,"msg":"sync sync sync sync sync"}
+{"ts":"2026-08-24T00:07:30Z","lvl":"info","seq":450,"op":"retry","path":"/var/log/app.log","took_us":6677,"msg":"retry"}
+{"ts":"2026-08-24T00:07:31Z","lvl":"info","seq":451,"op":"commit","path":"/srv/data/000123.seek.zst","took_us":6714,"msg":"commit commit"}
+{"ts":"2026-08-24T00:07:32Z","lvl":"info","seq":452,"op":"rollback","path":"/tmp/staging/frame-0007","took_us":6751,"msg":"rollback rollback rollback"}
+{"ts":"2026-08-24T00:07:33Z","lvl":"info","seq":453,"op":"compact","path":"/mnt/store/shard-42/index","took_us":6788,"msg":"compact compact compact compact"}
+{"ts":"2026-08-24T00:07:34Z","lvl":"info","seq":454,"op":"evict","path":"/etc/seekzstdsep/config.toml","took_us":6825,"msg":"evict evict evict evict evict"}
+{"ts":"2026-08-24T00:07:35Z","lvl":"warn","seq":455,"op":"reload","path":"/var/log/app.log","took_us":6862,"msg":"reload"}
+{"ts":"2026-08-24T00:07:36Z","lvl":"warn","seq":456,"op":"open","path":"/srv/data/000123.seek.zst","took_us":6899,"msg":"open open"}
+{"ts":"2026-08-24T00:07:37Z","lvl":"warn","seq":457,"op":"read","path":"/tmp/staging/frame-0007","took_us":6936,"msg":"read read read"}
+{"ts":"2026-08-24T00:07:38Z","lvl":"warn","seq":458,"op":"write","path":"/mnt/store/shard-42/index","took_us":6973,"msg":"write write write write"}
+{"ts":"2026-08-24T00:07:39Z","lvl":"warn","seq":459,"op":"close","path":"/etc/seekzstdsep/config.toml","took_us":7010,"msg":"close close close close close"}
+{"ts":"2026-08-24T00:07:40Z","lvl":"warn","seq":460,"op":"flush","path":"/var/log/app.log","took_us":7047,"msg":"flush"}
+{"ts":"2026-08-24T00:07:41Z","lvl":"warn","seq":461,"op":"sync","path":"/srv/data/000123.seek.zst","took_us":7084,"msg":"sync sync"}
+{"ts":"2026-08-24T00:07:42Z","lvl":"error","seq":462,"op":"retry","path":"/tmp/staging/frame-0007","took_us":7121,"msg":"retry retry retry"}
+{"ts":"2026-08-24T00:07:43Z","lvl":"error","seq":463,"op":"commit","path":"/mnt/store/shard-42/index","took_us":7158,"msg":"commit commit commit commit"}
+{"ts":"2026-08-24T00:07:44Z","lvl":"error","seq":464,"op":"rollback","path":"/etc/seekzstdsep/config.toml","took_us":7195,"msg":"rollback rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:07:45Z","lvl":"error","seq":465,"op":"compact","path":"/var/log/app.log","took_us":7232,"msg":"compact"}
+{"ts":"2026-08-24T00:07:46Z","lvl":"error","seq":466,"op":"evict","path":"/srv/data/000123.seek.zst","took_us":7269,"msg":"evict evict"}
+{"ts":"2026-08-24T00:07:47Z","lvl":"error","seq":467,"op":"reload","path":"/tmp/staging/frame-0007","took_us":7306,"msg":"reload reload reload"}
+{"ts":"2026-08-24T00:07:48Z","lvl":"error","seq":468,"op":"open","path":"/mnt/store/shard-42/index","took_us":7343,"msg":"open open open open"}
+{"ts":"2026-08-24T00:07:49Z","lvl":"debug","seq":469,"op":"read","path":"/etc/seekzstdsep/config.toml","took_us":7380,"msg":"read read read read read"}
+{"ts":"2026-08-24T00:07:50Z","lvl":"debug","seq":470,"op":"write","path":"/var/log/app.log","took_us":7417,"msg":"write"}
+{"ts":"2026-08-24T00:07:51Z","lvl":"debug","seq":471,"op":"close","path":"/srv/data/000123.seek.zst","took_us":7454,"msg":"close close"}
+{"ts":"2026-08-24T00:07:52Z","lvl":"debug","seq":472,"op":"flush","path":"/tmp/staging/frame-0007","took_us":7491,"msg":"flush flush flush"}
+{"ts":"2026-08-24T00:07:53Z","lvl":"debug","seq":473,"op":"sync","path":"/mnt/store/shard-42/index","took_us":7528,"msg":"sync sync sync sync"}
+{"ts":"2026-08-24T00:07:54Z","lvl":"debug","seq":474,"op":"retry","path":"/etc/seekzstdsep/config.toml","took_us":7565,"msg":"retry retry retry retry retry"}
+{"ts":"2026-08-24T00:07:55Z","lvl":"debug","seq":475,"op":"commit","path":"/var/log/app.log","took_us":7602,"msg":"commit"}
+{"ts":"2026-08-24T00:07:56Z","lvl":"info","seq":476,"op":"rollback","path":"/srv/data/000123.seek.zst","took_us":7639,"msg":"rollback rollback"}
+{"ts":"2026-08-24T00:07:57Z","lvl":"info","seq":477,"op":"compact","path":"/tmp/staging/frame-0007","took_us":7676,"msg":"compact compact compact"}
+{"ts":"2026-08-24T00:07:58Z","lvl":"info","seq":478,"op":"evict","path":"/mnt/store/shard-42/index","took_us":7713,"msg":"evict evict evict evict"}
+{"ts":"2026-08-24T00:07:59Z","lvl":"info","seq":479,"op":"reload","path":"/etc/seekzstdsep/config.toml","took_us":7750,"msg":"reload reload reload reload reload"}
+{"ts":"2026-08-24T00:08:00Z","lvl":"info","seq":480,"op":"open","path":"/var/log/app.log","took_us":7787,"msg":"open"}
+{"ts":"2026-08-24T00:08:01Z","lvl":"info","seq":481,"op":"read","path":"/srv/data/000123.seek.zst","took_us":7824,"msg":"read read"}
+{"ts":"2026-08-24T00:08:02Z","lvl":"info","seq":482,"op":"write","path":"/tmp/staging/frame-0007","took_us":7861,"msg":"write write write"}
+{"ts":"2026-08-24T00:08:03Z","lvl":"warn","seq":483,"op":"close","path":"/mnt/store/shard-42/index","took_us":7898,"msg":"close close close close"}
+{"ts":"2026-08-24T00:08:04Z","lvl":"warn","seq":484,"op":"flush","path":"/etc/seekzstdsep/config.toml","took_us":7935,"msg":"flush flush flush flush flush"}
+{"ts":"2026-08-24T00:08:05Z","lvl":"warn","seq":485,"op":"sync","path":"/var/log/app.log","took_us":7972,"msg":"sync"}
+{"ts":"2026-08-24T00:08:06Z","lvl":"warn","seq":486,"op":"retry","path":"/srv/data/000123.seek.zst","took_us":8009,"msg":"retry retry"}
+{"ts":"2026-08-24T00:08:07Z","lvl":"warn","seq":487,"op":"commit","path":"/tmp/staging/frame-0007","took_us":8046,"msg":"commit commit commit"}
+{"ts":"2026-08-24T00:08:08Z","lvl":"warn","seq":488,"op":"rollback","path":"/mnt/store/shard-42/index","took_us":8083,"msg":"rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:08:09Z","lvl":"warn","seq":489,"op":"compact","path":"/etc/seekzstdsep/config.toml","took_us":8120,"msg":"compact compact compact compact compact"}
+{"ts":"2026-08-24T00:08:10Z","lvl":"error","seq":490,"op":"evict","path":"/var/log/app.log","took_us":8157,"msg":"evict"}
+{"ts":"2026-08-24T00:08:11Z","lvl":"error","seq":491,"op":"reload","path":"/srv/data/000123.seek.zst","took_us":8194,"msg":"reload reload"}
+{"ts":"2026-08-24T00:08:12Z","lvl":"error","seq":492,"op":"open","path":"/tmp/staging/frame-0007","took_us":8231,"msg":"open open open"}
+{"ts":"2026-08-24T00:08:13Z","lvl":"error","seq":493,"op":"read","path":"/mnt/store/shard-42/index","took_us":8268,"msg":"read read read read"}
+{"ts":"2026-08-24T00:08:14Z","lvl":"error","seq":494,"op":"write","path":"/etc/seekzstdsep/config.toml","took_us":8305,"msg":"write write write write write"}
+{"ts":"2026-08-24T00:08:15Z","lvl":"error","seq":495,"op":"close","path":"/var/log/app.log","took_us":8342,"msg":"close"}
+{"ts":"2026-08-24T00:08:16Z","lvl":"error","seq":496,"op":"flush","path":"/srv/data/000123.seek.zst","took_us":8379,"msg":"flush flush"}
+{"ts":"2026-08-24T00:08:17Z","lvl":"debug","seq":497,"op":"sync","path":"/tmp/staging/frame-0007","took_us":8416,"msg":"sync sync sync"}
+{"ts":"2026-08-24T00:08:18Z","lvl":"debug","seq":498,"op":"retry","path":"/mnt/store/shard-42/index","took_us":8453,"msg":"retry retry retry retry"}
+{"ts":"2026-08-24T00:08:19Z","lvl":"debug","seq":499,"op":"commit","path":"/etc/seekzstdsep/config.toml","took_us":8490,"msg":"commit commit commit commit commit"}
+{"ts":"2026-08-24T00:08:20Z","lvl":"debug","seq":500,"op":"rollback","path":"/var/log/app.log","took_us":8527,"msg":"rollback"}
+{"ts":"2026-08-24T00:08:21Z","lvl":"debug","seq":501,"op":"compact","path":"/srv/data/000123.seek.zst","took_us":8564,"msg":"compact compact"}
+{"ts":"2026-08-24T00:08:22Z","lvl":"debug","seq":502,"op":"evict","path":"/tmp/staging/frame-0007","took_us":8601,"msg":"evict evict evict"}
+{"ts":"2026-08-24T00:08:23Z","lvl":"debug","seq":503,"op":"reload","path":"/mnt/store/shard-42/index","took_us":8638,"msg":"reload reload reload reload"}
+{"ts":"2026-08-24T00:08:24Z","lvl":"info","seq":504,"op":"open","path":"/etc/seekzstdsep/config.toml","took_us":8675,"msg":"open open open open open"}
+{"ts":"2026-08-24T00:08:25Z","lvl":"info","seq":505,"op":"read","path":"/var/log/app.log","took_us":8712,"msg":"read"}
+{"ts":"2026-08-24T00:08:26Z","lvl":"info","seq":506,"op":"write","path":"/srv/data/000123.seek.zst","took_us":8749,"msg":"write write"}
+{"ts":"2026-08-24T00:08:27Z","lvl":"info","seq":507,"op":"close","path":"/tmp/staging/frame-0007","took_us":8786,"msg":"close close close"}
+{"ts":"2026-08-24T00:08:28Z","lvl":"info","seq":508,"op":"flush","path":"/mnt/store/shard-42/index","took_us":8823,"msg":"flush flush flush flush"}
+{"ts":"2026-08-24T00:08:29Z","lvl":"info","seq":509,"op":"sync","path":"/etc/seekzstdsep/config.toml","took_us":8860,"msg":"sync sync sync sync sync"}
+{"ts":"2026-08-24T00:08:30Z","lvl":"info","seq":510,"op":"retry","path":"/var/log/app.log","took_us":8897,"msg":"retry"}
+{"ts":"2026-08-24T00:08:31Z","lvl":"warn","seq":511,"op":"commit","path":"/srv/data/000123.seek.zst","took_us":8934,"msg":"commit commit"}
+{"ts":"2026-08-24T00:08:32Z","lvl":"warn","seq":512,"op":"rollback","path":"/tmp/staging/frame-0007","took_us":8971,"msg":"rollback rollback rollback"}
+{"ts":"2026-08-24T00:08:33Z","lvl":"warn","seq":513,"op":"compact","path":"/mnt/store/shard-42/index","took_us":9008,"msg":"compact compact compact compact"}
+{"ts":"2026-08-24T00:08:34Z","lvl":"warn","seq":514,"op":"evict","path":"/etc/seekzstdsep/config.toml","took_us":9045,"msg":"evict evict evict evict evict"}
+{"ts":"2026-08-24T00:08:35Z","lvl":"warn","seq":515,"op":"reload","path":"/var/log/app.log","took_us":9082,"msg":"reload"}
+{"ts":"2026-08-24T00:08:36Z","lvl":"warn","seq":516,"op":"open","path":"/srv/data/000123.seek.zst","took_us":9119,"msg":"open open"}
+{"ts":"2026-08-24T00:08:37Z","lvl":"warn","seq":517,"op":"read","path":"/tmp/staging/frame-0007","took_us":9156,"msg":"read read read"}
+{"ts":"2026-08-24T00:08:38Z","lvl":"error","seq":518,"op":"write","path":"/mnt/store/shard-42/index","took_us":9193,"msg":"write write write write"}
+{"ts":"2026-08-24T00:08:39Z","lvl":"error","seq":519,"op":"close","path":"/etc/seekzstdsep/config.toml","took_us":9230,"msg":"close close close close close"}
+{"ts":"2026-08-24T00:08:40Z","lvl":"error","seq":520,"op":"flush","path":"/var/log/app.log","took_us":9267,"msg":"flush"}
+{"ts":"2026-08-24T00:08:41Z","lvl":"error","seq":521,"op":"sync","path":"/srv/data/000123.seek.zst","took_us":9304,"msg":"sync sync"}
+{"ts":"2026-08-24T00:08:42Z","lvl":"error","seq":522,"op":"retry","path":"/tmp/staging/frame-0007","took_us":9341,"msg":"retry retry retry"}
+{"ts":"2026-08-24T00:08:43Z","lvl":"error","seq":523,"op":"commit","path":"/mnt/store/shard-42/index","took_us":9378,"msg":"commit commit commit commit"}
+{"ts":"2026-08-24T00:08:44Z","lvl":"error","seq":524,"op":"rollback","path":"/etc/seekzstdsep/config.toml","took_us":9415,"msg":"rollback rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:08:45Z","lvl":"debug","seq":525,"op":"compact","path":"/var/log/app.log","took_us":9452,"msg":"compact"}
+{"ts":"2026-08-24T00:08:46Z","lvl":"debug","seq":526,"op":"evict","path":"/srv/data/000123.seek.zst","took_us":9489,"msg":"evict evict"}
+{"ts":"2026-08-24T00:08:47Z","lvl":"debug","seq":527,"op":"reload","path":"/tmp/staging/frame-0007","took_us":9526,"msg":"reload reload reload"}
+{"ts":"2026-08-24T00:08:48Z","lvl":"debug","seq":528,"op":"open","path":"/mnt/store/shard-42/index","took_us":9563,"msg":"open open open open"}
+{"ts":"2026-08-24T00:08:49Z","lvl":"debug","seq":529,"op":"read","path":"/etc/seekzstdsep/config.toml","took_us":9600,"msg":"read read read read read"}
+{"ts":"2026-08-24T00:08:50Z","lvl":"debug","seq":530,"op":"write","path":"/var/log/app.log","took_us":9637,"msg":"write"}
+{"ts":"2026-08-24T00:08:51Z","lvl":"debug","seq":531,"op":"close","path":"/srv/data/000123.seek.zst","took_us":9674,"msg":"close close"}
+{"ts":"2026-08-24T00:08:52Z","lvl":"info","seq":532,"op":"flush","path":"/tmp/staging/frame-0007","took_us":9711,"msg":"flush flush flush"}
+{"ts":"2026-08-24T00:08:53Z","lvl":"info","seq":533,"op":"sync","path":"/mnt/store/shard-42/index","took_us":9748,"msg":"sync sync sync sync"}
+{"ts":"2026-08-24T00:08:54Z","lvl":"info","seq":534,"op":"retry","path":"/etc/seekzstdsep/config.toml","took_us":9785,"msg":"retry retry retry retry retry"}
+{"ts":"2026-08-24T00:08:55Z","lvl":"info","seq":535,"op":"commit","path":"/var/log/app.log","took_us":9822,"msg":"commit"}
+{"ts":"2026-08-24T00:08:56Z","lvl":"info","seq":536,"op":"rollback","path":"/srv/data/000123.seek.zst","took_us":9859,"msg":"rollback rollback"}
+{"ts":"2026-08-24T00:08:57Z","lvl":"info","seq":537,"op":"compact","path":"/tmp/staging/frame-0007","took_us":9896,"msg":"compact compact compact"}
+{"ts":"2026-08-24T00:08:58Z","lvl":"info","seq":538,"op":"evict","path":"/mnt/store/shard-42/index","took_us":9933,"msg":"evict evict evict evict"}
+{"ts":"2026-08-24T00:08:59Z","lvl":"warn","seq":539,"op":"reload","path":"/etc/seekzstdsep/config.toml","took_us":9970,"msg":"reload reload reload reload reload"}
+{"ts":"2026-08-24T00:09:00Z","lvl":"warn","seq":540,"op":"open","path":"/var/log/app.log","took_us":34,"msg":"open"}
+{"ts":"2026-08-24T00:09:01Z","lvl":"warn","seq":541,"op":"read","path":"/srv/data/000123.seek.zst","took_us":71,"msg":"read read"}
+{"ts":"2026-08-24T00:09:02Z","lvl":"warn","seq":542,"op":"write","path":"/tmp/staging/frame-0007","took_us":108,"msg":"write write write"}
+{"ts":"2026-08-24T00:09:03Z","lvl":"warn","seq":543,"op":"close","path":"/mnt/store/shard-42/index","took_us":145,"msg":"close close close close"}
+{"ts":"2026-08-24T00:09:04Z","lvl":"warn","seq":544,"op":"flush","path":"/etc/seekzstdsep/config.toml","took_us":182,"msg":"flush flush flush flush flush"}
+{"ts":"2026-08-24T00:09:05Z","lvl":"warn","seq":545,"op":"sync","path":"/var/log/app.log","took_us":219,"msg":"sync"}
+{"ts":"2026-08-24T00:09:06Z","lvl":"error","seq":546,"op":"retry","path":"/srv/data/000123.seek.zst","took_us":256,"msg":"retry retry"}
+{"ts":"2026-08-24T00:09:07Z","lvl":"error","seq":547,"op":"commit","path":"/tmp/staging/frame-0007","took_us":293,"msg":"commit commit commit"}
+{"ts":"2026-08-24T00:09:08Z","lvl":"error","seq":548,"op":"rollback","path":"/mnt/store/shard-42/index","took_us":330,"msg":"rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:09:09Z","lvl":"error","seq":549,"op":"compact","path":"/etc/seekzstdsep/config.toml","took_us":367,"msg":"compact compact compact compact compact"}
+{"ts":"2026-08-24T00:09:10Z","lvl":"error","seq":550,"op":"evict","path":"/var/log/app.log","took_us":404,"msg":"evict"}
+{"ts":"2026-08-24T00:09:11Z","lvl":"error","seq":551,"op":"reload","path":"/srv/data/000123.seek.zst","took_us":441,"msg":"reload reload"}
+{"ts":"2026-08-24T00:09:12Z","lvl":"error","seq":552,"op":"open","path":"/tmp/staging/frame-0007","took_us":478,"msg":"open open open"}
+{"ts":"2026-08-24T00:09:13Z","lvl":"debug","seq":553,"op":"read","path":"/mnt/store/shard-42/index","took_us":515,"msg":"read read read read"}
+{"ts":"2026-08-24T00:09:14Z","lvl":"debug","seq":554,"op":"write","path":"/etc/seekzstdsep/config.toml","took_us":552,"msg":"write write write write write"}
+{"ts":"2026-08-24T00:09:15Z","lvl":"debug","seq":555,"op":"close","path":"/var/log/app.log","took_us":589,"msg":"close"}
+{"ts":"2026-08-24T00:09:16Z","lvl":"debug","seq":556,"op":"flush","path":"/srv/data/000123.seek.zst","took_us":626,"msg":"flush flush"}
+{"ts":"2026-08-24T00:09:17Z","lvl":"debug","seq":557,"op":"sync","path":"/tmp/staging/frame-0007","took_us":663,"msg":"sync sync sync"}
+{"ts":"2026-08-24T00:09:18Z","lvl":"debug","seq":558,"op":"retry","path":"/mnt/store/shard-42/index","took_us":700,"msg":"retry retry retry retry"}
+{"ts":"2026-08-24T00:09:19Z","lvl":"debug","seq":559,"op":"commit","path":"/etc/seekzstdsep/config.toml","took_us":737,"msg":"commit commit commit commit commit"}
+{"ts":"2026-08-24T00:09:20Z","lvl":"info","seq":560,"op":"rollback","path":"/var/log/app.log","took_us":774,"msg":"rollback"}
+{"ts":"2026-08-24T00:09:21Z","lvl":"info","seq":561,"op":"compact","path":"/srv/data/000123.seek.zst","took_us":811,"msg":"compact compact"}
+{"ts":"2026-08-24T00:09:22Z","lvl":"info","seq":562,"op":"evict","path":"/tmp/staging/frame-0007","took_us":848,"msg":"evict evict evict"}
+{"ts":"2026-08-24T00:09:23Z","lvl":"info","seq":563,"op":"reload","path":"/mnt/store/shard-42/index","took_us":885,"msg":"reload reload reload reload"}
+{"ts":"2026-08-24T00:09:24Z","lvl":"info","seq":564,"op":"open","path":"/etc/seekzstdsep/config.toml","took_us":922,"msg":"open open open open open"}
+{"ts":"2026-08-24T00:09:25Z","lvl":"info","seq":565,"op":"read","path":"/var/log/app.log","took_us":959,"msg":"read"}
+{"ts":"2026-08-24T00:09:26Z","lvl":"info","seq":566,"op":"write","path":"/srv/data/000123.seek.zst","took_us":996,"msg":"write write"}
+{"ts":"2026-08-24T00:09:27Z","lvl":"warn","seq":567,"op":"close","path":"/tmp/staging/frame-0007","took_us":1033,"msg":"close close close"}
+{"ts":"2026-08-24T00:09:28Z","lvl":"warn","seq":568,"op":"flush","path":"/mnt/store/shard-42/index","took_us":1070,"msg":"flush flush flush flush"}
+{"ts":"2026-08-24T00:09:29Z","lvl":"warn","seq":569,"op":"sync","path":"/etc/seekzstdsep/config.toml","took_us":1107,"msg":"sync sync sync sync sync"}
+{"ts":"2026-08-24T00:09:30Z","lvl":"warn","seq":570,"op":"retry","path":"/var/log/app.log","took_us":1144,"msg":"retry"}
+{"ts":"2026-08-24T00:09:31Z","lvl":"warn","seq":571,"op":"commit","path":"/srv/data/000123.seek.zst","took_us":1181,"msg":"commit commit"}
+{"ts":"2026-08-24T00:09:32Z","lvl":"warn","seq":572,"op":"rollback","path":"/tmp/staging/frame-0007","took_us":1218,"msg":"rollback rollback rollback"}
+{"ts":"2026-08-24T00:09:33Z","lvl":"warn","seq":573,"op":"compact","path":"/mnt/store/shard-42/index","took_us":1255,"msg":"compact compact compact compact"}
+{"ts":"2026-08-24T00:09:34Z","lvl":"error","seq":574,"op":"evict","path":"/etc/seekzstdsep/config.toml","took_us":1292,"msg":"evict evict evict evict evict"}
+{"ts":"2026-08-24T00:09:35Z","lvl":"error","seq":575,"op":"reload","path":"/var/log/app.log","took_us":1329,"msg":"reload"}
+{"ts":"2026-08-24T00:09:36Z","lvl":"error","seq":576,"op":"open","path":"/srv/data/000123.seek.zst","took_us":1366,"msg":"open open"}
+{"ts":"2026-08-24T00:09:37Z","lvl":"error","seq":577,"op":"read","path":"/tmp/staging/frame-0007","took_us":1403,"msg":"read read read"}
+{"ts":"2026-08-24T00:09:38Z","lvl":"error","seq":578,"op":"write","path":"/mnt/store/shard-42/index","took_us":1440,"msg":"write write write write"}
+{"ts":"2026-08-24T00:09:39Z","lvl":"error","seq":579,"op":"close","path":"/etc/seekzstdsep/config.toml","took_us":1477,"msg":"close close close close close"}
+{"ts":"2026-08-24T00:09:40Z","lvl":"error","seq":580,"op":"flush","path":"/var/log/app.log","took_us":1514,"msg":"flush"}
+{"ts":"2026-08-24T00:09:41Z","lvl":"debug","seq":581,"op":"sync","path":"/srv/data/000123.seek.zst","took_us":1551,"msg":"sync sync"}
+{"ts":"2026-08-24T00:09:42Z","lvl":"debug","seq":582,"op":"retry","path":"/tmp/staging/frame-0007","took_us":1588,"msg":"retry retry retry"}
+{"ts":"2026-08-24T00:09:43Z","lvl":"debug","seq":583,"op":"commit","path":"/mnt/store/shard-42/index","took_us":1625,"msg":"commit commit commit commit"}
+{"ts":"2026-08-24T00:09:44Z","lvl":"debug","seq":584,"op":"rollback","path":"/etc/seekzstdsep/config.toml","took_us":1662,"msg":"rollback rollback rollback rollback rollback"}
+{"ts":"2026-08-24T00:09:45Z","lvl":"debug","seq":585,"op":"compact","path":"/var/log/app.log","took_us":1699,"msg":"compact"}
+{"ts":"2026-08-24T00:09:46Z","lvl":"debug","seq":586,"op":"evict","path":"/srv/data/000123.seek.zst","took_us":1736,"msg":"evict evict"}
+{"ts":"2026-08-24T00:09:47Z","lvl":"debug","seq":587,"op":"reload","path":"/tmp/staging/frame-0007","took_us":1773,"msg":"reload reload reload"}
+{"ts":"2026-08-24T00:09:48Z","lvl":"info","seq":588,"op":"open","path":"/mnt/store/shard-42/index","took_us":1810,"msg":"open open open open"}
+{"ts":"2026-08-24T00:09:49Z","lvl":"info","seq":589,"op":"read","path":"/etc/seekzstdsep/config.toml","took_us":1847,"msg":"read read read read read"}
+{"ts":"2026-08-24T00:09:50Z","lvl":"info","seq":590,"op":"write","path":"/var/log/app.log","took_us":1884,"msg":"write"}
+{"ts":"2026-08-24T00:09:51Z","lvl":"info","seq":591,"op":"close","path":"/srv/data/000123.seek.zst","took_us":1921,"msg":"close close"}
+{"ts":"2026-08-24T00:09:52Z","lvl":"info","seq":592,"op":"flush","path":"/tmp/staging/frame-0007","took_us":1958,"msg":"flush flush flush"}
+{"ts":"2026-08-24T00:09:53Z","lvl":"info","seq":593,"op":"sync","path":"/mnt/store/shard-42/index","took_us":1995,"msg":"sync sync sync sync"}
+{"ts":"2026-08-24T00:09:54Z","lvl":"info","seq":594,"op":"retry","path":"/etc/seekzstdsep/config.toml","took_us":2032,"msg":"retry retry retry retry retry"}
+{"ts":"2026-08-24T00:09:55Z","lvl":"warn","seq":595,"op":"commit","path":"/var/log/app.log","took_us":2069,"msg":"commit"}
+{"ts":"2026-08-24T00:09:56Z","lvl":"warn","seq":596,"op":"rollback","path":"/srv/data/000123.seek.zst","took_us":2106,"msg":"rollback rollback"}
+{"ts":"2026-08-24T00:09:57Z","lvl":"warn","seq":597,"op":"compact","path":"/tmp/staging/frame-0007","took_us":2143,"msg":"compact compact compact"}
+{"ts":"2026-08-24T00:09:58Z","lvl":"warn","seq":598,"op":"evict","path":"/mnt/store/shard-42/index","took_us":2180,"msg":"evict evict evict evict"}
+{"ts":"2026-08-24T00:09:59Z","lvl":"warn","seq":599,"op":"reload","path":"/etc/seekzstdsep/config.toml","took_us":2217,"msg":"reload reload reload reload reload"}

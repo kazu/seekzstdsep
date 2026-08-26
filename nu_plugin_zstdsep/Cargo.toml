@@ -1,0 +1,33 @@
+[package]
+name = "nu_plugin_zstdsep"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Kazuhisa TAKEI <kazuhisa@gmail.com>"]
+description = "Nushell plugin for seekable, separator-aware zstd files: inspect frames and read records lazily."
+repository = "https://github.com/kazu/seekzstdsep"
+license = "MIT"
+keywords = ["nushell", "plugin", "zstd", "seekable", "jsonl"]
+categories = ["command-line-utilities", "compression"]
+
+[dependencies]
+seekzstdsep = { path = "..", version = "0.2" }
+# `nu-protocol` is what brings the nushell `Value` conversion `to json` uses; without it
+# nu-json only speaks serde.
+nu-json = { version = "0.114", features = ["nu-protocol"] }
+nu-plugin = "0.114"
+nu-protocol = { version = "0.114", features = ["plugin"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tempfile = "3"
+typetag = "0.2"
+anyhow = "1.0"
+
+[dev-dependencies]
+nu-plugin-test-support = "0.114"
+# nu-plugin-test-support pulls nu-plugin-engine with default features off, while nu-plugin here
+# has them on: the two halves of `local-socket` then disagree and nu-plugin-engine 0.114.1 fails
+# to compile. Naming it here turns the feature back on.
+nu-plugin-engine = { version = "0.114", features = ["local-socket"] }
+nu-command = "0.114"
+tempfile = "3"
