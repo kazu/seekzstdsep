@@ -1,0 +1,105 @@
+# CLI reference
+
+Every subcommand and what its flags mean. `seekzstdsep -h` lists the subcommands and
+`seekzstdsep <subcommand> -h` lists one subcommand's options; this file is the long form.
+
+## Compress
+
+```sh
+seekzstdsep compress events.jsonl events.jsonl.seek.zst
+```
+
+With no `OUTPUT`, the output path is `INPUT` + `.seek.zst`. With no `INPUT`, input is read from
+stdin and the result goes to stdout. Useful options:
+
+| Option | Meaning |
+| --- | --- |
+| `-s, --separator <S>` | Record separator (default `"\n"`) |
+| `--frame-size <N>` | Target frame size in bytes (default 65536) |
+| `-c, --cnt-of-separator-per-frame <N>` | Pin records per frame instead of auto-detecting |
+| `-l, --limit-multiplier <N>` | How far past `--frame-size` to search for a separator (default 4) |
+| `--rm` | Delete the input file after a successful conversion |
+| `--no-check` | Leave the per-frame content checksum out (it is written by default) |
+
+`--frame-size` is a target, not a hard bound — a frame ends at the next separator past it, so byte
+sizes vary while the record count per frame stays fixed. Leaving the defaults alone is fine for most
+input; `docs/format.md` explains when it is not.
+
+Each frame ends with a content checksum, so the one frame a lookup decompresses is verified as it is
+read. It costs 4 bytes per frame, which `docs/performances.md` measures against a real file, and
+`--no-check` drops it.
+
+## Read a record range
+
+```sh
+seekzstdsep cat events.jsonl.seek.zst --from 10000 --cnt 3
+```
+
+`--from` is a 0-based record index. `docs/bugs.md` records the current `--cnt` semantics.
+
+## Inspect the frame layout
+
+```sh
+seekzstdsep inspect events.jsonl.seek.zst
+seekzstdsep inspect events.jsonl.seek.zst --format json
+```
+
+Prints per-frame compressed and decompressed extents plus the separator count, which is the quickest
+way to confirm the uniform-count invariant actually holds for a given file. By default the separator
+count is measured on the first and last few frames and assumed for the rest; pass `-n,
+--no-fast-mode` to count every frame.
+
+## Truncate
+
+Shortens the file in place to its first `--records` records, cutting on a record boundary. Picking
+that number means knowing how many records the file holds: `inspect` reports the record count of
+every frame, and their sum is the record count of the file.
+
+How you add them up depends on the shell. In bash or zsh, with `jq`:
+
+```sh
+seekzstdsep inspect events.jsonl.seek.zst --format json | jq '[.[].cnt_of_sep] | add'
+# => 50000
+```
+
+In nushell, with no external command:
+
+```nu
+seekzstdsep inspect events.jsonl.seek.zst --format json | from json | get cnt_of_sep | math sum
+# => 50000
+```
+
+Then cut to a number you picked from that:
+
+```sh
+seekzstdsep truncate events.jsonl.seek.zst --records 10000
+```
+
+Only the frame the cut falls inside is re-encoded, and nothing before it is read or written. The
+seek table is rebuilt in full, so that part is linear in the number of frames.
+
+Destructive — clone the file first if the original matters, which `cp --reflink=auto` does in about a
+millisecond where the filesystem supports it. The separator is validated against the file before
+anything is written, which needs at least three frames, so very small files are refused.
+
+## Append
+
+```sh
+seekzstdsep append events.jsonl.seek.zst more.jsonl
+cat more.jsonl | seekzstdsep append events.jsonl.seek.zst
+```
+
+Adds the records to the end of the file in place. The frame a file ends with generally holds fewer
+records than the rest, so appending after it would leave a short frame in the interior, where record
+lookup divides by a count that no longer holds. That frame is decoded and cut again together with
+the new records instead, so every frame but the last comes back holding the count the file was built
+with. Nothing before it is read or written.
+
+A file whose last byte is not the separator ends in a fragment rather than in a record, and joining
+would merge that fragment with the first appended record. `append` refuses; pass
+`--insert-separator` to write a separator at the join and make the fragment a record of its own.
+Where one separator does not complete the record — which a separator that overlaps itself, such as
+`\n\n`, can leave — that is refused too.
+
+Destructive, and validated before anything is written, on the same terms as `truncate` above.
+
