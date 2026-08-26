@@ -13,8 +13,8 @@ command line tool and as a Rust library.
 The output is not a proprietary container. It is an ordinary [Zstandard Seekable Format][spec] file,
 built by choosing where the frames are cut, so `zstd -d` still restores the original bytes.
 
-Same idea as BGZF + tabix, minus the index file. The frame layout *is* the index, so there is no
-sidecar to keep alongside the data or to lose.
+Same idea as [BGZF][bgzf] + [tabix][tabix], minus the index file. The frame layout *is* the index,
+so there is no sidecar to keep alongside the data or to lose.
 
 ![Time to read one record, by its position in the file](docs/bench/read-latency.svg)
 
@@ -101,3 +101,5 @@ their own. See `nu_plugin_zstdsep/README.md`.
 MIT ([LICENSE](./LICENSE)).
 
 [spec]: https://github.com/rorosen/zeekstd/blob/main/seekable_format.md
+[bgzf]: https://www.htslib.org/doc/bgzip.html
+[tabix]: https://www.htslib.org/doc/tabix.html

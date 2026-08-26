@@ -13,8 +13,8 @@ JSONL、CSV、TSV、logfmt — レコードが特定の文字列で区切られ�
 出力は独自フォーマットではありません。ごく普通の [Zstandard Seekable Format][spec] のファイルで、
 フレームをどこで切るかを選んでいるだけなので、`zstd -d` でそのまま元のバイト列に戻ります。
 
-BGZF + tabix と同じ考え方ですが、インデックスファイルが要りません。フレームの切り方そのものが
-インデックスなので、データと一緒に持ち歩いたり失くしたりするサイドカーがありません。
+[BGZF][bgzf] + [tabix][tabix] と同じ考え方ですが、インデックスファイルが要りません。フレームの
+切り方そのものがインデックスなので、データと一緒に持ち歩いたり失くしたりするサイドカーがありません。
 
 ![ファイル内の位置ごとの、1 レコードを読むのにかかる時間](docs/bench/read-latency.svg)
 
@@ -101,3 +101,5 @@ plugin へ回します。詳細は `nu_plugin_zstdsep/README.ja.md` にありま
 MIT ([LICENSE](./LICENSE))。
 
 [spec]: https://github.com/rorosen/zeekstd/blob/main/seekable_format.md
+[bgzf]: https://www.htslib.org/doc/bgzip.html
+[tabix]: https://www.htslib.org/doc/tabix.html
