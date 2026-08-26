@@ -1,0 +1,62 @@
+name: Release
+
+# Publishing is authenticated by trusted publishing: crates.io trusts a JWT that
+# GitHub mints for this workflow and hands back a token that dies with the job, so
+# no long-lived token is stored anywhere. The crate's settings on crates.io name
+# this file, so renaming it breaks publishing until the name is updated there too.
+
+on:
+  push:
+    tags:
+      - "v*"                       # seekzstdsep
+      - "nu_plugin_zstdsep-v*"     # the nushell plugin
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: which crate to publish
+        required: true
+        type: choice
+        options: [seekzstdsep, nu_plugin_zstdsep]
+
+jobs:
+  publish:
+
+    runs-on: ubuntu-latest
+    environment: release
+
+    permissions:
+      contents: read
+      id-token: write              # without this the JWT cannot be requested
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Decide what to publish
+      id: target
+      run: |
+        if [ -n "${{ inputs.crate }}" ]; then
+          echo "crate=${{ inputs.crate }}" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        case "$GITHUB_REF_NAME" in
+          nu_plugin_zstdsep-v*) crate=nu_plugin_zstdsep; want="${GITHUB_REF_NAME#nu_plugin_zstdsep-v}" ;;
+          v*)                   crate=seekzstdsep;      want="${GITHUB_REF_NAME#v}" ;;
+          *) echo "::error::unexpected tag $GITHUB_REF_NAME"; exit 1 ;;
+        esac
+        # Tagging v0.3.1 against a Cargo.toml that still says 0.3.0 publishes the
+        # wrong version under the right name, and nothing downstream notices.
+        have=$(cargo metadata --format-version 1 --no-deps \
+               | jq -r --arg c "$crate" '.packages[] | select(.name == $c) | .version')
+        if [ "$want" != "$have" ]; then
+          echo "::error::tag says $want, $crate/Cargo.toml says $have"
+          exit 1
+        fi
+        echo "crate=$crate" >> "$GITHUB_OUTPUT"
+
+    - uses: rust-lang/crates-io-auth-action@v1
+      id: auth
+
+    - name: Publish
+      run: cargo publish -p ${{ steps.target.outputs.crate }}
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
