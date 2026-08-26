@@ -1,8 +1,7 @@
 # seekzstdsep
 
-**Seekable Zstandard compression for separator-delimited record formats.**
-
-*日本語版: [README.ja.md](README.ja.md)*
+**A compression/decompression tool: it packs records — separator-delimited data — into a zstd
+file, and reads any of them back out by decompressing only the part that holds them.**
 
 JSONL, CSV, TSV, logfmt — formats where records are delimited by a fixed string, usually a newline.
 `seekzstdsep` compresses them so that **any record range can be read without decompressing the data
@@ -31,12 +30,15 @@ prefix.
 Record index to frame index becomes a single division, and the decoder touches only the frames it
 needs. No index structure beyond the seek table that the format already carries.
 
-The same rule makes **parallel scans trivial to shard**: worker `i` takes records
-`[i*N, (i+1)*N)` and seeks straight to its own frame range, with no shared index and no coordination
-between workers.
+Plain gzip or zstd has to decompress everything in front of record n to reach it, so the cost grows
+with n. `seekzstdsep` decompresses only the one frame that holds the record, so any record comes
+back in near-constant time, however large the file and however deep the record sits in it.
 
 A 50,000-record JSONL file (3.7 MB) compresses to 155 KB across 55 frames. Reading three records out
 of the middle decompresses one frame, not 3.7 MB.
+
+Note: "near" because opening the file reads the seek table, which carries one entry per frame, so
+that part grows a little as the frame count does.
 
 `docs/format.md` covers the on-disk layout and the invariant in full.
 
@@ -59,21 +61,31 @@ output is a standard format.
 cargo install --path .
 ```
 
-### What it depends on
+See [`Cargo.toml`](./Cargo.toml) for the dependencies.
 
-| Crate | Role |
-| --- | --- |
-| [`zeekstd`](https://docs.rs/zeekstd) | Zstandard Seekable Format encoder, decoder, and seek table |
-| [`zstd`](https://docs.rs/zstd) | Zstandard bindings |
-| [`memchr`](https://docs.rs/memchr) | SIMD separator search |
-| [`clap`](https://docs.rs/clap) | Command line parsing |
-| [`reflink-copy`](https://docs.rs/reflink-copy) | Moves staged output into place without copying, where the filesystem supports it |
-| [`tempfile`](https://docs.rs/tempfile) | Staging for the compression retry loop |
+## Repository layout
 
-`anyhow`, `serde`, `serde_json`, and `tracing` round out the list. See `Cargo.toml` for exact
-versions.
+- `src/` — the library and the CLI.
+- `tests/` — integration tests, with their fixtures under `tests/fixtures/`.
+- `examples/` — the smallest programs that use the library (`cat`, `compress`, `inspect`).
+- `benches/` — criterion benches for this crate.
+- `bench/` — `szbench`, the benchmark harness. A separate crate with a `[workspace]` table of its
+  own, so that it changes nothing in the crate it measures. Not the same thing as `benches/`.
+- `nu_plugin_zstdsep/` — the nushell plugin.
+- `docs/` — what was designed and what was measured.
+  - `docs/format.md` — on-disk layout, the uniform-separator-count invariant, and what depends on
+    it. **Read this before changing anything about framing.**
+  - `docs/benchmark.md` — what the benchmarks measure, what they compare against, and the traps
+    that produce wrong numbers.
+  - `docs/bench/` — the measurements themselves: baselines and the raw JSON.
+  - `docs/performances.md` — numbers taken against a real file.
+  - `docs/design/` — design notes for changes under consideration.
+  - `docs/bugs.md` — known defects, and a record of the ones that are fixed.
 
 ## CLI
+
+`seekzstdsep -h` lists the subcommands, and `seekzstdsep <subcommand> -h` lists that subcommand's
+options. What follows covers the ones in common use.
 
 ### Compress
 
@@ -124,13 +136,32 @@ count is measured on the first and last few frames and assumed for the rest; pas
 
 ### Truncate
 
+Shortens the file in place to its first `--records` records, cutting on a record boundary. Picking
+that number means knowing how many records the file holds: `inspect` reports the record count of
+every frame, and their sum is the record count of the file.
+
+How you add them up depends on the shell. In bash or zsh, with `jq`:
+
+```sh
+seekzstdsep inspect events.jsonl.seek.zst --format json | jq '[.[].cnt_of_sep] | add'
+# => 50000
+```
+
+In nushell, with no external command:
+
+```nu
+seekzstdsep inspect events.jsonl.seek.zst --format json | from json | get cnt_of_sep | math sum
+# => 50000
+```
+
+Then cut to a number you picked from that:
+
 ```sh
 seekzstdsep truncate events.jsonl.seek.zst --records 10000
 ```
 
-Shortens the file in place to its first `--records` records, cutting on a record boundary. Only the
-frame the cut falls inside is re-encoded, and nothing before it is read or written. The seek table is
-rebuilt in full, so that part is linear in the number of frames.
+Only the frame the cut falls inside is re-encoded, and nothing before it is read or written. The
+seek table is rebuilt in full, so that part is linear in the number of frames.
 
 Destructive — clone the file first if the original matters, which `cp --reflink=auto` does in about a
 millisecond where the filesystem supports it. The separator is validated against the file before
@@ -242,7 +273,7 @@ fit, which the streaming entry points cannot do. Output is staged in a temporary
 argument receives it only as a fallback, when reflink is unavailable. So set `out_path` to get
 output. `compress_to_seekable_zst` takes no options and therefore has no destination.
 
-## nushell
+## nushell plugin
 
 `nu_plugin_zstdsep/` is a nushell plugin over the same files: `zstdsep open f | get 10`
 decompresses one frame, not the file.
@@ -257,14 +288,6 @@ decompresses one frame, not the file.
 `nu_plugin_zstdsep/nu/install.nu` links a hook into nushell's autoload directory that shadows
 `open` and `save`, so a `.seek.zst` path reaches the plugin and every other path reaches the
 builtin. See [nu_plugin_zstdsep/README.md](./nu_plugin_zstdsep/README.md).
-
-## Documentation
-
-- `docs/format.md` — on-disk layout, the uniform-separator-count invariant, and what depends on it.
-  **Read this before changing anything about framing.**
-- `docs/benchmark.md` — what the benchmarks measure, what they compare against, and the traps
-  that produce wrong numbers.
-- `docs/design/` — design notes for changes under consideration.
 
 ## Known issues
 

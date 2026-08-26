@@ -1,8 +1,7 @@
 # seekzstdsep
 
-**セパレータで区切られたレコード形式のための、seekable Zstandard 圧縮。**
-
-*English version: [README.md](README.md)*
+**レコード (セパレータで区切られたデータ) を zstd ファイルに圧縮し、その一部だけを展開して
+任意のレコードを取り出せるようにする圧縮/解凍ツールです。**
 
 JSONL、CSV、TSV、logfmt — レコードが特定の文字列 (多くの場合は改行) で区切られた形式が対象です。
 `seekzstdsep` はこれらを、**任意のレコード範囲を、その手前のデータを展開せずに読み出せる**形で
@@ -29,12 +28,15 @@ seekable zstd は元々、手前を全部展開することなく**バイト**�
 レコード番号からフレーム番号への変換は単なる除算になり、デコーダは必要なフレームだけに触ります。
 フォーマットが元々持っている seek table 以外に、インデックス構造は一切必要ありません。
 
-同じルールが**並列スキャンのシャーディングを自明にします**。worker `i` はレコード
-`[i*N, (i+1)*N)` を受け持ち、共有インデックスも worker 間の調整もなしに自分のフレーム範囲へ直接
-seek できます。
+素の gzip や zstd では、n 番目のレコードを取るのにその手前を全部展開することになり、n に比例して
+遅くなります。`seekzstdsep` が展開するのはそのレコードが入っている 1 フレームだけなので、ファイルが
+どれだけ大きくても、何番目のレコードでも、ほぼ定数時間で取り出せます。
 
 50,000 レコードの JSONL (3.7 MB) は 55 フレームに分かれた 155 KB に圧縮されます。その真ん中から
 3レコード読むときに展開されるのは1フレームであって、3.7 MB ではありません。
+
+※ 「ほぼ」はファイルを開くときに seek table を読むぶんです。seek table はフレーム 1 つにつき
+1 エントリなので、フレーム数が増えればそのぶん少しだけ増えます。
 
 ディスク上のレイアウトと不変条件の詳細は `docs/format.md` にあります。
 
@@ -57,21 +59,30 @@ seek できます。
 cargo install --path .
 ```
 
-### 主な依存 crate
+依存 crate は [`Cargo.toml`](./Cargo.toml) を参照してください。
 
-| Crate | 役割 |
-| --- | --- |
-| [`zeekstd`](https://docs.rs/zeekstd) | Zstandard Seekable Format のエンコーダ、デコーダ、seek table |
-| [`zstd`](https://docs.rs/zstd) | Zstandard バインディング |
-| [`memchr`](https://docs.rs/memchr) | SIMD によるセパレータ探索 |
-| [`clap`](https://docs.rs/clap) | コマンドライン引数のパース |
-| [`reflink-copy`](https://docs.rs/reflink-copy) | 一時出力をコピーせず所定の位置へ移動 (ファイルシステムが対応している場合) |
-| [`tempfile`](https://docs.rs/tempfile) | 圧縮リトライ時の一時領域 |
+## リポジトリの構成
 
-ほかに `anyhow`、`serde`、`serde_json`、`tracing` を使っています。正確なバージョンは `Cargo.toml`
-を参照してください。
+- `src/` — ライブラリと CLI の本体。
+- `tests/` — 統合テスト。fixture は `tests/fixtures/` にあります。
+- `examples/` — ライブラリを使う最小の例 (`cat`、`compress`、`inspect`)。
+- `benches/` — この crate の criterion ベンチ。
+- `bench/` — ベンチマークハーネス `szbench`。自前の `[workspace]` を持つ別 crate で、測定対象である
+  本体の `Cargo.toml` には手を触れません。`benches/` とは別物です。
+- `nu_plugin_zstdsep/` — nushell plugin。
+- `docs/` — 設計と測定の記録。
+  - `docs/format.md` — ディスク上のレイアウト、セパレータ数均一の不変条件、そこに依存しているもの。
+    **フレーム分割まわりを変更する前に必ず読んでください。**
+  - `docs/benchmark.md` — ベンチマークで何を測り、何と比較し、どこで数字が狂うか。
+  - `docs/bench/` — 実際に測った結果。baseline と生の JSON。
+  - `docs/performances.md` — 実ファイルに対する測定値。
+  - `docs/design/` — 検討中の変更に関する設計メモ。
+  - `docs/bugs.md` — 既知の不具合と、直したものの記録。
 
 ## CLI
+
+サブコマンドの一覧は `seekzstdsep -h`、各サブコマンドのオプションは `seekzstdsep <サブコマンド> -h`
+で出ます。以下はそのうちよく使うものです。
 
 ### 圧縮
 
@@ -84,16 +95,16 @@ seekzstdsep compress events.jsonl events.jsonl.seek.zst
 
 | オプション | 意味 |
 | --- | --- |
-| `-s, --separator <S>` | レコードのセパレータ (既定 `"\n"`) |
-| `--frame-size <N>` | フレームサイズの目標値、バイト単位 (既定 65536) |
+| `-s, --separator <S>` | レコードのセパレータ (デフォルト `"\n"`) |
+| `--frame-size <N>` | フレームサイズの目標値、バイト単位 (デフォルト 65536) |
 | `-c, --cnt-of-separator-per-frame <N>` | フレームあたりのレコード数を自動検出せず固定する |
-| `-l, --limit-multiplier <N>` | `--frame-size` をどこまで超えてセパレータを探すか (既定 4) |
+| `-l, --limit-multiplier <N>` | `--frame-size` をどこまで超えてセパレータを探すか (デフォルト 4) |
 | `--rm` | 変換成功後に入力ファイルを削除する |
-| `--no-check` | フレームごとの内容チェックサムを書かない (既定では書く) |
+| `--no-check` | フレームごとの内容チェックサムを書かない (デフォルトでは書く) |
 
 `--frame-size` は上限ではなく目標値です。フレームは目標値を過ぎた次のセパレータで終わるため、
 バイト長にはばらつきが出る一方、フレームあたりのレコード数は一定に保たれます。たいていの入力では
-既定値のままで問題ありません。そうでない場合については `docs/format.md` を参照してください。
+デフォルトのままで問題ありません。そうでない場合については `docs/format.md` を参照してください。
 
 各フレームの末尾には内容チェックサムが付きます。読み出しが展開するそのフレームが、読みながら
 検証されます。コストはフレームあたり 4 バイトで、実ファイルでの実測は `docs/performances.md` に
@@ -116,18 +127,37 @@ seekzstdsep inspect events.jsonl.seek.zst --format json
 ```
 
 フレームごとの圧縮前後の範囲とセパレータ数を表示します。あるファイルで実際に不変条件が保たれているかを
-確認する一番早い方法です。既定では最初と最後の数フレームだけを実測して残りはそこから推定するので、
+確認する一番早い方法です。デフォルトでは最初と最後の数フレームだけを実測して残りはそこから推定するので、
 全フレームを数えるには `-n, --no-fast-mode` を渡してください。
 
 ### 切り詰め
+
+ファイルをその場で先頭 `--records` レコードに切り詰めます。切れ目は必ずレコード境界です。渡す数を
+決めるにはファイル全体のレコード数が要りますが、`inspect` がフレームごとのレコード数を出すので、
+その合計がそれにあたります。
+
+数え方はシェルによります。bash / zsh なら `jq` で:
+
+```sh
+seekzstdsep inspect events.jsonl.seek.zst --format json | jq '[.[].cnt_of_sep] | add'
+# => 50000
+```
+
+nushell なら外部コマンドなしで:
+
+```nu
+seekzstdsep inspect events.jsonl.seek.zst --format json | from json | get cnt_of_sep | math sum
+# => 50000
+```
+
+その数を見て切り詰めます。
 
 ```sh
 seekzstdsep truncate events.jsonl.seek.zst --records 10000
 ```
 
-ファイルをその場で先頭 `--records` レコードに切り詰めます。切れ目は必ずレコード境界です。再エンコード
-されるのは切れ目が入るフレームだけで、それより前は読みも書きもしません。seek table だけは全体を作り直す
-ので、そこはフレーム数に比例します。
+再エンコードされるのは切れ目が入るフレームだけで、それより前は読みも書きもしません。seek table だけは
+全体を作り直すので、そこはフレーム数に比例します。
 
 破壊的です。元のファイルが必要なら先に複製してください。対応するファイルシステムなら
 `cp --reflink=auto` が 1 ミリ秒程度で済ませます。何かを書き込む前にセパレータがそのファイルのものか
@@ -168,7 +198,7 @@ convert_to_seekable_zst_reader(
     64 * 1024, // フレームサイズの目標値 (バイト)
     true,      // フレームあたりのセパレータ数を揃える
     b"\n",
-    None,      // limit_multiplier、既定は 4
+    None,      // limit_multiplier、デフォルトは 4
 )
 .unwrap();
 
@@ -236,7 +266,7 @@ append(&mut f, File::open("more.jsonl").unwrap(), b"\n", OnMissingSeparator::Ref
 届くのは reflink が使えない場合のフォールバック時だけです。したがって出力を得るには `out_path` を
 設定してください。`compress_to_seekable_zst` はオプションを取らないため出力先がありません。
 
-## nushell
+## nushell plugin
 
 `nu_plugin_zstdsep/` は同じファイルを読む nushell plugin です。`zstdsep open f | get 10` は
 ファイル全体ではなくフレーム 1 つを展開します。
@@ -251,13 +281,6 @@ append(&mut f, File::open("more.jsonl").unwrap(), b"\n", OnMissingSeparator::Ref
 `nu_plugin_zstdsep/nu/install.nu` は nushell の autoload に hook を張り、`open` と `save` を
 覆います。`.seek.zst` は plugin に、それ以外は builtin に届きます。詳細は
 [nu_plugin_zstdsep/README.md](./nu_plugin_zstdsep/README.md) を参照してください。
-
-## ドキュメント
-
-- `docs/format.md` — ディスク上のレイアウト、セパレータ数均一の不変条件、そこに依存しているもの。
-  **フレーム分割まわりを変更する前に必ず読んでください。**
-- `docs/benchmark.md` — ベンチマークで何を測り、何と比較し、どこで数字が狂うか。
-- `docs/design/` — 検討中の変更に関する設計メモ。
 
 ## 既知の問題
 
