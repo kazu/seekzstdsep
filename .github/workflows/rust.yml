@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The nushell this branch's plugin is built against. One build serves one nushell
+  # minor, so this is the line that differs between master and 0.114/nu.
+  NU_VERSION: 0.114.1
 
 jobs:
   build:
@@ -17,6 +20,24 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose --workspace
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose --workspace
+
+  hook:
+    # nu_plugin_zstdsep/tests/hook.nu drives a real nushell rather than the plugin
+    # test harness, so it needs the matching nu on PATH and a built plugin.
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install nushell
+      run: |
+        name=nu-${NU_VERSION}-x86_64-unknown-linux-gnu
+        curl -fsSL "https://github.com/nushell/nushell/releases/download/${NU_VERSION}/${name}.tar.gz" | tar xz -C /tmp
+        echo "/tmp/${name}" >> "$GITHUB_PATH"
+    - name: Build the plugin
+      run: cargo build --verbose -p nu_plugin_zstdsep
+    - name: Run the hook tests
+      run: nu nu_plugin_zstdsep/tests/run-hook.nu
