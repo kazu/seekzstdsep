@@ -21,8 +21,10 @@ use std::{
 };
 
 use crate::record;
-use crate::seekzstdsep_lib::{READ_BUF_SIZE, decompressed_range, frame_encoder};
-use anyhow::bail;
+use crate::seekzstdsep_lib::{
+    READ_BUF_SIZE, READ_FRAME_BUF_SIZE, decompressed_range_into, frame_encoder,
+};
+use anyhow::{Context, bail};
 use memchr::memmem::Finder;
 use zeekstd::{DecodeOptions, SeekTable};
 
@@ -76,8 +78,9 @@ pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Resu
     let (finder, table) = open_target(f, separator)?;
     let frames = table.num_frames();
 
-    let n = validate_separator(f, &table, &finder)?;
-    let last = frame_records(f, &table, &finder, frames - 1)?;
+    let mut reader = FrameReader::new(&*f, &table)?;
+    let n = validate_separator(&mut reader, &finder)?;
+    let last = frame_records(&mut reader, &finder, frames - 1)?;
     let before_last = n * u64::from(frames - 1);
     let total = before_last + last;
 
@@ -99,7 +102,7 @@ pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Resu
     let tail = if rem == 0 {
         None
     } else {
-        let frame = decode_frame(f, &table, k as u32)?;
+        let frame = reader.take_frame(k as u32)?;
         let Some(end) = record::nth_end(&frame, &finder, separator.len(), rem as usize - 1) else {
             bail!("frame {k} holds fewer than the {rem} records the truncation cuts it at");
         };
@@ -108,6 +111,10 @@ pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Resu
             frame_has_checksum(f, &table, k as u32)?,
         )?)
     };
+
+    // Every read of `f` is done, and the writes below need it exclusively. The decoder holds it
+    // until it is dropped.
+    drop(reader);
 
     let cut = if k == 0 {
         0
@@ -126,19 +133,96 @@ pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Resu
     write_seek_table(f, out)
 }
 
-/// Appends the records `data` holds to `f`, keeping every frame but the last at the records per
-/// frame the file was built with.
+/// What [`append`] adds to a file.
+#[derive(Debug)]
+pub enum AppendInput<'a, R> {
+    /// Records, as plain bytes.
+    Records {
+        /// The bytes to append. They are cut into frames at the records per frame the file was
+        /// built with.
+        data: R,
+        /// What to do with a file that ends in a fragment rather than in a record.
+        on_missing: OnMissingSeparator,
+    },
+    /// A record range of another seekable file, whose frames are copied as compressed bytes.
+    ///
+    /// Nothing is decoded and nothing is re-encoded, so the cost is the size of the range rather
+    /// than of either file. That is only available where the frames fit together unchanged, which
+    /// is what the extra refusals of this path establish.
+    Frames {
+        /// The file to copy frames from. Read and never written.
+        input: &'a File,
+        /// The first record to copy, which has to be the first record of a frame.
+        from: u64,
+        /// The records to copy, ending at the first record of a frame or at the end of `input`.
+        /// [`None`] runs to the end.
+        cnt: Option<u64>,
+        /// How many of the copied frames are counted before any of them are taken.
+        check: RangeCheck,
+    },
+}
+
+/// How many of the frames being copied are counted before they are taken.
+///
+/// Only the count of the frames that end up in the result matters, and reading it off one frame
+/// rests on the file having been written with a uniform count. Another writer's file need not have
+/// been.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RangeCheck {
+    /// Frame 0 of the input alone, which is where its records per frame is read from.
+    ///
+    /// A frame elsewhere in the range holding a different count is not seen, and copying it puts a
+    /// short frame in the interior of the result, where record lookup divides by a count that no
+    /// longer holds and returns the wrong records with no error.
+    #[default]
+    FirstFrame,
+    /// Every frame of the copied range, which is the only check that rules the above out.
+    ///
+    /// It decompresses the range, so it costs what copying the bytes exists to avoid. That is the
+    /// price of not trusting whoever wrote the input.
+    EveryFrame,
+}
+
+/// Adds `input` to the end of `f`, keeping every frame but the last at the records per frame the
+/// file was built with.
+///
+/// Nothing before the frame the operation affects is read or written.
+///
+/// # Errors
+///
+/// Whatever the variant of `input` refuses, along with the refusals every operation in
+/// [this module](crate::edit) shares.
+pub fn append<R: Read>(
+    f: &mut File,
+    input: AppendInput<'_, R>,
+    separator: &[u8],
+) -> anyhow::Result<()> {
+    match input {
+        AppendInput::Records { data, on_missing } => append_records(f, data, separator, on_missing),
+        AppendInput::Frames {
+            input,
+            from,
+            cnt,
+            check,
+        } => append_frames(f, input, from, cnt, separator, check),
+    }
+}
+
+/// Appends the records `data` holds to `f`, which is [`AppendInput::Records`] called directly.
+///
+/// A caller that only ever appends records can reach this instead of going through [`append`], and
+/// says so at the call site by doing it.
 ///
 /// The last data frame generally holds fewer records than the rest, so appending after it would
-/// leave a short frame in the interior. It is decoded, joined with `data` and cut again instead;
-/// nothing before it is read or written. An empty `data` rewrites nothing.
+/// leave a short frame in the interior. It is decoded, joined with `data` and cut again instead.
+/// An empty `data` rewrites nothing.
 ///
 /// # Errors
 ///
 /// Refuses a file that does not end with a whole record unless `on_missing` is
 /// [`OnMissingSeparator::Insert`], which refuses in turn where writing one separator leaves
-/// another fragment. Along with the refusals every operation in [this module](crate::edit) shares.
-pub fn append(
+/// another fragment.
+pub fn append_records(
     f: &mut File,
     mut data: impl Read,
     separator: &[u8],
@@ -148,20 +232,44 @@ pub fn append(
 
     // Before the subtraction below: a seek table can hold no entries at all, and validation is
     // what refuses that.
-    let n = validate_separator(f, &table, &finder)? as usize;
+    let mut reader = FrameReader::new(&*f, &table)?;
+    let n = validate_separator(&mut reader, &finder)? as usize;
     // Replace the frame the last record is in; the set_len below drops the empty frames with it.
     let last = last_data_frame(&table)?;
 
     // Before anything is decoded, so that appending nothing costs one read and rewrites nothing.
+    // A pipe hands back what has arrived rather than what was asked for, so the first bytes are
+    // gathered until the check below can be made on them.
     let mut head = vec![0u8; READ_BUF_SIZE];
-    let read = data.read(&mut head)?;
+    let mut read = 0;
+    while read < ZSTD_MAGIC.len() {
+        let got = data.read(&mut head[read..])?;
+        if got == 0 {
+            break;
+        }
+        read += got;
+    }
     if read == 0 {
         return Ok(());
     }
     head.truncate(read);
 
+    // Compressed bytes are frames, not records. Counting the separator bytes a compressed stream
+    // holds by chance as records corrupts silently rather than failing, so the one thing this path
+    // must not accept is its own output. Reading the magic number costs nothing and needs no seek,
+    // which is what lets it cover a pipe as well as a file.
+    if head.starts_with(&ZSTD_MAGIC) {
+        bail!(
+            "refusing to append a zstd stream as records: its bytes are frames, and the separator \
+             bytes a compressed stream holds by chance would each be counted as a record. \
+             Appending the frames of a seekable zst is a different operation — \
+             `AppendInput::Frames`, or `--input-seekable` on the command line"
+        );
+    }
+
     let checksum = frame_has_checksum(f, &table, last)?;
-    let mut tail = decode_frame(f, &table, last)?;
+    let mut tail = reader.take_frame(last)?;
+    drop(reader);
     if !record::ends_whole(&tail, &finder, separator.len()) {
         match on_missing {
             OnMissingSeparator::Refuse => bail!(
@@ -237,6 +345,94 @@ pub fn append(
     write_seek_table(f, out)
 }
 
+/// Appends `cnt` records of `input`, starting at record `from`, to `f` as the frames they already
+/// are, which is [`AppendInput::Frames`] called directly.
+///
+/// Nothing is decoded of the range itself and nothing is re-encoded, which is available only where
+/// the frames of the two files fit together as they stand: they have to hold the same number of
+/// records, and `f` has to end at a frame boundary rather than partway through one. `input` may end
+/// in a short frame, which becomes the last frame of the result.
+///
+/// # Errors
+///
+/// Refuses a record count per frame that differs between the two files, an `f` whose last data
+/// frame is short or which does not end with a whole record, and a range that does not start at the
+/// first record of a frame or end at one or at the end of `input`. Under
+/// [`RangeCheck::EveryFrame`], also a frame inside the range holding a count of its own.
+pub fn append_frames(
+    f: &mut File,
+    input: &File,
+    from: u64,
+    cnt: Option<u64>,
+    separator: &[u8],
+    check: RangeCheck,
+) -> anyhow::Result<()> {
+    let (finder, table) = open_target(f, separator)?;
+    let mut reader = FrameReader::new(&*f, &table)?;
+    let n = validate_separator(&mut reader, &finder)?;
+    let last = last_data_frame(&table)?;
+
+    // The frames being copied go after this one, so it is the one that has to be full: a short
+    // frame here would end up in the interior of the result. It is decoded whatever happens, so
+    // the check that the file ends with a whole record costs nothing beyond it.
+    let end = reader.take_frame(last)?;
+    drop(reader);
+    if !record::ends_whole(&end, &finder, separator.len()) {
+        bail!(
+            "refusing to append to a file that does not end with a whole record: the first \
+             appended record would merge with the fragment it ends in"
+        );
+    }
+    let held = record::count(&end, &finder) as u64;
+    if held != n {
+        bail!(
+            "refusing to append frames after frame {last}, which holds {held} records rather than \
+             {n}: copying frames after a short one would leave it in the interior"
+        );
+    }
+
+    // Frame 0 is where the input's records per frame is read from, and it has to be the count the
+    // file being appended to holds. Whether the frames actually taken hold it too is what `check`
+    // decides: reading it off frame 0 rests on the input having been written with a uniform count.
+    let (in_finder, in_table) = finder_and_seek_table(input, separator)
+        .context("refusing to append the frames of a file that is not a seekable zst")?;
+    let mut in_reader = FrameReader::new(input, &in_table)?;
+    let in_n = records_per_frame(&mut in_reader, &in_finder, SeparatorCheck::FirstFrame)?;
+    if in_n != n {
+        bail!(
+            "refusing to append a file holding {in_n} records per frame to one holding {n}: the \
+             frames only fit together unchanged where the two counts are equal"
+        );
+    }
+
+    // The last frame of the input is allowed to be short, so what frame_range reports about it is
+    // not asked for here: it becomes the last frame of the result, which is where a short frame is
+    // permitted.
+    let (k, j, _) = frame_range(&mut in_reader, &in_finder, n, from, cnt)?;
+    if k == j {
+        return Ok(());
+    }
+    if check == RangeCheck::EveryFrame {
+        check_range_uniform(&mut in_reader, &in_finder, n, k, j)?;
+    }
+    let start = in_table.frame_start_comp(k)?;
+    let stop = in_table.frame_end_comp(j - 1)?;
+
+    // At the end of the last data frame rather than at its start: nothing is re-encoded, so no
+    // records pass through memory and the window loses only the seek table. The cut takes the
+    // frames carrying nothing with it, which must not survive into the interior of the result.
+    cut_at(f, table.frame_end_comp(last)?)?;
+
+    let mut src = input;
+    src.seek(SeekFrom::Start(start))?;
+    std::io::copy(&mut src.take(stop - start), &mut *f)?;
+
+    let mut out = SeekTable::new();
+    log_frames(&mut out, &table, last + 1)?;
+    log_frames_range(&mut out, &in_table, k..j)?;
+    write_seek_table(f, out)
+}
+
 /// Writes `cnt` records of `input`, starting at record `from`, to `output` as a seekable file of
 /// its own. A `cnt` of `None` runs to the end of the file.
 ///
@@ -259,51 +455,23 @@ pub fn copy_range(
     check: SeparatorCheck,
 ) -> anyhow::Result<()> {
     let (finder, table) = finder_and_seek_table(input, separator)?;
-    let n = records_per_frame(input, &table, &finder, check)?;
-    let last = last_data_frame(&table)?;
+    let mut reader = FrameReader::new(input, &table)?;
+    let n = records_per_frame(&mut reader, &finder, check)?;
 
-    if from % n != 0 {
+    let (k, j, tail) = frame_range(&mut reader, &finder, n, from, cnt)?;
+    if cnt == Some(0) {
+        bail!("refusing to copy 0 records: a file of no frames cannot be read back");
+    }
+    if let Some(tail) = tail
+        && tail != n
+        && align == Alignment::Required
+    {
         bail!(
-            "refusing to copy from record {from}: a range starts at the first record of a frame, \
-             and a frame holds {n} records"
+            "refusing to copy frame {}, which holds {tail} records rather than {n}: the result \
+             would not hold the same count in every frame",
+            j - 1
         );
     }
-    if from / n > u64::from(last) {
-        bail!(
-            "refusing to copy from record {from}: the file holds {} frames of {n} records",
-            last + 1
-        );
-    }
-    let k = (from / n) as u32;
-
-    // Every frame but the last holds n records, so the seek table places the end by arithmetic.
-    // The last one is the exception, and its count is what a decode is spent on where the range
-    // reaches it.
-    let j = match cnt {
-        Some(0) => bail!("refusing to copy 0 records: a file of no frames cannot be read back"),
-        Some(c) if (from + c) % n == 0 && (from + c) / n <= u64::from(last) => {
-            ((from + c) / n) as u32
-        }
-        c => {
-            let tail = frame_records(input, &table, &finder, last)?;
-            let total = n * u64::from(last) + tail;
-            if let Some(c) = c
-                && from.saturating_add(c) != total
-            {
-                bail!(
-                    "refusing to copy {c} records from record {from}: a range ends at the first \
-                     record of a frame or at the end of the file, which holds {total} records"
-                );
-            }
-            if tail != n && align == Alignment::Required {
-                bail!(
-                    "refusing to copy frame {last}, which holds {tail} records rather than {n}: \
-                     the result would not hold the same count in every frame"
-                );
-            }
-            last + 1
-        }
-    };
 
     let mut src = input;
     let start = table.frame_start_comp(k)?;
@@ -397,8 +565,8 @@ fn cut_at(f: &mut File, cut: u64) -> anyhow::Result<()> {
 /// Compares the first frame against the last one that is not allowed to be short, so a count that
 /// drifts anywhere between them is caught. Only those two are decoded: a frame in the middle that
 /// differs from both is not detected, and finding it would mean decompressing the whole file.
-fn validate_separator(f: &File, table: &SeekTable, finder: &Finder) -> anyhow::Result<u64> {
-    let frames = table.num_frames();
+fn validate_separator(reader: &mut FrameReader, finder: &Finder) -> anyhow::Result<u64> {
+    let frames = reader.table.num_frames();
     if frames < 3 {
         bail!(
             "refusing to validate the separator against {frames} frames: the last frame is \
@@ -406,12 +574,12 @@ fn validate_separator(f: &File, table: &SeekTable, finder: &Finder) -> anyhow::R
         );
     }
 
-    let first = record::count(&decode_frame(f, table, 0)?, finder);
+    let first = record::count(reader.frame(0)?, finder);
     if first == 0 {
         bail!("the separator does not occur in frame 0");
     }
     let last_full = frames - 2;
-    let second = record::count(&decode_frame(f, table, last_full)?, finder);
+    let second = record::count(reader.frame(last_full)?, finder);
     if first != second {
         bail!(
             "frame 0 holds {first} separators and frame {last_full} holds {second}: either the \
@@ -431,10 +599,23 @@ const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 /// Public because it is the only way to ask: the seek table does not record it, and an operation
 /// that rewrites a frame has to match whatever the file already carries.
 ///
+/// Seeking to the frame header moves the file's position, and a [`FrameReader`] over the same file
+/// shares it — a decoder held open across frames reads from where it left off, and only re-seeks
+/// when the frame it is asked for moves. So the position is put back, and asking this between two
+/// frame reads is safe rather than a corruption that only shows on frames larger than the decoder's
+/// input buffer.
+///
 /// # Errors
 ///
 /// A frame that does not start with the zstd magic number.
 pub fn frame_has_checksum(mut f: &File, table: &SeekTable, index: u32) -> anyhow::Result<bool> {
+    let at = f.stream_position()?;
+    let found = frame_checksum_at(f, table, index);
+    f.seek(SeekFrom::Start(at))?;
+    found
+}
+
+fn frame_checksum_at(mut f: &File, table: &SeekTable, index: u32) -> anyhow::Result<bool> {
     f.seek(SeekFrom::Start(table.frame_start_comp(index)?))?;
     let mut head = [0u8; 5];
     f.read_exact(&mut head)?;
@@ -454,12 +635,11 @@ pub fn frame_has_checksum(mut f: &File, table: &SeekTable, index: u32) -> anyhow
 /// [`SeparatorCheck::TwoFrames`] counts the farthest frame that is not allowed to be short as well,
 /// which catches a count that drifts between the two at the price of a second frame decoded.
 fn records_per_frame(
-    f: &File,
-    table: &SeekTable,
+    reader: &mut FrameReader,
     finder: &Finder,
     check: SeparatorCheck,
 ) -> anyhow::Result<u64> {
-    let last = last_data_frame(table)?;
+    let last = last_data_frame(reader.table)?;
     if last == 0 {
         bail!(
             "refusing to read the separator off a file of one data frame: that frame is the one \
@@ -467,14 +647,18 @@ fn records_per_frame(
         );
     }
 
-    let first = decode_frame(f, table, 0)?;
+    // Both answers are taken from the one borrow, so that reading a second frame below does not
+    // need this one copied out to survive it.
+    let first = reader.frame(0)?;
+    let n = record::count(first, finder) as u64;
+    let ends_whole = record::ends_whole(first, finder, finder.needle().len());
+
     // Before the check below, which would refuse a separator that occurs nowhere for the less
     // specific of the two reasons.
-    let n = record::count(&first, finder) as u64;
     if n == 0 {
         bail!("the separator does not occur in frame 0");
     }
-    if !record::ends_whole(&first, finder, finder.needle().len()) {
+    if !ends_whole {
         bail!(
             "frame 0 does not end with the separator: a frame ends immediately after one, so this \
              is not the separator the file was built with"
@@ -489,7 +673,7 @@ fn records_per_frame(
                  one that has to hold a full count"
             );
         }
-        let second = frame_records(f, table, finder, full)?;
+        let second = frame_records(reader, finder, full)?;
         if n != second {
             bail!(
                 "frame 0 holds {n} records and frame {full} holds {second}: either the separator \
@@ -499,6 +683,103 @@ fn records_per_frame(
     }
 
     Ok(n)
+}
+
+/// Confirms every frame of `k..j` holds `n` records, which is what reading the count off frame 0
+/// alone leaves open.
+///
+/// Only the frame the range ends at may hold fewer, and only when it is the frame the file ends
+/// with. A short frame anywhere earlier lands in the interior of the result, where record lookup
+/// divides by a count that no longer holds. A short frame that ends the range without ending the
+/// file is legal in the result, but it means the range holds fewer records than were asked for, so
+/// it is refused too rather than delivered short.
+///
+/// Costs the range decompressed, which is what copying the bytes exists to avoid. It is therefore
+/// asked for rather than assumed. The whole range is counted before any of it is judged, so a
+/// refusal costs the same as an acceptance; the refusal still comes before anything is written.
+fn check_range_uniform(
+    reader: &mut FrameReader,
+    finder: &Finder,
+    n: u64,
+    k: u32,
+    j: u32,
+) -> anyhow::Result<()> {
+    let last = last_data_frame(reader.table)?;
+    for (offset, held) in frame_counts(reader, finder, k..j)?.into_iter().enumerate() {
+        let i = k + offset as u32;
+        if held == n {
+            continue;
+        }
+        if i == j - 1 && i == last && held < n {
+            continue;
+        }
+        bail!(
+            "refusing to copy frame {i}, which holds {held} records rather than {n}: a short frame \
+             before the end of the range lands in the interior of the result, where record lookup \
+             divides by a count that no longer holds, and one ending a range that does not end the \
+             file means fewer records than were asked for"
+        );
+    }
+    Ok(())
+}
+
+/// The frames a record range covers, as `k..j`, along with the record count of the last data frame
+/// where the range reaches it.
+///
+/// A range starts at the first record of a frame and ends at one or at the end of the file, so both
+/// ends fall out of `n` by arithmetic. The exception is the end of the file, whose frame holds a
+/// count the seek table cannot supply; that count is what the decode here is spent on, and it comes
+/// back with the range because what a frame holding a count of its own means is the caller's to
+/// decide.
+///
+/// # Errors
+///
+/// A `from` that is not the first record of a frame or is past the last one, and a `cnt` that ends
+/// the range anywhere but at the first record of a frame or the end of the file.
+fn frame_range(
+    reader: &mut FrameReader,
+    finder: &Finder,
+    n: u64,
+    from: u64,
+    cnt: Option<u64>,
+) -> anyhow::Result<(u32, u32, Option<u64>)> {
+    let last = last_data_frame(reader.table)?;
+
+    if from % n != 0 {
+        bail!(
+            "refusing to copy from record {from}: a range starts at the first record of a frame, \
+             and a frame holds {n} records"
+        );
+    }
+    if from / n > u64::from(last) {
+        bail!(
+            "refusing to copy from record {from}: the file holds {} frames of {n} records",
+            last + 1
+        );
+    }
+    let k = (from / n) as u32;
+
+    // Every frame but the last holds n records, so the seek table places the end by arithmetic.
+    // The last one is the exception, and its count is what a decode is spent on where the range
+    // reaches it.
+    match cnt {
+        Some(c) if (from + c) % n == 0 && (from + c) / n <= u64::from(last) => {
+            Ok((k, ((from + c) / n) as u32, None))
+        }
+        c => {
+            let tail = frame_records(reader, finder, last)?;
+            let total = n * u64::from(last) + tail;
+            if let Some(c) = c
+                && from.saturating_add(c) != total
+            {
+                bail!(
+                    "refusing to copy {c} records from record {from}: a range ends at the first \
+                     record of a frame or at the end of the file, which holds {total} records"
+                );
+            }
+            Ok((k, last + 1, Some(tail)))
+        }
+    }
 }
 
 /// The last frame that carries data, which is the frame the record a file ends with is in.
@@ -513,25 +794,119 @@ fn last_data_frame(table: &SeekTable) -> anyhow::Result<u32> {
     Ok(last)
 }
 
+/// The number of records each frame of `range` holds.
+///
+/// Every operation here is built on reading frames and counting separators in them, one frame at a
+/// time or a range of them. Public because that is the cost they are all made of, and a benchmark
+/// is the only thing that holds it to what the documentation claims.
+///
+/// # Errors
+///
+/// An empty `separator`, and a range naming a frame the file does not have.
+pub fn count_frames(
+    f: &File,
+    table: &SeekTable,
+    separator: &[u8],
+    range: std::ops::Range<u32>,
+) -> anyhow::Result<Vec<u64>> {
+    record::check_separator(separator)?;
+    let widest = widest_frame(table, range.clone())?;
+    frame_counts(
+        &mut FrameReader::with_capacity(f, table, widest)?,
+        &Finder::new(separator),
+        range,
+    )
+}
+
+/// [`count_frames`] for a caller that already has the separator search and has checked it.
+fn frame_counts(
+    reader: &mut FrameReader,
+    finder: &Finder,
+    range: std::ops::Range<u32>,
+) -> anyhow::Result<Vec<u64>> {
+    let mut counts = Vec::with_capacity(range.len());
+    for i in range {
+        counts.push(record::count(reader.frame(i)?, finder) as u64);
+    }
+    Ok(counts)
+}
+
+/// A decoder held open across the frames of one file, with the seek table it was built from and the
+/// buffer the frames are read into.
+///
+/// Building a decoder clones the seek table, so building one per frame rebuilds the whole table for
+/// each of them. Holding the decoder makes that once, and holding the buffer makes the allocation
+/// once — one reader, one buffer, however many frames go through it. `benches/edit.rs` is what
+/// holds this to being worth having.
+///
+/// A reader is per-thread whether or not it is written that way: the decoder carries the position it
+/// last read to, and two of them over one `File` would share the operating system's, so neither the
+/// decoder nor the file behind it can be shared. Holding the buffer therefore shares nothing that
+/// was not already private to one thread.
+struct FrameReader<'a> {
+    decoder: zeekstd::Decoder<'a, &'a File>,
+    table: &'a SeekTable,
+    buf: Vec<u8>,
+}
+
+impl<'a> FrameReader<'a> {
+    /// A reader whose buffer starts at [`READ_FRAME_BUF_SIZE`] and grows to the frames it is asked
+    /// for.
+    ///
+    /// A caller that knows how large the frames it wants are says so with
+    /// [`FrameReader::with_capacity`] instead; the five that use this one know only that they want
+    /// a few frames of whatever the file holds.
+    fn new(f: &'a File, table: &'a SeekTable) -> anyhow::Result<Self> {
+        Self::with_capacity(f, table, READ_FRAME_BUF_SIZE)
+    }
+
+    /// [`FrameReader::new`] with the buffer sized up front, for a caller that knows the largest
+    /// frame it will read and would rather not grow into it.
+    fn with_capacity(f: &'a File, table: &'a SeekTable, capacity: usize) -> anyhow::Result<Self> {
+        Ok(Self {
+            decoder: DecodeOptions::new(f)
+                .seek_table(table.clone())
+                .into_decoder()?,
+            table,
+            buf: Vec::with_capacity(capacity),
+        })
+    }
+
+    /// Decompresses frame `index`, replacing whatever the buffer held.
+    fn frame(&mut self, index: u32) -> anyhow::Result<&[u8]> {
+        decompressed_range_into(
+            &mut self.decoder,
+            self.table.frame_start_decomp(index)?,
+            self.table.frame_size_decomp(index)?,
+            &mut self.buf,
+        )?;
+        Ok(&self.buf)
+    }
+
+    /// [`FrameReader::frame`] handed over rather than lent, for the one caller that goes on to add
+    /// to what it read. The buffer moves out and the reader starts the next frame from nothing,
+    /// which costs it an allocation and the caller no copy.
+    fn take_frame(&mut self, index: u32) -> anyhow::Result<Vec<u8>> {
+        self.frame(index)?;
+        Ok(std::mem::take(&mut self.buf))
+    }
+}
+
+/// The largest frame of `range`, which is what a reader over it has to hold at once.
+fn widest_frame(table: &SeekTable, range: std::ops::Range<u32>) -> anyhow::Result<usize> {
+    let mut widest = 0;
+    for i in range {
+        widest = widest.max(table.frame_size_decomp(i)? as usize);
+    }
+    Ok(widest)
+}
+
 /// The number of records frame `index` holds, which costs one frame decoded.
 ///
 /// The seek table cannot answer this: it records sizes, not record counts. Only the last frame
 /// needs asking, since every other one holds the count validation established.
-fn frame_records(f: &File, table: &SeekTable, finder: &Finder, index: u32) -> anyhow::Result<u64> {
-    Ok(record::count(&decode_frame(f, table, index)?, finder) as u64)
-}
-
-/// Decompresses one frame.
-fn decode_frame(f: &File, table: &SeekTable, index: u32) -> anyhow::Result<Vec<u8>> {
-    let mut decoder = DecodeOptions::new(f)
-        .seek_table(table.clone())
-        .into_decoder()?;
-
-    decompressed_range(
-        &mut decoder,
-        table.frame_start_decomp(index)?,
-        table.frame_size_decomp(index)?,
-    )
+fn frame_records(reader: &mut FrameReader, finder: &Finder, index: u32) -> anyhow::Result<u64> {
+    Ok(record::count(reader.frame(index)?, finder) as u64)
 }
 
 /// Compresses `data` as a single frame, returning its bytes and the sizes its seek table entry

@@ -9,7 +9,7 @@ use nu_protocol::{
     Type, shell_error::generic::GenericError,
 };
 use seekzstdsep::{
-    CompressOptions, OnMissingSeparator, append, compress_to_seekable_zst_with_opts,
+    CompressOptions, OnMissingSeparator, append_records, compress_to_seekable_zst_with_opts,
     convert_to_seekable_zst_reader_with_opts,
 };
 use tempfile::spooled_tempfile;
@@ -178,7 +178,7 @@ impl PluginCommand for Save {
                 .write(true)
                 .open(&path)
                 .map_err(|e| io_failed(&path, &e, call))?;
-            append(&mut file, records, separator.as_bytes(), on_missing)
+            append_records(&mut file, records, separator.as_bytes(), on_missing)
                 .map_err(|e| failed(&path, &e.to_string(), call))?;
         } else {
             compress(&path, &mut records, &separator, call)?;

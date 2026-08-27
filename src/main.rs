@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use seekzstdsep::cli::{ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
 use seekzstdsep::{
-    InspectOptions, OnMissingSeparator, append, cat_data, seekzstdsep_lib::inspect_with_opts,
-    truncate,
+    AppendInput, InspectOptions, OnMissingSeparator, append, cat_data,
+    seekzstdsep_lib::inspect_with_opts, truncate,
 };
 use std::io::{self, Read, Write};
 
@@ -138,7 +138,11 @@ fn main() -> anyhow::Result<()> {
             } else {
                 OnMissingSeparator::Refuse
             };
-            append(&mut file, data, args.separator.as_bytes(), on_missing)?;
+            append(
+                &mut file,
+                AppendInput::Records { data, on_missing },
+                args.separator.as_bytes(),
+            )?;
         }
         Commands::CopyRange(args) => {
             run_copy_range(&args, io::stdout().lock())?;

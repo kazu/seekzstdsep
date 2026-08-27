@@ -14,14 +14,16 @@
 //! cargo bench --bench edit
 //! ```
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::fs::File;
 use std::hint::black_box;
 use std::path::PathBuf;
 
 use seekzstdsep::{
     Alignment, CompressOptions, SeparatorCheck, compress_to_seekable_zst_with_opts, copy_range,
+    count_frames,
 };
+use zeekstd::SeekTable;
 
 const RECORDS: usize = 200_000;
 const RECORDS_PER_FRAME: usize = 1_000;
@@ -31,11 +33,15 @@ const SEPARATOR: &[u8] = b"\n";
 const FRAMES_COPIED: usize = 8;
 
 fn fixture() -> (tempfile::TempDir, PathBuf) {
+    fixture_of(RECORDS)
+}
+
+fn fixture_of(records: usize) -> (tempfile::TempDir, PathBuf) {
     const OPS: [&str; 8] = [
         "open", "read", "write", "close", "flush", "seek", "stat", "fsync",
     ];
     let mut body = Vec::new();
-    for i in 0..RECORDS {
+    for i in 0..records {
         body.extend_from_slice(
             format!(
                 "{{\"ts\":\"2026-08-24T00:00:{:02}Z\",\"lvl\":\"info\",\"seq\":{i},\"op\":\"{}\",\
@@ -110,5 +116,35 @@ fn copy(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, copy);
+/// Frames enough for the largest `count_frames` case below, with the frame size held at the one the
+/// `copy_range` cases use so that only the frame count varies.
+const COUNT_RECORDS: usize = 400_000;
+
+/// Reading a range of frames and counting the records in each, which is what every operation in
+/// `edit` is built out of: two frames for separator validation, one for the frame a file ends with,
+/// and the whole range under `RangeCheck::EveryFrame`.
+///
+/// Throughput is in frames, so the number to read is the **per-frame time**. It is flat in `K` when
+/// the cost of reading a frame does not depend on how many are read, and grows with `K` when
+/// something per-frame is being rebuilt out of the whole file — which is what the seek table being
+/// cloned once per frame does.
+fn count(c: &mut Criterion) {
+    let (_dir, path) = fixture_of(COUNT_RECORDS);
+    let file = File::open(&path).expect("no fixture");
+    let mut src = &file;
+    let table = SeekTable::from_seekable(&mut src).expect("no seek table");
+
+    let mut group = c.benchmark_group("count_frames");
+    for k in [1u32, 2, 16, 256] {
+        group.throughput(Throughput::Elements(u64::from(k)));
+        group.bench_with_input(BenchmarkId::from_parameter(k), &k, |b, &k| {
+            b.iter(|| {
+                count_frames(&file, &table, SEPARATOR, black_box(0..k)).expect("failed to count")
+            })
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, copy, count);
 criterion_main!(benches);

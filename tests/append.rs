@@ -4,7 +4,7 @@
 mod common;
 use common::*;
 
-use seekzstdsep::{OnMissingSeparator, append, truncate};
+use seekzstdsep::{AppendInput, OnMissingSeparator, append, truncate};
 
 use std::fs::{File, OpenOptions};
 use std::path::Path;
@@ -22,7 +22,7 @@ fn append_file(
         .write(true)
         .open(path)
         .expect("Failed to open the compressed file");
-    append(&mut f, data, separator, on_missing)
+    append(&mut f, AppendInput::Records { data, on_missing }, separator)
 }
 
 /// The common case: newline separated, and a file that ends with one.
@@ -542,4 +542,43 @@ fn test_append_adds_no_checksum_to_a_file_written_without_one() {
         flags.iter().all(|&on| !on),
         "append added a checksum to a frame: {flags:?}"
     );
+}
+
+/// Records that do not compress, so a frame of them stays large after compression.
+fn incompressible_records(count: usize, per_record: usize) -> Vec<Vec<u8>> {
+    // A cheap xorshift rather than a dependency: what matters is only that zstd cannot shrink it.
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    (0..count)
+        .map(|_| {
+            let mut record = Vec::with_capacity(per_record + 1);
+            while record.len() < per_record {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                record.extend_from_slice(format!("{state:016x}").as_bytes());
+            }
+            record.truncate(per_record);
+            record.push(b'\n');
+            record
+        })
+        .collect()
+}
+
+#[test]
+fn test_append_onto_frames_larger_than_the_decoder_reads_at_once() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    // Frames of a few hundred kilobytes, which is past what the decoder holds in its input buffer.
+    // A decoder kept open across frames only re-seeks when the frame it is asked for moves, so
+    // anything that moves the file's position between two reads corrupts the second one — and on
+    // frames small enough to sit in that buffer it does not show.
+    let records = incompressible_records(24, 64 * 1024);
+    let groups: Vec<Vec<u8>> = records.chunks(6).map(<[Vec<u8>]>::concat).collect();
+    let path = compress_frames(temp_dir.path(), "large", &groups);
+
+    append_records(&path, b"appended\n").expect("Failed to append to a file of large frames");
+
+    let mut expected: Vec<Vec<u8>> = records.clone();
+    expected.push(b"appended\n".to_vec());
+    assert_decompresses_to(&path, &expected.concat());
+    assert_cat_returns(&path, &expected, records.len(), 1);
 }
