@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 mod common;
-use common::{FIXTURE_RECORDS, compress_body, fixture_records_upto, frame_checksum_flags};
+use common::{
+    FIXTURE_RECORDS, compress_body, compress_frames, fixture_records_upto, frame_checksum_flags,
+};
 
 use tempfile::tempdir;
 
@@ -497,5 +499,168 @@ fn test_compress_no_check_leaves_the_checksum_out() {
     assert!(
         !flags.is_empty() && flags.iter().all(|&on| !on),
         "--no-check still wrote checksums: {flags:?}"
+    );
+}
+
+fn run_copy_range(input: &Path, output: &str, args: &[&str]) -> Output {
+    Command::new(BIN)
+        .args(["copy-range", input.to_str().unwrap(), output])
+        .args(args)
+        .output()
+        .expect("Failed to run copy-range")
+}
+
+#[test]
+fn test_copy_range_subcommand_to_a_file() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let input = compress_fixture(temp_dir.path());
+    let expected = cat(&input, 117, 234);
+    let out_path = temp_dir.path().join("range.seek.zst");
+
+    let out = run_copy_range(
+        &input,
+        out_path.to_str().unwrap(),
+        &["--from", "117", "--cnt", "234"],
+    );
+
+    assert!(
+        out.status.success(),
+        "copy-range failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(cat(&out_path, 0, 234), expected);
+}
+
+#[test]
+fn test_copy_range_subcommand_to_stdout() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let input = compress_fixture(temp_dir.path());
+    let expected = cat(&input, 117, 117);
+
+    let out = run_copy_range(&input, "-", &["--from", "117", "--cnt", "117"]);
+
+    assert!(
+        out.status.success(),
+        "copy-range failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // What lands on stdout is a seekable file, so it reads back through cat once it is on disk.
+    let written = temp_dir.path().join("stdout.seek.zst");
+    std::fs::write(&written, &out.stdout).expect("Failed to write what copy-range produced");
+    assert_eq!(cat(&written, 0, 117), expected);
+}
+
+#[test]
+fn test_copy_range_subcommand_to_the_end_needs_no_align() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let input = compress_fixture(temp_dir.path());
+    let expected = cat(&input, 234, FIXTURE_RECORDS - 234);
+    let out_path = temp_dir.path().join("tail.seek.zst");
+
+    let refused = run_copy_range(&input, out_path.to_str().unwrap(), &["--from", "234"]);
+    assert!(
+        !refused.status.success(),
+        "copy-range copied a short final frame without --no-align"
+    );
+
+    let out = run_copy_range(
+        &input,
+        out_path.to_str().unwrap(),
+        &["--from", "234", "--no-align"],
+    );
+
+    assert!(
+        out.status.success(),
+        "copy-range failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(cat(&out_path, 0, FIXTURE_RECORDS - 234), expected);
+}
+
+#[test]
+fn test_copy_range_subcommand_exits_non_zero_on_a_refusal() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let input = compress_fixture(temp_dir.path());
+    let before = std::fs::read(&input).expect("Failed to read compressed file");
+    let out_path = temp_dir.path().join("range.seek.zst");
+
+    let out = run_copy_range(
+        &input,
+        out_path.to_str().unwrap(),
+        &["--from", "1", "--cnt", "117"],
+    );
+
+    assert!(
+        !out.status.success(),
+        "a range that starts inside a frame exited zero"
+    );
+    assert_eq!(
+        std::fs::read(&input).expect("Failed to read compressed file"),
+        before,
+        "a refused copy-range rewrote its input"
+    );
+}
+
+#[test]
+fn test_copy_range_subcommand_leaves_the_output_alone_on_a_refusal() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let input = compress_fixture(temp_dir.path());
+    let out_path = temp_dir.path().join("range.seek.zst");
+    std::fs::write(&out_path, b"not the output of a copy").expect("Failed to write");
+
+    // Refused because the range does not start at the first record of a frame.
+    let out = run_copy_range(
+        &input,
+        out_path.to_str().unwrap(),
+        &["--from", "1", "--cnt", "117"],
+    );
+
+    assert!(
+        !out.status.success(),
+        "a range starting inside a frame exited zero"
+    );
+    assert_eq!(
+        std::fs::read(&out_path).expect("Failed to read the output file"),
+        b"not the output of a copy",
+        "a refused copy-range emptied the file it was going to write"
+    );
+}
+
+#[test]
+fn test_copy_range_subcommand_check_uniform_catches_a_drifting_count() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let records = fixture_records_upto(20, true);
+    // Frames of [5, 5, 7, 3]: frame 0 and frame 1 agree, so only a second frame catches the drift.
+    let input = compress_frames(
+        temp_dir.path(),
+        "drift",
+        &[
+            records[0..5].concat(),
+            records[5..10].concat(),
+            records[10..17].concat(),
+            records[17..20].concat(),
+        ],
+    );
+    let out_path = temp_dir.path().join("copy.seek.zst");
+
+    let accepted = run_copy_range(
+        &input,
+        out_path.to_str().unwrap(),
+        &["--from", "5", "--cnt", "5"],
+    );
+    assert!(
+        accepted.status.success(),
+        "copy-range failed without --check-uniform: {}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+
+    let refused = run_copy_range(
+        &input,
+        out_path.to_str().unwrap(),
+        &["--from", "5", "--cnt", "5", "--check-uniform"],
+    );
+    assert!(
+        !refused.status.success(),
+        "--check-uniform accepted a file whose frames hold different counts"
     );
 }

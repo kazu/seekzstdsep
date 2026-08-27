@@ -2,16 +2,115 @@
 use std::{
     fs::File,
     io::{self, Read, Seek, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
+use anyhow::Context;
 use clap::Parser;
 use tempfile::spooled_tempfile;
 
+use crate::edit::{Alignment, SeparatorCheck, copy_range};
 use crate::seekzstdsep_lib::{
     CompressOptions, ReadSeekable, compress_to_seekable_zst_with_opts,
     convert_to_seekable_zst_reader_with_opts,
 };
+
+/// Arguments of the `copy-range` subcommand.
+#[derive(Parser, Debug)]
+pub struct CopyRangeArgs {
+    /// Input file
+    #[arg(value_name = "INPUT")]
+    input: PathBuf,
+    /// Output file, or `-` for stdout
+    #[arg(value_name = "OUTPUT")]
+    output: PathBuf,
+    /// First record to copy. Has to be the first record of a frame.
+    #[arg(short, long)]
+    from: u64,
+    /// Records to copy (default: to the end of the file). The record it ends at has to be the
+    /// first record of a frame, or the end of the file.
+    #[arg(short, long)]
+    cnt: Option<u64>,
+    /// Separator string (default: "\\n")
+    #[arg(short, long, default_value = "\n")]
+    separator: String,
+    /// Copy a final frame that holds a different number of records than the rest, leaving a result
+    /// that cannot be joined onto another file
+    #[arg(long)]
+    no_align: bool,
+    /// Count a second frame as well, and refuse when the two hold different record counts. Costs
+    /// one more frame decompressed
+    #[arg(long)]
+    check_uniform: bool,
+}
+
+/// The output file, created by the first write rather than when it is named.
+///
+/// Every refusal [`copy_range`] makes comes before the first byte it writes, so a refused copy
+/// leaves whatever is at the path alone. Creating it up front would empty it instead.
+struct LazyFile<'a> {
+    path: &'a Path,
+    file: Option<File>,
+}
+
+impl Write for LazyFile<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let file = match self.file {
+            Some(ref mut file) => file,
+            None => self.file.insert(File::create(self.path).map_err(|e| {
+                io::Error::new(
+                    e.kind(),
+                    format!("failed to create {}: {e}", self.path.display()),
+                )
+            })?),
+        };
+        file.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self.file {
+            Some(ref mut file) => file.flush(),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Runs `copy-range` over `stdout`, which is a parameter so a caller can supply its own.
+///
+/// # Errors
+///
+/// An input that cannot be opened or an output that cannot be created, along with whatever
+/// [`copy_range`] refuses.
+pub fn run_copy_range(args: &CopyRangeArgs, stdout: impl Write) -> anyhow::Result<()> {
+    let input = File::open(&args.input)
+        .with_context(|| format!("failed to open {}", args.input.display()))?;
+    let mut output: Box<dyn Write> = if args.output == Path::new("-") {
+        Box::new(stdout)
+    } else {
+        Box::new(LazyFile {
+            path: &args.output,
+            file: None,
+        })
+    };
+
+    copy_range(
+        &input,
+        &mut output,
+        args.from,
+        args.cnt,
+        args.separator.as_bytes(),
+        if args.no_align {
+            Alignment::NotRequired
+        } else {
+            Alignment::Required
+        },
+        if args.check_uniform {
+            SeparatorCheck::TwoFrames
+        } else {
+            SeparatorCheck::FirstFrame
+        },
+    )
+}
 
 /// Arguments of the `compress` and `convert` subcommands.
 #[derive(Parser, Debug)]

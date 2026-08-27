@@ -48,7 +48,8 @@ seekzstdsep inspect events.jsonl.seek.zst                    # フレームご�
 ```
 
 `truncate` と `append` は既存のファイルをその場で編集し、再エンコードするのは編集が落ちたフレーム
-だけです。全サブコマンドとフラグは `docs/cli.md` にあります。
+だけです。`copy-range` はレコード範囲を別のファイルへ書き出し、フレームはそのままコピーします。
+全サブコマンドとフラグは `docs/cli.md` にあります。
 
 ライブラリとしては、任意の `Read`/`Write` の組に対して圧縮できます:
 
@@ -91,7 +92,7 @@ plugin へ回します。詳細は `nu_plugin_zstdsep/README.ja.md` にありま
 
 - `docs/format.md` — ファイルの実体と、参照を計算にする不変条件
 - `docs/cli.md` — 全サブコマンドとフラグ
-- `docs/library.md` — API の残り: 読み出し、`truncate`、`append`、オプション
+- `docs/library.md` — API の残り: 読み出し、`truncate`、`append`、`copy_range`、オプション
 - `docs/benchmark.md` — ベンチマークが何を測っているか、避けている罠は何か
 - `docs/bench/` — 測定結果そのもの
 - `docs/bugs.md` — 既知の問題。`--cnt` の現在の意味論を含みます

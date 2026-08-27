@@ -1,6 +1,6 @@
 [package]
 name = "nu_plugin_zstdsep"
-version = "0.1.1"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Kazuhisa TAKEI <kazuhisa@gmail.com>"]
@@ -11,7 +11,7 @@ keywords = ["nushell", "plugin", "zstd", "seekable", "jsonl"]
 categories = ["command-line-utilities", "compression"]
 
 [dependencies]
-seekzstdsep = { path = "..", version = "0.2" }
+seekzstdsep = { path = "..", version = "0.3" }
 # `nu-protocol` is what brings the nushell `Value` conversion `to json` uses; without it
 # nu-json only speaks serde.
 nu-json = { version = "0.115", features = ["nu-protocol"] }

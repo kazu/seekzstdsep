@@ -1,15 +1,20 @@
-//! Operations that modify an existing file at frame boundaries.
+//! Operations that work at frame boundaries: [`truncate`] and [`append`] modify a file,
+//! [`copy_range`] derives a second one from it.
 //!
-//! Each is destructive and rewrites nothing before the first byte it affects. Non-destructive use
-//! is the caller's job: clone the file first. See
+//! The first two are destructive and rewrite nothing before the first byte they affect.
+//! Non-destructive use of them is the caller's job: clone the file first. See
 //! `docs/design/2026-08-24-truncate-append-split-concat.md`.
 //!
-//! Every operation validates the separator against the file before it writes, since cutting with
-//! the wrong one cuts in the wrong place and the file does not record which one it was built with.
-//! The first frame and the last one that is not allowed to be short have to hold the same number of
-//! separators, and that number is the records per frame. All of them therefore refuse a separator
-//! that does not occur in the first frame, a count that differs between the two, and a file of
-//! fewer than three frames, where the comparison cannot be made.
+//! Every operation checks the separator against the file first, since the file does not record
+//! which one it was built with and reading a record range by the wrong one addresses the wrong
+//! records.
+//!
+//! [`truncate`] and [`append`] compare the first frame against the last one that is not allowed to
+//! be short: the two have to hold the same number of separators, and that number is the records per
+//! frame. They therefore refuse a file of fewer than three frames, where the comparison cannot be
+//! made. [`copy_range`] reads the count off frame 0 alone and checks that frame 0 *ends* with the
+//! separator, which is where the compressor cuts; [`SeparatorCheck::TwoFrames`] asks for the
+//! comparison as well.
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
@@ -31,6 +36,30 @@ pub enum OnMissingSeparator {
     Refuse,
     /// Write one separator at the join, making the fragment a record of its own.
     Insert,
+}
+
+/// Whether the result has to be *aligned*: every frame holding the same number of records.
+///
+/// The frame a file ends with generally holds fewer than the rest, so a range reaching the end of
+/// one is unaligned unless the file was written to be aligned in the first place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Alignment {
+    /// Refuse a range whose last frame holds a count of its own.
+    #[default]
+    Required,
+    /// Copy that frame as it is, leaving a result that is not aligned.
+    NotRequired,
+}
+
+/// How many frames the separator is checked against before a range is copied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SeparatorCheck {
+    /// Frame 0 alone. It has to end with the separator, which is where the compressor cuts, and
+    /// the separators it holds are the records per frame.
+    #[default]
+    FirstFrame,
+    /// A second frame as well, refused when the two hold different record counts.
+    TwoFrames,
 }
 
 /// Shortens `f` to `record_len` records, which is the length that remains, not the number removed.
@@ -208,6 +237,85 @@ pub fn append(
     write_seek_table(f, out)
 }
 
+/// Writes `cnt` records of `input`, starting at record `from`, to `output` as a seekable file of
+/// its own. A `cnt` of `None` runs to the end of the file.
+///
+/// The frames are copied as compressed bytes and only the seek table is built fresh, so the cost is
+/// the size of the range rather than of the file. `input` is read and never written.
+///
+/// # Errors
+///
+/// Refuses a range that does not start at the first record of a frame, or end at one or at the end
+/// of the file, and a `cnt` of 0. Unless `align` is [`Alignment::NotRequired`], refuses a range
+/// whose last frame holds a record count of its own, which the frame a file ends with generally
+/// does. Along with the refusals every operation in [this module](crate::edit) shares.
+pub fn copy_range(
+    input: &File,
+    mut output: impl Write,
+    from: u64,
+    cnt: Option<u64>,
+    separator: &[u8],
+    align: Alignment,
+    check: SeparatorCheck,
+) -> anyhow::Result<()> {
+    let (finder, table) = finder_and_seek_table(input, separator)?;
+    let n = records_per_frame(input, &table, &finder, check)?;
+    let last = last_data_frame(&table)?;
+
+    if from % n != 0 {
+        bail!(
+            "refusing to copy from record {from}: a range starts at the first record of a frame, \
+             and a frame holds {n} records"
+        );
+    }
+    if from / n > u64::from(last) {
+        bail!(
+            "refusing to copy from record {from}: the file holds {} frames of {n} records",
+            last + 1
+        );
+    }
+    let k = (from / n) as u32;
+
+    // Every frame but the last holds n records, so the seek table places the end by arithmetic.
+    // The last one is the exception, and its count is what a decode is spent on where the range
+    // reaches it.
+    let j = match cnt {
+        Some(0) => bail!("refusing to copy 0 records: a file of no frames cannot be read back"),
+        Some(c) if (from + c) % n == 0 && (from + c) / n <= u64::from(last) => {
+            ((from + c) / n) as u32
+        }
+        c => {
+            let tail = frame_records(input, &table, &finder, last)?;
+            let total = n * u64::from(last) + tail;
+            if let Some(c) = c
+                && from.saturating_add(c) != total
+            {
+                bail!(
+                    "refusing to copy {c} records from record {from}: a range ends at the first \
+                     record of a frame or at the end of the file, which holds {total} records"
+                );
+            }
+            if tail != n && align == Alignment::Required {
+                bail!(
+                    "refusing to copy frame {last}, which holds {tail} records rather than {n}: \
+                     the result would not hold the same count in every frame"
+                );
+            }
+            last + 1
+        }
+    };
+
+    let mut src = input;
+    let start = table.frame_start_comp(k)?;
+    let end = table.frame_end_comp(j - 1)?;
+    src.seek(SeekFrom::Start(start))?;
+    std::io::copy(&mut src.take(end - start), &mut output)?;
+
+    let mut out = SeekTable::new();
+    log_frames_range(&mut out, &table, k..j)?;
+    write_seek_table_to(&mut output, out)
+}
+
 /// Cuts a stream into groups of exactly `records` records.
 ///
 /// A record ends with the separator, so a group ends immediately after its last one. What is left
@@ -334,6 +442,63 @@ pub fn frame_has_checksum(mut f: &File, table: &SeekTable, index: u32) -> anyhow
         bail!("frame {index} does not start with the zstd magic number");
     }
     Ok(head[4] & 0b100 != 0)
+}
+
+/// The records per frame, read off frame 0 alone.
+///
+/// The compressor ends a frame immediately after a separator, so a candidate that does not end
+/// frame 0 is not the one the file was built with — that is the whole check, and it costs the one
+/// frame the count has to be read from anyway. Only the frame a file ends with is allowed to end
+/// elsewhere, so frame 0 serves as long as it is not that frame.
+///
+/// [`SeparatorCheck::TwoFrames`] counts the farthest frame that is not allowed to be short as well,
+/// which catches a count that drifts between the two at the price of a second frame decoded.
+fn records_per_frame(
+    f: &File,
+    table: &SeekTable,
+    finder: &Finder,
+    check: SeparatorCheck,
+) -> anyhow::Result<u64> {
+    let last = last_data_frame(table)?;
+    if last == 0 {
+        bail!(
+            "refusing to read the separator off a file of one data frame: that frame is the one \
+             allowed to end anywhere, so a separator that does not end it proves nothing"
+        );
+    }
+
+    let first = decode_frame(f, table, 0)?;
+    // Before the check below, which would refuse a separator that occurs nowhere for the less
+    // specific of the two reasons.
+    let n = record::count(&first, finder) as u64;
+    if n == 0 {
+        bail!("the separator does not occur in frame 0");
+    }
+    if !record::ends_whole(&first, finder, finder.needle().len()) {
+        bail!(
+            "frame 0 does not end with the separator: a frame ends immediately after one, so this \
+             is not the separator the file was built with"
+        );
+    }
+
+    if check == SeparatorCheck::TwoFrames {
+        let full = last - 1;
+        if full == 0 {
+            bail!(
+                "refusing to compare two frames in a file of two data frames: frame 0 is the only \
+                 one that has to hold a full count"
+            );
+        }
+        let second = frame_records(f, table, finder, full)?;
+        if n != second {
+            bail!(
+                "frame 0 holds {n} records and frame {full} holds {second}: either the separator \
+                 is wrong or the file does not hold a uniform count"
+            );
+        }
+    }
+
+    Ok(n)
 }
 
 /// The last frame that carries data, which is the frame the record a file ends with is in.

@@ -6,12 +6,12 @@ Decisions to make and work to build. Neither defects (`docs/bugs.md`) nor costs
 ## Editing an existing file
 
 Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split` and `concat` were
-designed there and dropped; the doc records why. Implementation order is undecided.
+designed there and dropped; the doc records why.
 
 - [x] `truncate`
 - [x] `append`
+- [x] `copy-range`
 - [ ] `compress --align`
-- [ ] `copy-range`
 - [ ] `append --input-seekable`
 
 ## Later
