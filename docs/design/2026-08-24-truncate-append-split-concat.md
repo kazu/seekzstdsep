@@ -1,7 +1,7 @@
 # truncate, append, copy-range
 
-**Status:** `truncate` and `append` are implemented in `src/edit.rs`. `compress --align`,
-`copy-range` and the `--input-seekable` path of `append` are design only. `split` and `concat` were
+**Status:** `truncate`, `append` and `copy-range` are implemented in `src/edit.rs`. `compress
+--align` and the `--input-seekable` path of `append` are design only. `split` and `concat` were
 designed here and dropped; see [Why split and concat were dropped](#why-split-and-concat-were-dropped).
 **Date:** 2026-08-24, revised 2026-08-27
 
@@ -22,9 +22,9 @@ rewriting the interior. `truncate` and `append` came first. The two that were to
 ## The invariant
 
 A file is **aligned** when every frame holds the same number of records — when the last data frame
-is full rather than short. `compress --align` produces such a file, `copy-range` preserves it, and
-`append --input-seekable` requires it of its target and produces it again when its input is aligned
-too.
+is full rather than short. `compress --align` produces such a file, `copy-range` produces one
+unless `--no-align` releases it from that, and `append --input-seekable` requires it of its target
+and produces it again when its input is aligned too.
 
 This is what makes joining two files a byte copy. If the target's last frame holds `r < n` records,
 no amount of re-encoding at the seam fixes it: absorbing the seam shifts every frame of the input by
@@ -115,6 +115,26 @@ case `Insert` cannot serve — writing one leaves another fragment — and it re
 A frame carrying no data is not the last record's frame. `Encoder::finish` writes one after an
 `end_frame`, and the record the file ends with is then in the frame before it. `append` addresses
 the last frame that carries data; `set_len` drops the empty ones with it.
+
+### Frame 0 ends with the separator
+
+A cheaper check, which `copy-range` uses instead of the comparison above. The compressor ends a
+frame immediately after a separator — the first at or after `frame_size` bytes, then every
+`max_of_separator`-th one — so **every frame but the last ends with the separator it was cut with**.
+A candidate that does not end frame 0 is therefore not that separator, and the count has to be read
+off frame 0 anyway. One decompression answers both.
+
+- It needs `F >= 2` rather than `F >= 3`: only frame 0 has to be a frame other than the last.
+- It refuses a wrong separator directly rather than by a count that happens to differ, which is what
+  makes it strictly better at what it catches: a candidate present in both compared frames in equal
+  numbers passes the comparison and fails this.
+- What it cannot see is a count that drifts in a frame it does not read. No compressor here writes
+  that, but another writer might, so `--check-uniform` asks for the comparison as well.
+- Neither catches a candidate that is a prefix of the real separator: with `-=-` for a separator,
+  `-` ends frame 0 too and yields three times the count.
+
+Destructive operations keep the comparison unconditionally. What they risk on a wrong count is the
+file itself; `copy-range` risks an output that can be deleted and made again.
 
 ## Shared machinery
 
@@ -239,7 +259,7 @@ have formed it are written to `--rest` as plain bytes.
 ## copy-range
 
 ```
-copy-range <INPUT> <OUTPUT> --from N [--cnt N]
+copy-range <INPUT> <OUTPUT> --from N [--cnt N] [--no-align] [--check-uniform]
 ```
 
 Copies a record range out of `INPUT` into `OUTPUT`. **Non-destructive**: `INPUT` is only read.
@@ -248,13 +268,35 @@ Copies a record range out of `INPUT` into `OUTPUT`. **Non-destructive**: `INPUT`
 - `--cnt` defaults to the end of the file.
 - **`--from` must be the first record of a frame, and `--from + --cnt` must be the first record of a
   frame or the end of the file.** Anything else is an error. Nothing is rounded.
+- **The result is aligned unless `--no-align` is given.** The frame a file ends with holds whatever
+  was left over, so a range reaching it ends in a frame with a record count of its own. That is
+  refused by default rather than shortened to the last full frame, which would drop records
+  silently. `--no-align` copies the frame as it is, and the result is then a file that cannot be
+  joined onto another by copying bytes.
 - `OUTPUT` is positional. `-` writes to stdout.
 - The frames are copied as bytes. Only the seek table is built fresh.
+
+Cost: the size of the copied range, plus **one** frame decompressed — frame 0, for the check
+[above](#frame-0-ends-with-the-separator). One more where the range reaches the last frame, whose
+record count is the only one the seek table cannot supply by arithmetic, and one more again under
+`--check-uniform`.
+
+In the library this is
+
+```
+copy_range(input: &File, output: impl Write, from: u64, cnt: Option<u64>,
+           separator: &[u8], align: Alignment, check: SeparatorCheck) -> Result<()>
+```
+
+where `Alignment` is `Required` or `NotRequired` and `SeparatorCheck` is `FirstFrame` or
+`TwoFrames` — enums rather than `bool`s so the choice is readable at the call site, as
+`OnMissingSeparator` is for `append`. `output` is a `Write` rather than a `File` because `-` has to
+reach stdout, and the seek table is written last, so nothing seeks back.
 
 Splitting a file is `copy-range` followed by `truncate`, and the boundary is one number in one unit:
 
 ```
-copy-range a.seek.zst back.seek.zst --from 128000
+copy-range a.seek.zst back.seek.zst --from 128000 --no-align
 truncate   a.seek.zst --records 128000
 ```
 
@@ -313,8 +355,8 @@ number of frames and everything after it must be re-compressed. There is no way 
 much "everything after" is depends on how the data is divided into files, which is an operational
 choice.
 
-**Retention.** Dropping the front is `copy-range` from the boundary into a new file. Dividing files
-finely enough also bounds the cost of a count-changing update above.
+**Retention.** Dropping the front is `copy-range --no-align` from the boundary into a new file.
+Dividing files finely enough also bounds the cost of a count-changing update above.
 
 ## Why split and concat were dropped
 
@@ -343,8 +385,9 @@ Neither can be replaced by a pipe. `cat b | append a` produces a correct file, b
 - **Composition**: `append` after `truncate` after `append`. Truncate leaves a short final frame,
   which is the state append must already handle.
 - **Refusals**: wrong separator; `truncate` beyond the current count; `truncate` to 0; `copy-range`
-  from or to a position that is not a frame boundary; `append --input-seekable` with mismatched `n`,
-  onto a target whose last frame is short, or onto a target ending in a fragment; `--align` without
+  from or to a position that is not a frame boundary, reaching a short final frame without
+  `--no-align`, and a separator that does not end frame 0; `append --input-seekable` with mismatched `n`, onto a target whose last frame is
+  short, or onto a target ending in a fragment; `--align` without
   `--rest` and `--rest` without `--align`; `--insert-separator` with `--input-seekable`; any
   operation on a file with fewer than three data frames.
 - **Nothing before the affected byte is touched.** Compare the prefix byte for byte against the
@@ -363,7 +406,6 @@ range and writes a middle file. No format change is needed.
 
 - Whether reading across `base.seek.zst` and its plain tail belongs in the crate, or stays an
   operational convention with the caller opening both. All three operations here are write-side.
-- Implementation order.
 - Whether the existing `-c, --cnt-of-separator-per-frame` should move to record vocabulary, and what
   to do about `-f` meaning `--from` in `cat` but `--format` in `inspect`, and `-c` meaning a
   separator count in `compress` but a record count in `cat`.

@@ -48,7 +48,8 @@ seekzstdsep inspect events.jsonl.seek.zst                    # per-frame extents
 ```
 
 `truncate` and `append` edit an existing file in place, re-encoding only the frame the edit lands
-in. `docs/cli.md` covers every subcommand and flag.
+in, and `copy-range` writes a record range out to a second file by copying the frames as they are.
+`docs/cli.md` covers every subcommand and flag.
 
 As a library, compression works over any `Read`/`Write` pair:
 
@@ -91,7 +92,7 @@ their own. See `nu_plugin_zstdsep/README.md`.
 
 - `docs/format.md` — what the file is, and the invariant that makes lookup arithmetic
 - `docs/cli.md` — every subcommand and flag
-- `docs/library.md` — the rest of the API: reading, `truncate`, `append`, options
+- `docs/library.md` — the rest of the API: reading, `truncate`, `append`, `copy_range`, options
 - `docs/benchmark.md` — what the benchmarks measure, and the traps they avoid
 - `docs/bench/` — the measurements themselves
 - `docs/bugs.md` — known issues, including the current `--cnt` semantics

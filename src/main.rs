@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand};
 use std::fs::File;
 use std::path::PathBuf;
 
-use seekzstdsep::cli::{ConvertArgs, run_compress};
+use seekzstdsep::cli::{ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
 use seekzstdsep::{
     InspectOptions, OnMissingSeparator, append, cat_data, seekzstdsep_lib::inspect_with_opts,
     truncate,
@@ -79,6 +79,8 @@ enum Commands {
     Truncate(TruncateArgs),
     /// Append records to a zst file, in place. Destructive.
     Append(AppendArgs),
+    /// Copy a record range out of a zst file into a second one. Reads the input only.
+    CopyRange(CopyRangeArgs),
 }
 
 use tracing::Level;
@@ -137,6 +139,9 @@ fn main() -> anyhow::Result<()> {
                 OnMissingSeparator::Refuse
             };
             append(&mut file, data, args.separator.as_bytes(), on_missing)?;
+        }
+        Commands::CopyRange(args) => {
+            run_copy_range(&args, io::stdout().lock())?;
         }
         Commands::Inspect(args) => {
             let outs = inspect_with_opts(

@@ -96,3 +96,50 @@ fit, which the streaming entry points cannot do. Output is staged in a temporary
 argument receives it only as a fallback, when reflink is unavailable. So set `out_path` to get
 output. `compress_to_seekable_zst` takes no options and therefore has no destination.
 
+
+## Copy a record range
+
+`copy_range` reads a file and writes a second one, so it needs the input open for reading only, and
+takes any `Write` as the destination:
+
+```rust,no_run
+use seekzstdsep::{Alignment, SeparatorCheck, copy_range, inspect};
+use std::fs::File;
+use std::path::PathBuf;
+
+let path = PathBuf::from("events.jsonl.seek.zst");
+// Both ends of the range have to fall on a frame boundary, so they are multiples of the record
+// count every frame but the last one holds.
+let per_frame = inspect(path.clone(), b"\n").unwrap()[0].cnt_of_sep as u64;
+
+let input = File::open(&path).unwrap();
+let mut back = File::create("back.seek.zst").unwrap();
+
+copy_range(
+    &input,
+    &mut back,
+    per_frame * 75,
+    None,
+    b"\n",
+    Alignment::NotRequired,
+    SeparatorCheck::FirstFrame,
+)
+.unwrap();
+```
+
+The fourth argument is the record count to copy, `None` meaning to the end of the file. A range that
+starts or ends anywhere else than at a frame boundary is refused rather than rounded, since the
+frames are copied as compressed bytes.
+
+The `Alignment` is why that call reads `NotRequired`. `Required` refuses a range whose last frame
+holds a different number of records than the rest, and the frame a file ends with holds whatever was
+left over — so a range running to the end of a file is refused unless it says `NotRequired`. What it
+gives up is joining the result onto another file by copying bytes; the result reads back like any
+other file. A range ending on a frame boundary, such as `Some(per_frame * 40)` here, needs nothing
+given up.
+
+The `SeparatorCheck` decides how much of the file the separator is checked against.
+`SeparatorCheck::FirstFrame` decompresses frame 0, takes the record count from it, and refuses a
+separator that does not end it — a frame ends immediately after the separator it was cut with.
+`SeparatorCheck::TwoFrames` counts a second frame as well and refuses when the two differ, which
+catches a count that drifts later in the file at the price of that frame decompressed.

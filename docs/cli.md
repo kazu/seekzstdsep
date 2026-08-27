@@ -103,3 +103,59 @@ Where one separator does not complete the record — which a separator that over
 
 Destructive, and validated before anything is written, on the same terms as `truncate` above.
 
+
+## Copy a record range
+
+Writes the records from `--from` on into a second file, leaving the input untouched. `--cnt` bounds
+the range; without it the range runs to the end of the file. `-` as the output writes to stdout.
+
+The frames are copied as compressed bytes and only the seek table is built fresh, so the cost is the
+size of the range rather than of the file. That is what the boundary rule pays for: `--from` has to
+be the first record of a frame, and `--from` plus `--cnt` the first record of a frame or the end of
+the file. Nothing is rounded — a position inside a frame is refused, since honouring it would mean
+decoding and re-encoding, which `compress` already does.
+
+So picking a boundary means knowing how many records a frame holds, which `inspect` reports and
+every frame but the last one shares. In bash or zsh, with `jq`:
+
+```sh
+seekzstdsep inspect events.jsonl.seek.zst --format json | jq '.[0].cnt_of_sep'
+# => 1709
+```
+
+In nushell, with no external command:
+
+```nu
+seekzstdsep inspect events.jsonl.seek.zst --format json | from json | first | get cnt_of_sep
+# => 1709
+```
+
+Any multiple of that number is a boundary. 75 frames in:
+
+```sh
+seekzstdsep copy-range events.jsonl.seek.zst back.seek.zst --from 128175 --no-align
+```
+
+Splitting a file is this followed by `truncate`, with the boundary written once in one unit:
+
+```sh
+seekzstdsep copy-range events.jsonl.seek.zst back.seek.zst --from 128175 --no-align
+seekzstdsep truncate   events.jsonl.seek.zst --records 128175
+```
+
+`--no-align` is what that first line needs: the frame a file ends with holds whatever was left over,
+so a range reaching the end of the file ends in a frame with a record count of its own. The result
+is a normal file — `cat` and `truncate` read it like any other — but it can no longer be joined onto
+another file by copying bytes, which is what *aligned* means and what `--no-align` gives up. Without
+the flag such a range is refused rather than silently shortened.
+
+The separator is checked against the file before anything is written, but more cheaply than
+`truncate` does it. A frame ends immediately after the separator it was cut with, so a candidate
+that does not end frame 0 is not that separator — one frame decompressed answers both that and how
+many records a frame holds. `truncate` instead compares two frames, which costs a second one and
+needs the file to have at least three; `copy-range` needs two.
+
+What one frame cannot see is a record count that drifts somewhere later in the file, which no
+compressor here produces but another writer might. `--check-uniform` counts the last frame that is
+not allowed to be short as well and refuses when the two differ, at the price of that frame
+decompressed.
