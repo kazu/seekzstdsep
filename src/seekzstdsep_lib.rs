@@ -25,6 +25,14 @@ const LIMIT_SEP_BUF_MULTIPLIER: usize = 4;
 /// How much every reader in the crate takes from its source at a time.
 pub(crate) const READ_BUF_SIZE: usize = 32768; // 大きなバッファでI/O削減
 
+/// What a buffer that holds one decompressed frame starts at, before it grows to the frames
+/// actually read.
+///
+/// How large a frame is belongs to the file rather than to this crate, so this is only where the
+/// growing starts. Equal to [`READ_BUF_SIZE`] for now because nothing yet says it should differ,
+/// and separate from it because the two answer different questions.
+pub(crate) const READ_FRAME_BUF_SIZE: usize = READ_BUF_SIZE;
+
 /// Shorthand for [`convert_to_seekable_zst_reader`] with `is_same_separator_cnt` set to `false`.
 ///
 /// Frames are cut by size alone, so [`cat_data`] cannot locate records in the result.
@@ -927,10 +935,27 @@ pub(crate) fn decompressed_range<S: zeekstd::Seekable>(
     start: u64,
     len: u64,
 ) -> anyhow::Result<Vec<u8>> {
-    decoder.seek(SeekFrom::Start(start))?;
-    let mut data = vec![0u8; len as usize];
-    let _n = decoder.read(&mut data[..])?;
+    let mut data = Vec::new();
+    decompressed_range_into(decoder, start, len, &mut data)?;
     Ok(data)
+}
+
+/// [`decompressed_range`] into a buffer the caller owns, for one that reads frame after frame and
+/// would otherwise allocate for each.
+///
+/// `data` is emptied and filled with NUL first, so what a short `read` leaves behind is the NUL the
+/// caller allocating a fresh buffer would have got, not the frame read before it.
+pub(crate) fn decompressed_range_into<S: zeekstd::Seekable>(
+    decoder: &mut Decoder<'_, S>,
+    start: u64,
+    len: u64,
+    data: &mut Vec<u8>,
+) -> anyhow::Result<()> {
+    decoder.seek(SeekFrom::Start(start))?;
+    data.clear();
+    data.resize(len as usize, 0);
+    let _n = decoder.read(&mut data[..])?;
+    Ok(())
 }
 
 /// Counts separators in the decompressed region `[start, start + len)`.

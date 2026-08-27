@@ -8,8 +8,56 @@ Ordered by how much each one costs, worst first.
 - [ ] [The seek table is read in full on every call](#the-seek-table-is-read-in-full-on-every-call) — grows with the file: 9 kB at a million records, 90 kB at ten million
 - [ ] [The frame table is built in full when three entries are needed](#the-frame-table-is-built-in-full-when-three-entries-are-needed) — also grows with the file, but only an allocation and a pass
 - [ ] [The frame checksum costs 4 bytes per frame](#the-frame-checksum-costs-4-bytes-per-frame) — 0.06% of the file, paid for corruption detection
+- [x] [Reading several frames rebuilt the decoder for each](#reading-several-frames-rebuilt-the-decoder-for-each) — 4 to 18% of the time spent reading two frames or more
 
 Numbers come from `docs/bench/`; the harness is in `bench/`.
+
+## Reading several frames rebuilt the decoder for each
+
+Building a `Decoder` clones the whole seek table, and `src/edit.rs` used to build one per frame it
+read. Every operation there reads at least two — separator validation compares frame 0 against frame
+`F-2` — so the table was rebuilt once per frame, and a fresh buffer allocated with it. `FrameReader`
+holds the decoder open across the frames of one file and holds the buffer with it, so both happen
+once however many frames go through it.
+
+`benches/edit.rs` measures it as `count_frames`: read `K` frames of a 400-frame file and count the
+records in each. Same machine, same build directory, before and after taken against one saved
+baseline (2026-08-28, release):
+
+| K | before | after | change |
+| ---: | ---: | ---: | --- |
+| 1 | 44.3 µs | 45.1 to 49.0 µs | +2 to +11% |
+| 2 | 92.8 µs | 83.4 to 88.2 µs | −4 to −10% |
+| 16 | 753 µs | 618 to 668 µs | −12 to −18% |
+| 256 | 11.49 ms | 9.72 to 10.53 ms | −8 to −15% |
+
+The after column is the spread of seven runs against the one saved baseline, and it is wide because
+the machine is: one run in seven came out about 8% slower in **every** case at once. So no single
+figure here is worth quoting, and a difference of a few percent between two runs says nothing. What
+repeats is the direction and the shape — `K = 16` and `K = 256` land near −17% and −14% whenever the
+machine is quiet, and `K = 1` lands above zero every time.
+
+**Reading one frame gains nothing, and whether it costs anything is not settled.** `K = 1` comes out
+above zero in every run, but every one of those runs is compared against a *saved* baseline rather
+than against a run of the other code — which is the comparison the 8% swing above makes unsafe.
+
+Run properly, the cost does not appear. `copy_range` is the operation that reads one frame and
+little else, and running master's bench binary alternately with this one, three rounds each, gives:
+
+| | master | here |
+| --- | ---: | ---: |
+| `copy_range/range` | 59.1 to 60.3 µs | 59.0 to 59.9 µs |
+| `copy_range/whole` | 212.3 to 220.3 µs | 212.0 to 213.2 µs |
+
+No difference on `range`, and if anything less spread on `whole`. So the `K = 1` figure is more
+likely an artifact of comparing across runs than a cost the code carries. Settling it means
+instruction counts under callgrind rather than wall clock; `docs/benchmark.md` says why.
+
+**Interleave the two binaries when the answer matters.** A saved criterion baseline is convenient
+and it is what the numbers above were first taken against, which is how they came out wrong.
+
+What it buys is every read of two frames or more: the separator validation in `truncate`, `append`
+and `append --input-seekable`, and `--check-input-frames`, which reads the whole copied range.
 
 ## The seek table is read in full on every call
 
