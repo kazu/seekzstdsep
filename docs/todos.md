@@ -3,15 +3,16 @@
 Decisions to make and work to build. Neither defects (`docs/bugs.md`) nor costs
 (`docs/performances.md`). Ordered by what blocks what.
 
-## The four operations
+## Editing an existing file
 
-Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. Implement in that order, each
-reusing the one before.
+Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split` and `concat` were
+designed there and dropped; the doc records why. Implementation order is undecided.
 
 - [x] `truncate`
 - [x] `append`
-- [ ] `split`
-- [ ] `concat`
+- [ ] `compress --align`
+- [ ] `copy-range`
+- [ ] `append --input-seekable`
 
 ## Later
 
@@ -33,8 +34,10 @@ last frame is partial, so appending is a rebuild of the tail rather than a write
 Exclusive access is therefore required: a mutex within a process, `flock` across processes. `&mut
 File` states that requirement even though the borrow checker cannot enforce it across handles.
 
-Writing concurrently scales by giving each writer its own file and merging later with `concat` —
-the same answer already chosen for insertion and retention, and what segmented logs do.
+Writing concurrently scales by giving each writer its own file and merging later, which is what
+segmented logs do. Merging without re-compressing needs every file aligned — `compress --align`
+is what provides that — and needs each writer's remainder carried into its next batch rather than
+left at the end of its own file, or it lands out of order in the merged result.
 
 Undecided: what a reader sees while an append runs. Frames before the last one do not move, so
 already-written records stay readable, but a reader that opens between the `set_len` and the table

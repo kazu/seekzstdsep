@@ -1,12 +1,14 @@
-# truncate, append, split, concat
+# truncate, append, copy-range
 
-**Status:** `truncate` and `append` are implemented in `src/edit.rs`. `split` and `concat` are design
-only.
-**Date:** 2026-08-24
+**Status:** `truncate` and `append` are implemented in `src/edit.rs`. `compress --align`,
+`copy-range` and the `--input-seekable` path of `append` are design only. `split` and `concat` were
+designed here and dropped; see [Why split and concat were dropped](#why-split-and-concat-were-dropped).
+**Date:** 2026-08-24, revised 2026-08-27
 
-Four operations that modify an existing file, all working at frame boundaries and never rewriting
-the interior. Implement in this order, each reusing the one before: `truncate`, `append`, `split`,
-`concat`.
+Operations that modify or derive from an existing file, all working at frame boundaries and never
+rewriting the interior. `truncate` and `append` came first. The two that were to follow, `split` and
+`concat`, are replaced by three that compose: `compress --align`, `copy-range`, and `append
+--input-seekable`.
 
 ## Rules
 
@@ -17,9 +19,24 @@ the interior. Implement in this order, each reusing the one before: `truncate`, 
    is read or written. The seek table is the one thing rebuilt in full, so it alone is linear in
    frame count.
 
+## The invariant
+
+A file is **aligned** when every frame holds the same number of records — when the last data frame
+is full rather than short. `compress --align` produces such a file, `copy-range` preserves it, and
+`append --input-seekable` requires it of its target and produces it again when its input is aligned
+too.
+
+This is what makes joining two files a byte copy. If the target's last frame holds `r < n` records,
+no amount of re-encoding at the seam fixes it: absorbing the seam shifts every frame of the input by
+`n - r` records, and the misalignment propagates to the end. The whole input would have to be
+re-encoded, which is what `cat b | append a` already does. So the requirement is not caution, it is
+what the format leaves available.
+
+The state is called *aligned* here after the flag that produces it.
+
 ## Format facts
 
-See `docs/format.md`. Two things shape all four operations.
+See `docs/format.md`. Two things shape all of these operations.
 
 **Seek table entries store sizes, not offsets.** Moving a frame changes no entry; changing one
 frame's size invalidates the position of every frame after it.
@@ -37,7 +54,7 @@ Verified against zeekstd 0.6.2. Re-check when the dependency moves; the crate so
 authority, not this list.
 
 - **No API removes an entry from a `SeekTable`.** Build a fresh `SeekTable::new()` and `log_frame`
-  the survivors in order. This is why all four operations rebuild the table rather than patch it.
+  the survivors in order. This is why every operation rebuilds the table rather than patch it.
 - `RawEncoder::compress` and `end_frame` **fill a caller-supplied buffer; they do not write to a
   writer.** Loop `compress` until it has consumed the input, and `end_frame` until nothing is left.
 - The sizes for `log_frame` come from `RawEncoder::into_seek_table()`, which holds exactly the
@@ -70,9 +87,9 @@ and count separators with the candidate:
 it against frame 0 refuses a valid file. With `F < 3` only the zero case is detectable; that is a
 limit to accept, not to work around.
 
-`truncate` and `concat` additionally need the record count of the **last** data frame, which
-validation deliberately excludes. That is a second decompression. Destructive operations pay both
-unconditionally. Do not add this to the read path.
+`truncate` and `append --input-seekable` additionally need the record count of the **last** data
+frame, which validation deliberately excludes. That is a second decompression. Destructive
+operations pay both unconditionally. Do not add this to the read path.
 
 Note that validation counts separators. Where the final record has no trailing separator, separator
 count and record count differ by one; a record count is a separator count, and a record keeps the
@@ -81,7 +98,7 @@ separator that follows it.
 **A file whose last byte is not the separator therefore ends in a fragment, not a record.**
 Compression preserves it as-is. Joining anything after such a file merges the fragment with the
 first appended record into a single record, silently, and shifts every later record index by one.
-`append` and `concat` refuse this by default:
+`append` refuses this by default:
 
 ```
 enum OnMissingSeparator { Refuse, Insert }
@@ -96,19 +113,21 @@ over. The test is that the last match ends the data. A separator that overlaps i
 case `Insert` cannot serve — writing one leaves another fragment — and it refuses there.
 
 A frame carrying no data is not the last record's frame. `Encoder::finish` writes one after an
-`end_frame`, and the record the file ends with is then in the frame before it. `append` and `concat`
-address the last frame that carries data; `set_len` drops the empty ones with it.
+`end_frame`, and the record the file ends with is then in the frame before it. `append` addresses
+the last frame that carries data; `set_len` drops the empty ones with it.
 
 ## Shared machinery
 
-All four modify `f` in place and are destructive. Non-destructive use is the caller's job: clone the
+`truncate` and `append` modify `f` in place and are destructive. `copy-range` is not: it reads its
+input and writes a second file. Non-destructive use of the first two is the caller's job: clone the
 file first, which `cp --reflink=auto` does in about a millisecond where the filesystem supports it.
 No operation stages to a temporary file — the bytes before the affected region are already correct
 and copying them would make every operation linear in file size.
 
-The shape is the same each time: read the seek table and keep it, since `set_len` destroys the copy
-on disk; validate the separator; optionally decode one frame; optionally encode replacements;
-`set_len` to the first affected byte; append the new frames; append a fresh seek table.
+The shape of a destructive operation is the same each time: read the seek table and keep it, since
+`set_len` destroys the copy on disk; validate the separator; optionally decode one frame; optionally
+encode replacements; `set_len` to the first affected byte; append the new frames; append a fresh
+seek table.
 
 `f` is `&mut File` rather than `&File`. `File::set_len` takes `&self` and `Read`, `Write` and `Seek`
 are all implemented for `&File`, so the exclusive borrow is not required by the type system. It is
@@ -119,17 +138,19 @@ no-op.
 
 ### The crash window
 
-Between `set_len` and the last byte of the new seek table the file is not readable, and the two
-operations that shorten it fail differently:
+Between `set_len` and the last byte of the new seek table the file is not readable, and the
+operations differ in what that costs:
 
-- **`truncate` and `split` lose only the seek table.** Every surviving frame is untouched on disk, so
-  the file can be repaired by walking the frames and rebuilding the table. What `set_len` removed was
-  going to be removed anyway.
-- **`append` and `concat` can lose records.** Both `set_len` away the last data frame before writing
-  its replacement, and during that window those records exist only in memory.
-
-For `append` and `concat`, encode the replacement frame **before** calling `set_len`, so the window
-is a write rather than a compression.
+- **`truncate` loses only the seek table.** Every surviving frame is untouched on disk, so the file
+  can be repaired by walking the frames and rebuilding the table. What `set_len` removed was going
+  to be removed anyway.
+- **`append` can lose records.** It `set_len`s away the last data frame before writing its
+  replacement, and during that window those records exist only in memory. Encode the replacement
+  frame **before** calling `set_len`, so the window is a write rather than a compression.
+- **`append --input-seekable` cannot lose records.** Its target's last data frame is full, so
+  nothing is re-encoded and the cut is at the end of that frame rather than at its start. Only the
+  seek table is lost.
+- **`copy-range` has no window.** It does not modify its input.
 
 ## truncate
 
@@ -199,62 +220,115 @@ frames than it was given groups. The compressor has the same hazard at 2 MiB, wh
 
 An empty `data` is a no-op: return without rewriting.
 
-## split
+## compress --align
 
 ```
-split(f: &mut File, back: impl Write, record_len: u64, separator: &[u8]) -> Result<u64>
+compress [-c N] --align --rest <PATH> INPUT OUTPUT
 ```
 
-`f` becomes the front half; the back half is written to `back`. Returns the record count left in
-`f`, which is `record_len` rounded down to a frame boundary. Rounding down keeps both halves free of
-interior short frames.
+`--align` writes no final frame whose record count differs from the rest. The records that would
+have formed it are written to `--rest` as plain bytes.
 
-1. Validate the separator, obtaining `n`. `k = record_len / n`. Refuse `k == 0` or `k >= F`; either
-   would leave one side empty.
-2. Write `f`'s compressed bytes `[frame_start_comp(k), size_comp())` to `back`, then a table built
-   from entries `k..F`.
-3. `set_len(frame_end_comp(k-1))` on `f`, then append a table built from entries `0..k`.
+- **`--align` requires `--rest`.** `--rest` without `--align` is an error.
+- **`-c` is unchanged**: used when given, auto-detected when not. `--align` does not make it
+  required. Whether two files can be joined is decided by the operation that joins them, and it
+  refuses on a mismatch; `compress` cannot know whether its output will ever be joined.
+- An input holding fewer records than one frame leaves no frames at all. That follows from the
+  definition. What the command does about it is settled when it is implemented, not here.
 
-No decompression, and the copied entries need no adjustment. The front half is never written — it is
-already correct in place — so the cost is the size of the back half, not of the file.
-
-**Stop reading at `size_comp()`, not at end of file.** The bytes after it are `f`'s seek table.
-Copying them puts a stale skippable frame in the middle of `back`, which both `zstd -d` and
-`from_seekable` ignore, so it survives every obvious test as silent bloat.
-
-Write `back` before shortening `f`. Doing it the other way round destroys the only copy of those
-frames first.
-
-Exact-position splitting is not offered; see Out of scope.
-
-## concat
+## copy-range
 
 ```
-concat(f: &mut File, back: impl Read + Seek, separator: &[u8],
-       on_missing: OnMissingSeparator) -> Result<()>
+copy-range <INPUT> <OUTPUT> --from N [--cnt N]
 ```
 
-`back` is appended to `f`.
+Copies a record range out of `INPUT` into `OUTPUT`. **Non-destructive**: `INPUT` is only read.
 
-**Only when `f`'s last data frame is full.** Refusing is better than silently producing an interior
-short frame. Fullness is the record count of `f`'s last data frame, from the separator validation
-above.
+- `--from` and `--cnt` are record counts, the same unit as `cat` and `truncate`.
+- `--cnt` defaults to the end of the file.
+- **`--from` must be the first record of a frame, and `--from + --cnt` must be the first record of a
+  frame or the end of the file.** Anything else is an error. Nothing is rounded.
+- `OUTPUT` is positional. `-` writes to stdout.
+- The frames are copied as bytes. Only the seek table is built fresh.
 
-1. Validate both, obtaining `n_f` and `n_back`. Refuse unless equal.
-2. Decompress `f`'s last data frame. Refuse unless it holds exactly `n` records. If its last byte is
-   not the separator, refuse, or insert one according to `on_missing` — which requires re-encoding
-   that frame, so it is no longer the pure byte copy the rest of the operation is.
-3. `set_len(frame_end_comp(last_data_frame))` on `f`. This drops `f`'s seek table.
-4. Append `back`'s compressed bytes `[0, size_comp())`.
-5. Append a fresh table built from `f`'s entries, then `back`'s.
+Splitting a file is `copy-range` followed by `truncate`, and the boundary is one number in one unit:
 
-No decompression beyond validation, and `f`'s existing frames are never rewritten, so the cost is
-the size of `back`.
+```
+copy-range a.seek.zst back.seek.zst --from 128000
+truncate   a.seek.zst --records 128000
+```
 
-**`cat f back` is not a substitute.** It decompresses correctly under `zstd -d` but is not seekable:
-only the trailing table is found, and its offsets are relative to `back`.
+Record units rather than frame units are what make that pair read as one boundary. Frame units would
+state the same cut as two different numbers.
 
-Both inputs need `F >= 3` for validation, so `concat` cannot be applied to very small files.
+## append --input-seekable
+
+`append` gains an input that is itself a seekable zst, and a range within that input.
+
+| `INPUT` | `--input-seekable` | what happens | `--input-from` / `--input-cnt` |
+|---|---|---|---|
+| plain | not allowed | appended as records, as now | a record range within the plain input |
+| seek.zst | absent | **decompressed**, then appended as records | any range |
+| seek.zst | present | frames **copied as bytes** | must fall on frame boundaries |
+
+- **`--input-seekable` declares the byte-copy path.** It changes what the operation refuses, so it
+  is explicit rather than inferred. `INPUT` must then be a path — the seek table is at the end, so
+  `Seek` is required and stdin cannot serve. If the file is not a seekable zst, refuse.
+- **The decompressing path is detected, not declared.** Appending a compressed file's bytes as
+  records is never meaningful, so there is nothing to disambiguate. Unlike `cat b | append a`, it
+  streams a frame at a time rather than materialising the whole range.
+- **`--input-from` and `--input-cnt` are record counts.** Under `--input-seekable` they carry the
+  same boundary rule as `copy-range`: `--input-from` is the first record of a frame, and
+  `--input-from + --input-cnt` is the first record of a frame or the end of the input.
+- **`--insert-separator` applies to the decompressing path only**, and is an error together with
+  `--input-seekable`: a byte copy writes nothing at the seam.
+
+The byte-copy path refuses unless all of these hold:
+
+- `n` is equal in both files
+- the target's last data frame is full
+- the target ends in a whole record
+
+Its input may end in a short frame. That frame becomes the last frame of the result, which is legal
+— but the result is then no longer aligned, and a second `--input-seekable` append onto it refuses.
+
+Cost: the size of the copied range, plus one frame of the target decompressed to establish that it
+is full.
+
+## Uses
+
+**Delivery.** A stream lands as a compressed file and a plain tail: `base.seek.zst` holding whole
+frames, `tail.jsonl` holding what has not reached a frame's worth yet. Writes go to `tail.jsonl`,
+which costs a plain append and rebuilds no seek table. When enough has accumulated it is folded in.
+`compress --align` is what keeps `base.seek.zst` aligned; `--rest` is what `tail.jsonl` becomes
+again.
+
+**Update.** Divide around the range holding the records to change, rewrite that range, and join the
+three pieces back: `copy-range` and `truncate` to divide, `-c n` to re-compress the middle, `append
+--input-seekable` to join. The middle is a whole number of frames, so no remainder appears and the
+result stays aligned. Cost is the frames touched.
+
+This works only when the record count does not change. If it does, the range is no longer a whole
+number of frames and everything after it must be re-compressed. There is no way around that; how
+much "everything after" is depends on how the data is divided into files, which is an operational
+choice.
+
+**Retention.** Dropping the front is `copy-range` from the boundary into a new file. Dividing files
+finely enough also bounds the cost of a count-changing update above.
+
+## Why split and concat were dropped
+
+`split` wrote the back half itself and shortened `f` in place. `copy-range` plus `truncate` does the
+same with one non-destructive operation and one existing one, so there was nothing left for it to do.
+
+`concat` appended a whole file to another. Its precondition — the target's last data frame full — is
+not something a caller can arrange: `compress` and `append` both leave the remainder in a short final
+frame, so it held only when the record count happened to be a multiple of `n`. `compress --align`
+turns that coincidence into something a producer can ask for, and `append --input-seekable` is
+`concat` with that precondition made reachable.
+
+Neither can be replaced by a pipe. `cat b | append a` produces a correct file, but it re-compresses
+`b` whole — which is the cost the byte copy exists to avoid.
 
 ## Testing
 
@@ -262,14 +336,17 @@ Both inputs need `F >= 3` for validation, so `concat` cannot be applied to very 
   the last data frame short.
 - **`zstd -d` reproduces the expected bytes.**
 - **Record lookup still correct** — `cat` at several positions against expected records.
-- **Round trips**, which work because every operation is destructive on `f`: `split` then `concat`
-  restores `f`. `append` then `truncate` back to the original length restores `f`.
+- **Round trips**: `copy-range` plus `truncate` then `append --input-seekable` restores the original.
+  `append` then `truncate` back to the original length restores `f`.
+- **Alignment**: `compress --align` output has no short final frame, and its `--rest` plus the file
+  reproduces the input bytes.
 - **Composition**: `append` after `truncate` after `append`. Truncate leaves a short final frame,
   which is the state append must already handle.
-- **Refusals**: wrong separator, `truncate` beyond the current count, `truncate` to 0, `split` at 0
-  or past the end, `concat` with a short frame at the join, `concat` with mismatched `n`, `append`
-  and `concat` onto a file ending in a fragment, any operation on a file with fewer than three data
-  frames.
+- **Refusals**: wrong separator; `truncate` beyond the current count; `truncate` to 0; `copy-range`
+  from or to a position that is not a frame boundary; `append --input-seekable` with mismatched `n`,
+  onto a target whose last frame is short, or onto a target ending in a fragment; `--align` without
+  `--rest` and `--rest` without `--align`; `--insert-separator` with `--input-seekable`; any
+  operation on a file with fewer than three data frames.
 - **Nothing before the affected byte is touched.** Compare the prefix byte for byte against the
   original after every operation.
 - **Frame counts** after every operation: every frame carries data, and the count is the one the
@@ -279,5 +356,14 @@ Both inputs need `F >= 3` for validation, so `concat` cannot be applied to very 
 
 Not part of this work and not to be investigated: deleting from the front, inserting at an exact
 record position, a short frame at the head of a file, and in-place record update. All are handled by
-operating on multiple files instead — retention drops whole files, insertion splits around the range
-and writes a middle file. No format change is needed.
+operating on multiple files instead — retention drops whole files, insertion divides around the
+range and writes a middle file. No format change is needed.
+
+## Undecided
+
+- Whether reading across `base.seek.zst` and its plain tail belongs in the crate, or stays an
+  operational convention with the caller opening both. All three operations here are write-side.
+- Implementation order.
+- Whether the existing `-c, --cnt-of-separator-per-frame` should move to record vocabulary, and what
+  to do about `-f` meaning `--from` in `cat` but `--format` in `inspect`, and `-c` meaning a
+  separator count in `compress` but a record count in `cat`.
