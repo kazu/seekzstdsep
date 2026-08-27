@@ -48,7 +48,7 @@ pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Resu
     let frames = table.num_frames();
 
     let n = validate_separator(f, &table, &finder)?;
-    let last = record::count(&decode_frame(f, &table, frames - 1)?, &finder) as u64;
+    let last = frame_records(f, &table, &finder, frames - 1)?;
     let before_last = n * u64::from(frames - 1);
     let total = before_last + last;
 
@@ -120,13 +120,8 @@ pub fn append(
     // Before the subtraction below: a seek table can hold no entries at all, and validation is
     // what refuses that.
     let n = validate_separator(f, &table, &finder)? as usize;
-    // A frame carrying nothing is what zeekstd's finish() writes after an end_frame(), and the
-    // record the file ends with is then in the frame before it. Replace that one; the set_len
-    // below drops the empty frames along with it.
-    let mut last = table.num_frames() - 1;
-    while last > 0 && table.frame_size_decomp(last)? == 0 {
-        last -= 1;
-    }
+    // Replace the frame the last record is in; the set_len below drops the empty frames with it.
+    let last = last_data_frame(&table)?;
 
     // Before anything is decoded, so that appending nothing costs one read and rewrites nothing.
     let mut head = vec![0u8; READ_BUF_SIZE];
@@ -265,8 +260,18 @@ impl<'a, R: Read> Cutter<'a, R> {
 ///
 /// An empty `separator`, and a file whose seek table cannot be read.
 fn open_target<'a>(f: &mut File, separator: &'a [u8]) -> anyhow::Result<(Finder<'a>, SeekTable)> {
+    finder_and_seek_table(f, separator)
+}
+
+/// [`open_target`] for an operation that only reads `f`, which takes no exclusive borrow to state
+/// that it rewrites nothing.
+fn finder_and_seek_table<'a>(
+    f: &File,
+    separator: &'a [u8],
+) -> anyhow::Result<(Finder<'a>, SeekTable)> {
     record::check_separator(separator)?;
-    Ok((Finder::new(separator), SeekTable::from_seekable(f)?))
+    let mut src = f;
+    Ok((Finder::new(separator), SeekTable::from_seekable(&mut src)?))
 }
 
 /// Shortens `f` to `cut` and positions it there, which is where the replacement frames go.
@@ -331,6 +336,26 @@ pub fn frame_has_checksum(mut f: &File, table: &SeekTable, index: u32) -> anyhow
     Ok(head[4] & 0b100 != 0)
 }
 
+/// The last frame that carries data, which is the frame the record a file ends with is in.
+///
+/// `Encoder::finish` writes a frame carrying nothing after an `end_frame`, so the last frame of a
+/// file is not always the last one holding records. No record range reaches the empty ones.
+fn last_data_frame(table: &SeekTable) -> anyhow::Result<u32> {
+    let mut last = table.num_frames() - 1;
+    while last > 0 && table.frame_size_decomp(last)? == 0 {
+        last -= 1;
+    }
+    Ok(last)
+}
+
+/// The number of records frame `index` holds, which costs one frame decoded.
+///
+/// The seek table cannot answer this: it records sizes, not record counts. Only the last frame
+/// needs asking, since every other one holds the count validation established.
+fn frame_records(f: &File, table: &SeekTable, finder: &Finder, index: u32) -> anyhow::Result<u64> {
+    Ok(record::count(&decode_frame(f, table, index)?, finder) as u64)
+}
+
 /// Decompresses one frame.
 fn decode_frame(f: &File, table: &SeekTable, index: u32) -> anyhow::Result<Vec<u8>> {
     let mut decoder = DecodeOptions::new(f)
@@ -374,7 +399,17 @@ fn encode_frame(data: &[u8], checksum: bool) -> anyhow::Result<(Vec<u8>, u32, u3
 ///
 /// Rebuilding is the only way to drop an entry: no zeekstd API removes one from a `SeekTable`.
 fn log_frames(out: &mut SeekTable, table: &SeekTable, frames: u32) -> anyhow::Result<()> {
-    for i in 0..frames {
+    log_frames_range(out, table, 0..frames)
+}
+
+/// [`log_frames`] over a range that need not start at the first frame, for an operation whose
+/// result keeps a range of the frames rather than a prefix of them.
+fn log_frames_range(
+    out: &mut SeekTable,
+    table: &SeekTable,
+    frames: std::ops::Range<u32>,
+) -> anyhow::Result<()> {
+    for i in frames {
         out.log_frame(
             table.frame_size_comp(i)? as u32,
             table.frame_size_decomp(i)? as u32,
@@ -384,6 +419,12 @@ fn log_frames(out: &mut SeekTable, table: &SeekTable, frames: u32) -> anyhow::Re
 }
 
 fn write_seek_table(f: &mut File, table: SeekTable) -> anyhow::Result<()> {
+    write_seek_table_to(f, table)
+}
+
+/// [`write_seek_table`] to any writer, for an operation that writes somewhere other than the file
+/// it read.
+fn write_seek_table_to(f: &mut impl Write, table: SeekTable) -> anyhow::Result<()> {
     let mut serializer = table.into_serializer();
     let mut buf = vec![0u8; serializer.encoded_len()];
     let n = serializer.write_into(&mut buf);
