@@ -1,9 +1,13 @@
-//! `copy_range` over a few frames of a file against every frame of it.
+//! What the operations in `edit` cost: `copy_range` over a range against the whole file, reading
+//! frames, and the two halves of `append`.
 //!
-//! What the two cases are for: copying a range is a byte copy of the frames it names plus a fixed
-//! cost that does not depend on the range — the seek table, and the two frames validation
+//! What the `copy_range` cases are for: copying a range is a byte copy of the frames it names plus
+//! a fixed cost that does not depend on the range — the seek table, and the two frames validation
 //! decompresses. An implementation that decoded and re-encoded instead would still pass the tests,
-//! and would show up here as `range` growing towards `whole`.
+//! and would show up here as `range` growing towards `whole`. `append/frames` moves the same eight
+//! frames onto an existing file rather than into a new one, so it reads against `copy_range/range`;
+//! `append/records` is the path that does re-encode, and is the cost `append/frames` exists to
+//! avoid.
 //!
 //!
 //! **Read both orders before believing a difference.** criterion measures the cases in a group one
@@ -14,14 +18,14 @@
 //! cargo bench --bench edit
 //! ```
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::fs::File;
 use std::hint::black_box;
 use std::path::PathBuf;
 
 use seekzstdsep::{
-    Alignment, CompressOptions, SeparatorCheck, compress_to_seekable_zst_with_opts, copy_range,
-    count_frames,
+    Alignment, CompressOptions, OnMissingSeparator, RangeCheck, SeparatorCheck, append_frames,
+    append_records, compress_to_seekable_zst_with_opts, copy_range, count_frames,
 };
 use zeekstd::SeekTable;
 
@@ -146,5 +150,84 @@ fn count(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, copy, count);
+/// The two halves of `append`, each called directly rather than through the `AppendInput` that
+/// picks between them.
+///
+/// Both rewrite the end of the file, so every iteration gets a fresh copy of the fixture; making
+/// that copy is setup and is not timed. The `frames` case takes the same eight frames
+/// `copy_range/range` copies, so the two read against each other: the same frames moved, once into
+/// a second file and once onto the end of an existing one.
+fn append_to(c: &mut Criterion) {
+    let (dir, path) = fixture();
+    let input = File::open(&path).expect("no fixture");
+    let mut src = &input;
+    let table = SeekTable::from_seekable(&mut src).expect("no seek table");
+
+    // One frame's worth of records, which is what the `records` case adds.
+    let mut body = Vec::new();
+    for i in 0..RECORDS_PER_FRAME {
+        body.extend_from_slice(format!("{{\"seq\":{i},\"msg\":\"appended\"}}\n").as_bytes());
+    }
+
+    let target = dir.path().join("append-target.seek.zst");
+    let fresh = || {
+        std::fs::copy(&path, &target).expect("failed to copy the fixture");
+        File::options()
+            .read(true)
+            .write(true)
+            .open(&target)
+            .expect("failed to open the target")
+    };
+
+    let from = (RECORDS / 2) as u64;
+    let cnt = (FRAMES_COPIED * RECORDS_PER_FRAME) as u64;
+    let k = (from / RECORDS_PER_FRAME as u64) as u32;
+    let moved = table
+        .frame_end_comp(k + FRAMES_COPIED as u32 - 1)
+        .expect("no such frame")
+        - table.frame_start_comp(k).expect("no such frame");
+
+    let mut group = c.benchmark_group("append");
+
+    group.throughput(Throughput::Bytes(body.len() as u64));
+    group.bench_function("records", |b| {
+        b.iter_batched(
+            fresh,
+            |mut f| {
+                append_records(
+                    &mut f,
+                    body.as_slice(),
+                    SEPARATOR,
+                    OnMissingSeparator::Refuse,
+                )
+                .expect("failed to append records")
+            },
+            BatchSize::PerIteration,
+        )
+    });
+
+    // The compressed bytes moved, which is the number `copy_range/range` reports as well.
+    group.throughput(Throughput::Bytes(moved));
+    group.bench_function("frames", |b| {
+        b.iter_batched(
+            fresh,
+            |mut f| {
+                append_frames(
+                    &mut f,
+                    &input,
+                    black_box(from),
+                    black_box(Some(cnt)),
+                    SEPARATOR,
+                    RangeCheck::FirstFrame,
+                )
+                .expect("failed to append frames")
+            },
+            BatchSize::PerIteration,
+        )
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, copy, count, append_to);
 criterion_main!(benches);

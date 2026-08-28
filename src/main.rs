@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use seekzstdsep::cli::{ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
 use seekzstdsep::{
-    AppendInput, InspectOptions, OnMissingSeparator, append, cat_data,
+    AppendInput, InspectOptions, OnMissingSeparator, RangeCheck, append, cat_data,
     seekzstdsep_lib::inspect_with_opts, truncate,
 };
 use std::io::{self, Read, Write};
@@ -63,8 +63,25 @@ struct AppendArgs {
     #[arg(short, long, default_value = "\n")]
     separator: String,
     /// Write a separator at the join when FILE ends in a fragment rather than in a record
-    #[arg(long)]
+    #[arg(long, conflicts_with = "input_seekable")]
     insert_separator: bool,
+    /// Treat INPUT as a seekable zst and copy its frames as bytes, decompressing neither file.
+    /// Requires both files to hold the same number of records per frame, and FILE to end at a
+    /// frame boundary
+    #[arg(long, requires = "input")]
+    input_seekable: bool,
+    /// First record of INPUT to append (default: 0). Has to be the first record of a frame
+    #[arg(long, requires = "input_seekable")]
+    input_from: Option<u64>,
+    /// Records of INPUT to append (default: to the end of INPUT). The record it ends at has to be
+    /// the first record of a frame, or the end of INPUT
+    #[arg(long, requires = "input_seekable")]
+    input_cnt: Option<u64>,
+    /// Count the records in every frame being copied rather than in the first one alone, refusing
+    /// a frame that holds a count of its own. Decompresses the range, which is the cost the byte
+    /// copy exists to avoid
+    #[arg(long, requires = "input_seekable")]
+    check_input_frames: bool,
 }
 
 #[derive(Subcommand)]
@@ -129,20 +146,37 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Append(args) => {
             let mut file = File::options().read(true).write(true).open(&args.zstfile)?;
-            let data: Box<dyn Read> = match args.input {
-                Some(ref path) => Box::new(File::open(path)?),
-                None => Box::new(io::stdin().lock()),
+            let opened = match args.input {
+                Some(ref path) => Some(File::open(path)?),
+                None => None,
             };
-            let on_missing = if args.insert_separator {
-                OnMissingSeparator::Insert
+
+            let input: AppendInput<Box<dyn Read>> = if args.input_seekable {
+                AppendInput::Frames {
+                    input: opened.as_ref().expect("--input-seekable requires INPUT"),
+                    from: args.input_from.unwrap_or(0),
+                    cnt: args.input_cnt,
+                    check: if args.check_input_frames {
+                        RangeCheck::EveryFrame
+                    } else {
+                        RangeCheck::FirstFrame
+                    },
+                }
             } else {
-                OnMissingSeparator::Refuse
+                let data: Box<dyn Read> = match opened {
+                    Some(f) => Box::new(f),
+                    None => Box::new(io::stdin().lock()),
+                };
+                AppendInput::Records {
+                    data,
+                    on_missing: if args.insert_separator {
+                        OnMissingSeparator::Insert
+                    } else {
+                        OnMissingSeparator::Refuse
+                    },
+                }
             };
-            append(
-                &mut file,
-                AppendInput::Records { data, on_missing },
-                args.separator.as_bytes(),
-            )?;
+            append(&mut file, input, args.separator.as_bytes())?;
         }
         Commands::CopyRange(args) => {
             run_copy_range(&args, io::stdout().lock())?;

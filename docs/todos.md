@@ -12,7 +12,7 @@ designed there and dropped; the doc records why.
 - [x] `append`
 - [x] `copy-range`
 - [ ] `compress --align`
-- [ ] `append --input-seekable`
+- [x] `append --input-seekable`
 
 ## Later
 

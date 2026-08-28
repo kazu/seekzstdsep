@@ -103,6 +103,48 @@ Where one separator does not complete the record — which a separator that over
 
 Destructive, and validated before anything is written, on the same terms as `truncate` above.
 
+A compressed file cannot be handed to this, as a path or on stdin. Its bytes are frames, not
+records, and appending them as records is not an error but silent corruption — a compressed stream
+holds the separator's bytes by chance, and each one is counted as a record. `append` refuses a zstd
+stream it was given as records; joining two compressed files is the flag below.
+
+### Joining another seekable file
+
+```sh
+seekzstdsep append events.jsonl.seek.zst more.seek.zst --input-seekable
+seekzstdsep append events.jsonl.seek.zst more.seek.zst --input-seekable --input-from 4096 --input-cnt 2048
+```
+
+`--input-seekable` copies the input's frames as compressed bytes rather than appending records.
+Neither file is decompressed and nothing is re-encoded, so the cost is the size of the range rather
+than of either file — which is what `cat more.seek.zst | seekzstdsep append …` would pay instead.
+`--input-from` and `--input-cnt` bound the part of the input to take, in records; they serve
+`--input-seekable` alone. `--insert-separator` is rejected alongside it rather than ignored, since a
+byte copy writes nothing at the seam.
+
+The frames have to fit together as they stand, so this refuses unless
+
+- both files hold the same number of records per frame,
+- the file being appended to ends at a frame boundary rather than partway through one — its last
+  frame full rather than short, which `copy-range` produces and which `truncate` to a multiple of
+  the records per frame leaves behind, and
+- `--input-from` is the first record of a frame, with `--input-from` plus `--input-cnt` the first
+  record of a frame or the end of the input.
+
+The input's records per frame is read off its frame 0, and the frames actually copied are taken on
+trust. A file whose interior holds a count of its own — which this compressor never writes, but
+another might — is copied in as it is, and record lookup then divides by a count that no longer
+holds. `--check-input-frames` counts every frame being copied instead and refuses that. It is not
+the default because it decompresses the range, which is the cost the byte copy exists to avoid.
+
+Frames are copied with whatever they carry, so joining a file written with per-frame checksums onto
+one written without leaves a result holding both kinds. Each zstd frame records its own, and both
+`zstd -d` and the seek table read such a file back correctly.
+
+The input may end in a short frame; that frame becomes the last frame of the result. The result is
+then no longer joinable in turn, and a second `--input-seekable` onto it refuses. To avoid that,
+`cat` the records past the input's last frame boundary out to a plain file, `truncate` the input
+there, and append that plain file after the join.
 
 ## Copy a record range
 

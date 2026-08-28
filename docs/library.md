@@ -69,10 +69,11 @@ truncate(&mut f, 10_000, b"\n").unwrap();
 
 ## Append
 
-`append` adds records to the end of a file, and needs it open the same way:
+`append` adds to the end of a file, and needs it open the same way. What is added is an
+`AppendInput`:
 
 ```rust,no_run
-use seekzstdsep::{OnMissingSeparator, append};
+use seekzstdsep::{AppendInput, OnMissingSeparator, append};
 use std::fs::File;
 
 let mut f = File::options()
@@ -81,11 +82,58 @@ let mut f = File::options()
     .open("events.jsonl.seek.zst")
     .unwrap();
 
-append(&mut f, File::open("more.jsonl").unwrap(), b"\n", OnMissingSeparator::Refuse).unwrap();
+append(
+    &mut f,
+    AppendInput::Records {
+        data: File::open("more.jsonl").unwrap(),
+        on_missing: OnMissingSeparator::Refuse,
+    },
+    b"\n",
+)
+.unwrap();
 ```
 
 The records come from any `Read`. `OnMissingSeparator::Insert` writes a separator at the join
 instead of refusing a file that ends in a fragment.
+
+`AppendInput::Frames` joins another seekable file instead, copying its frames as compressed bytes:
+
+```rust,no_run
+use seekzstdsep::{AppendInput, RangeCheck, append};
+use std::fs::File;
+
+let mut f = File::options()
+    .read(true)
+    .write(true)
+    .open("events.jsonl.seek.zst")
+    .unwrap();
+let more = File::open("more.seek.zst").unwrap();
+
+// This variant carries no `Read`, so name the type parameter the other one would have fixed.
+let frames: AppendInput<&[u8]> = AppendInput::Frames {
+    input: &more,
+    from: 0,
+    cnt: None,
+    check: RangeCheck::FirstFrame,
+};
+append(&mut f, frames, b"\n").unwrap();
+```
+
+Neither file is decompressed and nothing is re-encoded, so the cost is the size of the range rather
+than of either file. That is available only where the frames already fit together: both files have
+to hold the same number of records per frame, `f` has to end at a frame boundary with its last frame
+full, and `from` and `from + cnt` have to fall on frame boundaries of the input.
+
+`RangeCheck::FirstFrame` reads the input's records per frame off its frame 0 and takes the copied
+frames on trust. `RangeCheck::EveryFrame` counts all of them and refuses one holding a count of its
+own, at the price of decompressing the range.
+
+Handing `AppendInput::Records` a compressed stream is refused: its bytes are frames, and the
+separator bytes it holds by chance would each be counted as a record.
+
+Both arms are public on their own. `append_records` and `append_frames` take the same arguments the
+variants carry, so a caller that only ever does one of the two reaches it directly and says which at
+the call site rather than in a value.
 
 ## Compressing with options
 
