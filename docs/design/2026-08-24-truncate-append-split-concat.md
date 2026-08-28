@@ -1,14 +1,13 @@
 # truncate, append, copy-range
 
 **Status:** `truncate`, `append` (records and `--input-seekable`) and `copy-range` are implemented
-in `src/edit.rs`. `compress --align` is design only. `split` and `concat` were
-designed here and dropped; see [Why split and concat were dropped](#why-split-and-concat-were-dropped).
+in `src/edit.rs`. `split`, `concat` and `compress --align` were designed here and dropped; see
+[What was dropped](#what-was-dropped).
 **Date:** 2026-08-24, revised 2026-08-28
 
 Operations that modify or derive from an existing file, all working at frame boundaries and never
 rewriting the interior. `truncate` and `append` came first. The two that were to follow, `split` and
-`concat`, are replaced by three that compose: `compress --align`, `copy-range`, and `append
---input-seekable`.
+`concat`, are replaced by two that compose: `copy-range` and `append --input-seekable`.
 
 ## Rules
 
@@ -22,17 +21,15 @@ rewriting the interior. `truncate` and `append` came first. The two that were to
 ## The invariant
 
 A file is **aligned** when every frame holds the same number of records — when the last data frame
-is full rather than short. `compress --align` produces such a file, `copy-range` produces one
-unless `--no-align` releases it from that, and `append --input-seekable` requires it of its target
-and produces it again when its input is aligned too.
+is full rather than short. A plain file becomes one by `compress` followed by `truncate` to the last
+frame boundary, `copy-range` produces one unless `--no-align` releases it from that, and `append
+--input-seekable` requires it of its target and produces it again when its input is aligned too.
 
 This is what makes joining two files a byte copy. If the target's last frame holds `r < n` records,
 no amount of re-encoding at the seam fixes it: absorbing the seam shifts every frame of the input by
 `n - r` records, and the misalignment propagates to the end. The whole input would have to be
 re-encoded, which is what `cat b | append a` already does. So the requirement is not caution, it is
 what the format leaves available.
-
-The state is called *aligned* here after the flag that produces it.
 
 ## Format facts
 
@@ -248,22 +245,6 @@ frames than it was given groups. The compressor has the same hazard at 2 MiB, wh
 
 An empty `data` is a no-op: return without rewriting.
 
-## compress --align
-
-```
-compress [-c N] --align --rest <PATH> INPUT OUTPUT
-```
-
-`--align` writes no final frame whose record count differs from the rest. The records that would
-have formed it are written to `--rest` as plain bytes.
-
-- **`--align` requires `--rest`.** `--rest` without `--align` is an error.
-- **`-c` is unchanged**: used when given, auto-detected when not. `--align` does not make it
-  required. Whether two files can be joined is decided by the operation that joins them, and it
-  refuses on a mismatch; `compress` cannot know whether its output will ever be joined.
-- An input holding fewer records than one frame leaves no frames at all. That follows from the
-  definition. What the command does about it is settled when it is implemented, not here.
-
 ## copy-range
 
 ```
@@ -389,9 +370,10 @@ frame boundary the seek table can place by arithmetic. Under `EveryFrame`, the r
 
 **Delivery.** A stream lands as a compressed file and a plain tail: `base.seek.zst` holding whole
 frames, `tail.jsonl` holding what has not reached a frame's worth yet. Writes go to `tail.jsonl`,
-which costs a plain append and rebuilds no seek table. When enough has accumulated it is folded in.
-`compress --align` is what keeps `base.seek.zst` aligned; `--rest` is what `tail.jsonl` becomes
-again.
+which costs a plain append and rebuilds no seek table. When enough has accumulated it is folded in:
+compress the tail, `truncate` the result to its last frame boundary so it is aligned, and `append
+--input-seekable` it. What the truncate dropped is still in `tail.jsonl`, which is trimmed to just
+that.
 
 **Update.** Divide around the range holding the records to change, rewrite that range, and join the
 three pieces back: `copy-range` and `truncate` to divide, `-c n` to re-compress the middle, `append
@@ -406,19 +388,24 @@ choice.
 **Retention.** Dropping the front is `copy-range --no-align` from the boundary into a new file.
 Dividing files finely enough also bounds the cost of a count-changing update above.
 
-## Why split and concat were dropped
+## What was dropped
 
 `split` wrote the back half itself and shortened `f` in place. `copy-range` plus `truncate` does the
 same with one non-destructive operation and one existing one, so there was nothing left for it to do.
 
 `concat` appended a whole file to another. Its precondition — the target's last data frame full — is
 not something a caller can arrange: `compress` and `append` both leave the remainder in a short final
-frame, so it held only when the record count happened to be a multiple of `n`. `compress --align`
-turns that coincidence into something a producer can ask for, and `append --input-seekable` is
-`concat` with that precondition made reachable.
+frame, so it held only when the record count happened to be a multiple of `n`. `compress` followed by
+`truncate` to the last frame boundary turns that coincidence into something a producer can arrange,
+and `append --input-seekable` is `concat` with that precondition made reachable.
 
 Neither can be replaced by a pipe. `cat b | append a` produces a correct file, but it re-compresses
 `b` whole — which is the cost the byte copy exists to avoid.
+
+`compress --align` was to write no short final frame and hand the leftover records back through
+`--rest`. `compress` followed by `truncate` to the last frame boundary does the same with commands
+that already exist, and leaves the records it dropped where they already were, in the plain tail the
+compression read. A dedicated parameter buys nothing.
 
 ## Testing
 
@@ -428,15 +415,12 @@ Neither can be replaced by a pipe. `cat b | append a` produces a correct file, b
 - **Record lookup still correct** — `cat` at several positions against expected records.
 - **Round trips**: `copy-range` plus `truncate` then `append --input-seekable` restores the original.
   `append` then `truncate` back to the original length restores `f`.
-- **Alignment**: `compress --align` output has no short final frame, and its `--rest` plus the file
-  reproduces the input bytes.
 - **Composition**: `append` after `truncate` after `append`. Truncate leaves a short final frame,
   which is the state append must already handle.
 - **Refusals**: wrong separator; `truncate` beyond the current count; `truncate` to 0; `copy-range`
   from or to a position that is not a frame boundary, reaching a short final frame without
   `--no-align`, and a separator that does not end frame 0; `append --input-seekable` with mismatched `n`, onto a target whose last frame is
-  short, or onto a target ending in a fragment; `--align` without
-  `--rest` and `--rest` without `--align`; `--insert-separator` with `--input-seekable`; any
+  short, or onto a target ending in a fragment; `--insert-separator` with `--input-seekable`; any
   operation on a file with fewer than three data frames.
 - **Nothing before the affected byte is touched.** Compare the prefix byte for byte against the
   original after every operation.

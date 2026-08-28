@@ -5,13 +5,12 @@ Decisions to make and work to build. Neither defects (`docs/bugs.md`) nor costs
 
 ## Editing an existing file
 
-Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split` and `concat` were
-designed there and dropped; the doc records why.
+Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `concat` and
+`compress --align` were designed there and dropped; the doc records why.
 
 - [x] `truncate`
 - [x] `append`
 - [x] `copy-range`
-- [ ] `compress --align`
 - [x] `append --input-seekable`
 
 ## Later
@@ -35,9 +34,10 @@ Exclusive access is therefore required: a mutex within a process, `flock` across
 File` states that requirement even though the borrow checker cannot enforce it across handles.
 
 Writing concurrently scales by giving each writer its own file and merging later, which is what
-segmented logs do. Merging without re-compressing needs every file aligned — `compress --align`
-is what provides that — and needs each writer's remainder carried into its next batch rather than
-left at the end of its own file, or it lands out of order in the merged result.
+segmented logs do. Merging without re-compressing needs every file aligned — `compress` then
+`truncate` to the last frame boundary is what provides that — and needs each writer's remainder
+carried into its next batch rather than left at the end of its own file, or it lands out of order in
+the merged result.
 
 Undecided: what a reader sees while an append runs. Frames before the last one do not move, so
 already-written records stay readable, but a reader that opens between the `set_len` and the table
