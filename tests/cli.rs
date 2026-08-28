@@ -7,7 +7,8 @@ use std::process::{Command, Output, Stdio};
 
 mod common;
 use common::{
-    FIXTURE_RECORDS, compress_body, compress_frames, fixture_records_upto, frame_checksum_flags,
+    FIXTURE_RECORDS, FIXTURE_RECORDS_PER_FRAME, compress_body, compress_frames,
+    fixture_records_upto, frame_checksum_flags,
 };
 
 use tempfile::tempdir;
@@ -662,5 +663,297 @@ fn test_copy_range_subcommand_check_uniform_catches_a_drifting_count() {
     assert!(
         !refused.status.success(),
         "--check-uniform accepted a file whose frames hold different counts"
+    );
+}
+
+/// The fixture compressed and cut back to whole frames, which the byte-copy path requires of the
+/// file it appends to.
+fn aligned_fixture(dir: &Path) -> PathBuf {
+    let path = compress_fixture(dir);
+    let out = run_truncate(&path, &(FIXTURE_RECORDS_PER_FRAME * 5).to_string());
+    assert!(
+        out.status.success(),
+        "truncate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    path
+}
+
+/// A second copy of the fixture, compressed under a name of its own so it can be the input.
+fn second_fixture(dir: &Path) -> PathBuf {
+    compress_body(
+        dir,
+        "second",
+        &std::fs::read(fixture_path()).expect("Failed to read fixture"),
+    )
+}
+
+#[test]
+fn test_append_subcommand_copies_frames_with_input_seekable() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let target = aligned_fixture(temp_dir.path());
+    let input = second_fixture(temp_dir.path());
+    let first = cat(&input, 0, 1);
+
+    let out = run_append(&target, &[input.to_str().unwrap(), "--input-seekable"]);
+    assert!(
+        out.status.success(),
+        "append --input-seekable failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let joined = FIXTURE_RECORDS_PER_FRAME * 5;
+    assert_eq!(
+        cat(&target, joined, 1),
+        first,
+        "the first copied record is not at the seam"
+    );
+    assert_eq!(
+        cat(&target, joined + FIXTURE_RECORDS - 1, 2),
+        cat(&input, FIXTURE_RECORDS - 1, 1),
+        "the result holds more records than the two files together"
+    );
+}
+
+#[test]
+fn test_append_subcommand_refuses_a_seekable_input_without_the_flag() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let target = aligned_fixture(temp_dir.path());
+    let input = second_fixture(temp_dir.path());
+    let before = std::fs::read(&target).expect("Failed to read the target");
+
+    let out = run_append(&target, &[input.to_str().unwrap()]);
+
+    assert!(
+        !out.status.success(),
+        "append took a seekable zst as records"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--input-seekable"),
+        "the refusal does not name the flag that does what was meant: {err}"
+    );
+    assert_eq!(
+        before,
+        std::fs::read(&target).expect("Failed to read the target"),
+        "a refused append rewrote the file"
+    );
+}
+
+/// The flag combinations clap rejects before anything is opened.
+#[test]
+fn test_append_subcommand_refuses_flag_combinations() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let target = aligned_fixture(temp_dir.path());
+    let input = second_fixture(temp_dir.path());
+    let seekable = input.to_str().unwrap();
+
+    for (what, args) in [
+        (
+            "--insert-separator with --input-seekable",
+            vec![seekable, "--input-seekable", "--insert-separator"],
+        ),
+        (
+            "--input-from without --input-seekable",
+            vec![seekable, "--input-from", "0"],
+        ),
+        (
+            "--input-cnt without --input-seekable",
+            vec![seekable, "--input-cnt", "117"],
+        ),
+        ("--input-seekable without INPUT", vec!["--input-seekable"]),
+        (
+            "--check-input-frames without --input-seekable",
+            vec![seekable, "--check-input-frames"],
+        ),
+    ] {
+        let out = run_append(&target, &args);
+        assert!(!out.status.success(), "append accepted {what}");
+        // Every one of these has to be clap's own rejection. Asserting only on the exit status
+        // would pass on the refusals the binary makes later for other reasons, and on a panic.
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("error:") && err.contains("Usage:"),
+            "{what} was not rejected as a usage error: {err}"
+        );
+    }
+}
+
+#[test]
+fn test_append_subcommand_refuses_a_seekable_zst_on_stdin() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let target = aligned_fixture(temp_dir.path());
+    let input = second_fixture(temp_dir.path());
+    let before = std::fs::read(&target).expect("Failed to read the target");
+
+    let mut child = Command::new(BIN)
+        .args(["append", target.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn append");
+    child
+        .stdin
+        .take()
+        .expect("no stdin")
+        .write_all(&std::fs::read(&input).expect("Failed to read the input"))
+        .ok();
+    let out = child.wait_with_output().expect("Failed to run append");
+
+    assert!(
+        !out.status.success(),
+        "append took a seekable zst from stdin as records"
+    );
+    assert_eq!(
+        before,
+        std::fs::read(&target).expect("Failed to read the target"),
+        "a refused append rewrote the file"
+    );
+}
+
+/// A path that cannot be seeked, which the records path has no reason to reject.
+#[test]
+fn test_append_subcommand_from_a_path_that_cannot_be_seeked() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let target = compress_fixture(temp_dir.path());
+    let body = cat(&target, 0, 3);
+
+    let mut child = Command::new(BIN)
+        .args(["append", target.to_str().unwrap(), "/dev/stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn append");
+    child
+        .stdin
+        .take()
+        .expect("no stdin")
+        .write_all(body.as_bytes())
+        .expect("Failed to write the records to append");
+    let out = child.wait_with_output().expect("Failed to run append");
+
+    assert!(
+        out.status.success(),
+        "append refused a path it cannot seek: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        cat(&target, FIXTURE_RECORDS, 3),
+        body,
+        "the records read from an unseekable path did not come back"
+    );
+}
+
+#[test]
+fn test_append_subcommand_check_input_frames_refuses_a_drifting_input() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let target = aligned_fixture(temp_dir.path());
+    let records = fixture_records_upto(2 * FIXTURE_RECORDS_PER_FRAME + 50, true);
+    let groups: Vec<Vec<u8>> = [
+        &records[..FIXTURE_RECORDS_PER_FRAME],
+        &records[FIXTURE_RECORDS_PER_FRAME..FIXTURE_RECORDS_PER_FRAME + 50],
+        &records[FIXTURE_RECORDS_PER_FRAME + 50..],
+    ]
+    .iter()
+    .map(|g| g.concat())
+    .collect();
+    let input = compress_frames(temp_dir.path(), "drift", &groups);
+    let seekable = input.to_str().unwrap();
+
+    let out = run_append(
+        &target,
+        &[seekable, "--input-seekable", "--check-input-frames"],
+    );
+    assert!(
+        !out.status.success(),
+        "--check-input-frames took a frame holding a count of its own"
+    );
+
+    let out = run_append(&target, &[seekable, "--input-seekable"]);
+    assert!(
+        out.status.success(),
+        "the default check refused a range it does not read: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn test_append_subcommand_copies_a_range_of_the_input() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let target = aligned_fixture(temp_dir.path());
+    let input = second_fixture(temp_dir.path());
+    let expected = cat(&input, FIXTURE_RECORDS_PER_FRAME, 1);
+
+    let out = run_append(
+        &target,
+        &[
+            input.to_str().unwrap(),
+            "--input-seekable",
+            "--input-from",
+            &FIXTURE_RECORDS_PER_FRAME.to_string(),
+            "--input-cnt",
+            &FIXTURE_RECORDS_PER_FRAME.to_string(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "append of a range failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let joined = FIXTURE_RECORDS_PER_FRAME * 5;
+    assert_eq!(
+        cat(&target, joined, 1),
+        expected,
+        "the range starts elsewhere"
+    );
+    assert_eq!(
+        cat(&target, joined + FIXTURE_RECORDS_PER_FRAME - 1, 1),
+        cat(&input, 2 * FIXTURE_RECORDS_PER_FRAME - 1, 1),
+        "the range does not end where it was asked to"
+    );
+    assert!(
+        !cat_output(&target, joined + FIXTURE_RECORDS_PER_FRAME, 1)
+            .status
+            .success(),
+        "more than the range asked for was appended"
+    );
+}
+
+/// Records arriving a few bytes at a time, which is what a pipe does. The record path reads the
+/// first bytes to decide whether it was handed a compressed stream, and has to gather them across
+/// however many reads they take rather than judge the first one.
+#[test]
+fn test_append_subcommand_from_a_pipe_that_delivers_a_byte_at_a_time() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let target = compress_fixture(temp_dir.path());
+
+    let mut child = Command::new(BIN)
+        .args(["append", target.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn append");
+    {
+        let mut stdin = child.stdin.take().expect("no stdin");
+        for byte in b"ab\n" {
+            stdin.write_all(&[*byte]).expect("Failed to write a byte");
+            stdin.flush().expect("Failed to flush");
+        }
+    }
+    let out = child.wait_with_output().expect("Failed to run append");
+
+    assert!(
+        out.status.success(),
+        "append failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        cat(&target, FIXTURE_RECORDS, 1),
+        "ab\n",
+        "the record delivered a byte at a time did not come back whole"
     );
 }

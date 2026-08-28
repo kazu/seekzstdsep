@@ -48,7 +48,8 @@ seekzstdsep inspect events.jsonl.seek.zst                    # per-frame extents
 ```
 
 `truncate` and `append` edit an existing file in place, re-encoding only the frame the edit lands
-in, and `copy-range` writes a record range out to a second file by copying the frames as they are.
+in — or nothing at all, where `append --input-seekable` joins another seekable file. `copy-range`
+writes a record range out to a second file by copying the frames as they are.
 `docs/cli.md` covers every subcommand and flag.
 
 As a library, compression works over any `Read`/`Write` pair:

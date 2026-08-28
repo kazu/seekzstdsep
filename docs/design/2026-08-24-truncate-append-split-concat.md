@@ -1,9 +1,9 @@
 # truncate, append, copy-range
 
-**Status:** `truncate`, `append` and `copy-range` are implemented in `src/edit.rs`. `compress
---align` and the `--input-seekable` path of `append` are design only. `split` and `concat` were
+**Status:** `truncate`, `append` (records and `--input-seekable`) and `copy-range` are implemented
+in `src/edit.rs`. `compress --align` is design only. `split` and `concat` were
 designed here and dropped; see [Why split and concat were dropped](#why-split-and-concat-were-dropped).
-**Date:** 2026-08-24, revised 2026-08-27
+**Date:** 2026-08-24, revised 2026-08-28
 
 Operations that modify or derive from an existing file, all working at frame boundaries and never
 rewriting the interior. `truncate` and `append` came first. The two that were to follow, `split` and
@@ -76,8 +76,8 @@ files get a checksum; files made without one keep none.
 Required before any destructive operation. The file does not record which separator it was built
 with, and cutting with the wrong one cuts in the wrong place.
 
-Let `F` be the number of frames. Decompress data frames `0` and `1`
-and count separators with the candidate:
+Let `F` be the number of frames. Decompress data frames `0` and `F-2` — the first, and the last one
+not allowed to be short — and count separators with the candidate:
 
 - count is 0 → refuse, the separator does not occur
 - counts differ → refuse, either the separator is wrong or the file lacks a uniform count
@@ -203,9 +203,17 @@ on a file that ends in a fragment.
 ## append
 
 ```
-append(f: &mut File, data: impl Read, separator: &[u8],
-       on_missing: OnMissingSeparator) -> Result<()>
+append(f: &mut File, input: AppendInput<impl Read>, separator: &[u8]) -> Result<()>
+
+enum AppendInput<'a, R> {
+    Records { data: R, on_missing: OnMissingSeparator },
+    Frames { input: &'a File, from: u64, cnt: Option<u64>, check: RangeCheck },
+}
 ```
+
+`AppendInput::Records` is this section; `Frames` is [below](#append---input-seekable). One entry
+point because it is one operation from outside, and `on_missing` sits inside `Records` because a
+byte copy writes nothing at the seam — the combination the CLI has to refuse is not representable.
 
 1. Validate the separator, obtaining `n`.
 2. Decode the last data frame, which generally holds fewer than `n` records. If its last byte is
@@ -309,20 +317,29 @@ state the same cut as two different numbers.
 
 | `INPUT` | `--input-seekable` | what happens | `--input-from` / `--input-cnt` |
 |---|---|---|---|
-| plain | not allowed | appended as records, as now | a record range within the plain input |
-| seek.zst | absent | **decompressed**, then appended as records | any range |
+| plain | not allowed | appended as records, as now | not accepted |
+| seek.zst | absent | refused | — |
 | seek.zst | present | frames **copied as bytes** | must fall on frame boundaries |
 
 - **`--input-seekable` declares the byte-copy path.** It changes what the operation refuses, so it
   is explicit rather than inferred. `INPUT` must then be a path — the seek table is at the end, so
   `Seek` is required and stdin cannot serve. If the file is not a seekable zst, refuse.
-- **The decompressing path is detected, not declared.** Appending a compressed file's bytes as
-  records is never meaningful, so there is nothing to disambiguate. Unlike `cat b | append a`, it
-  streams a frame at a time rather than materialising the whole range.
-- **`--input-from` and `--input-cnt` are record counts.** Under `--input-seekable` they carry the
-  same boundary rule as `copy-range`: `--input-from` is the first record of a frame, and
-  `--input-from + --input-cnt` is the first record of a frame or the end of the input.
-- **`--insert-separator` applies to the decompressing path only**, and is an error together with
+- **A zstd stream without `--input-seekable` is refused.** Its bytes are not records. Appending
+  them as records is not an error but silent corruption: a compressed stream holds the separator's
+  bytes by chance, so they are counted as records and every later record index shifts. Nothing here
+  decompresses on the caller's behalf — that is `zstd -d b.seek.zst | append a.seek.zst`, which
+  re-compresses `b` whole, and avoiding exactly that cost is what `--input-seekable` is for.
+
+  The test is the zstd magic number on the first bytes of the stream, in the record path itself
+  rather than at the CLI. It therefore covers stdin and a pipe as well as a path, needs no `Seek`
+  of an input the record path otherwise only reads forward, and catches a plain zstd file along
+  with a seekable one. What it cannot distinguish is a record that genuinely begins with those four
+  bytes, which text records do not.
+- **`--input-from` and `--input-cnt` are record counts, and serve `--input-seekable` alone.** They
+  select the part of the input to append, and carry the same boundary rule as `copy-range`:
+  `--input-from` is the first record of a frame, and `--input-from + --input-cnt` is the first record
+  of a frame or the end of the input. Without `--input-seekable` they are an error.
+- **`--insert-separator` applies to a plain `INPUT` only**, and is an error together with
   `--input-seekable`: a byte copy writes nothing at the seam.
 
 The byte-copy path refuses unless all of these hold:
@@ -333,9 +350,40 @@ The byte-copy path refuses unless all of these hold:
 
 Its input may end in a short frame. That frame becomes the last frame of the result, which is legal
 — but the result is then no longer aligned, and a second `--input-seekable` append onto it refuses.
+Aligning the input beforehand needs no flag here: `cat` the records past its last frame boundary out
+to a plain file, `truncate` the input there, and append that plain file after the join.
+
+### What reading `n` off frame 0 leaves open
+
+The input's `n` comes from its frame 0, and the frames actually copied are taken on trust. A frame
+in the middle of the range holding a count of its own is therefore copied into the interior of the
+result, where record lookup divides by a count that no longer holds — Rule 1, realised on a file
+that was correct before the command ran. No compressor here writes such a file; another writer may.
+
+**Comparing two frames does not close this, it moves it.** The comparison `truncate` and `append`
+make reads frames `0` and `F-2`, so a count that drifts anywhere else passes it just the same. The
+only check that closes it is counting **every frame of the copied range**, and that decompresses the
+range — the cost the byte copy exists to avoid. So it is a choice the caller makes rather than a
+price the operation always pays:
+
+```
+enum RangeCheck { FirstFrame, EveryFrame }
+```
+
+`FirstFrame` is the default and is what the cost below assumes. `EveryFrame` is
+`--check-input-frames` on the CLI. The range rather than the whole input, because frames outside it
+do not reach the result. The frame the range ends at may hold fewer than `n` when it is the frame
+the input ends with; that one becomes the last frame of the result, which is where a short frame
+belongs.
+
+The target keeps its own two-frame comparison unconditionally, as every destructive operation does.
+Its interior is not re-read here for the same reason `truncate` does not re-read it: the frames
+already on disk are not moved, so what is wrong with them was wrong before.
 
 Cost: the size of the copied range, plus one frame of the target decompressed to establish that it
-is full.
+is full — and, since the target is destructive, the two frames its separator validation compares and
+the input's frame 0, which is where its `n` is read. One more where the range does not end on a
+frame boundary the seek table can place by arithmetic. Under `EveryFrame`, the range as well.
 
 ## Uses
 

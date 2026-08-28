@@ -11,6 +11,7 @@ damage, worst first.
 
 - [ ] [A file that cannot be opened panics instead of being reported](#a-file-that-cannot-be-opened-panics-instead-of-being-reported)
 - [ ] [`inspect` panics on a frame that fails to decode](#inspect-panics-on-a-frame-that-fails-to-decode)
+- [ ] [A record count near `u64::MAX` overflows while the range is placed](#a-record-count-near-u64max-overflows-while-the-range-is-placed)
 
 ## Not reproduced
 
@@ -78,6 +79,22 @@ $ seekzstdsep cat records.seek.zst --from 999999 --cnt 1 ; echo $?   # 1, "Error
 ```
 
 Fixed by `?` at both sites. Neither is reached by any current test.
+
+### A record count near `u64::MAX` overflows while the range is placed
+
+`frame_range` places the end of a range with `(from + c) % n` (`src/edit.rs:764`), which overflows
+before the arm three lines below can refuse it with `from.saturating_add(c)`. A debug build panics;
+a release build wraps and lands on a refusal by accident.
+
+```sh
+seekzstdsep copy-range events.jsonl.seek.zst out.seek.zst --from 8 --cnt 18446744073709551615
+seekzstdsep append a.seek.zst b.seek.zst --input-seekable --input-from 8 --input-cnt 18446744073709551615
+# => thread 'main' panicked at src/edit.rs:764: attempt to add with overflow
+```
+
+`--from` has to be a frame boundary or the earlier refusal fires first. Both subcommands reach the
+same expression; nothing is written either way, since the refusal and the panic both come before the
+first byte, so the damage is the panic itself.
 
 ### `inspect` panics on a frame that fails to decode
 
