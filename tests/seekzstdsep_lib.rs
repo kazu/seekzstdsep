@@ -633,3 +633,50 @@ fn test_compress_does_not_cut_a_frame_at_two_mib() {
     assert_framing(&out_path, &[7, 7]);
     assert_decompresses_to(&out_path, &records.concat());
 }
+
+/// The level in `CompressOptions` has to reach the encoder: levels 1 and 19 disagree on the
+/// output bytes, while both outputs still hold the input.
+#[test]
+fn test_compression_level_reaches_the_encoder() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let records: Vec<u8> = (0..200)
+        .map(|i| {
+            format!("{{\"id\":{i},\"msg\":\"the quick brown fox jumps over the lazy dog\"}}\n")
+        })
+        .collect::<String>()
+        .into_bytes();
+    let raw = temp_dir.path().join("in.jsonl");
+    std::fs::write(&raw, &records).expect("Failed to write input");
+
+    let compress_at = |level: i32, name: &str| -> std::path::PathBuf {
+        let out_path = temp_dir.path().join(name);
+        let mut input = File::open(&raw).expect("Failed to open input");
+        seekzstdsep::compress_to_seekable_zst_with_opts(
+            &mut input,
+            &mut std::io::sink(),
+            4096,
+            true,
+            b"\n",
+            None,
+            Some(seekzstdsep::CompressOptions {
+                out_dir: Some(temp_dir.path().to_path_buf()),
+                out_path: Some(out_path.clone()),
+                level,
+                ..Default::default()
+            }),
+        )
+        .expect("Failed to compress");
+        out_path
+    };
+
+    let fast = compress_at(1, "fast.seek.zst");
+    let high = compress_at(19, "high.seek.zst");
+
+    assert_decompresses_to(&fast, &records);
+    assert_decompresses_to(&high, &records);
+    assert_ne!(
+        std::fs::read(&fast).expect("Failed to read output"),
+        std::fs::read(&high).expect("Failed to read output"),
+        "levels 1 and 19 wrote identical bytes, so the level never reached the encoder"
+    );
+}

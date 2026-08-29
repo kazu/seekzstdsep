@@ -20,6 +20,7 @@ stdin and the result goes to stdout. Useful options:
 | `-l, --limit-multiplier <N>` | How far past `--frame-size` to search for a separator (default 4) |
 | `--rm` | Delete the input file after a successful conversion |
 | `--no-check` | Leave the per-frame content checksum out (it is written by default) |
+| `--level <N>` | Zstandard compression level (default: zstd's default, 3) |
 
 `--frame-size` is a target, not a hard bound — a frame ends at the next separator past it, so byte
 sizes vary while the record count per frame stays fixed. Leaving the defaults alone is fine for most
@@ -94,7 +95,9 @@ Adds the records to the end of the file in place. The frame a file ends with gen
 records than the rest, so appending after it would leave a short frame in the interior, where record
 lookup divides by a count that no longer holds. That frame is decoded and cut again together with
 the new records instead, so every frame but the last comes back holding the count the file was built
-with. Nothing before it is read or written.
+with. Nothing before it is read or written. `--level <N>` is the Zstandard compression level of the
+frames this writes (default: zstd's default, 3); the frames before them keep whatever they were
+written with, which the file does not record.
 
 A file whose last byte is not the separator ends in a fragment rather than in a record, and joining
 would merge that fragment with the first appended record. `append` refuses; pass
@@ -120,8 +123,8 @@ seekzstdsep append events.jsonl.seek.zst more.seek.zst --input-seekable --input-
 Neither file is decompressed and nothing is re-encoded, so the cost is the size of the range rather
 than of either file — which is what `cat more.seek.zst | seekzstdsep append …` would pay instead.
 `--input-from` and `--input-cnt` bound the part of the input to take, in records; they serve
-`--input-seekable` alone. `--insert-separator` is rejected alongside it rather than ignored, since a
-byte copy writes nothing at the seam.
+`--input-seekable` alone. `--insert-separator` and `--level` are rejected alongside it rather than
+ignored, since a byte copy writes nothing at the seam and re-encodes nothing.
 
 The frames have to fit together as they stand, so this refuses unless
 

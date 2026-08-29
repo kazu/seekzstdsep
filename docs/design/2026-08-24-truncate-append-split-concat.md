@@ -202,7 +202,7 @@ on a file that ends in a fragment.
 append(f: &mut File, input: AppendInput<impl Read>, separator: &[u8]) -> Result<()>
 
 enum AppendInput<'a, R> {
-    Records { data: R, on_missing: OnMissingSeparator },
+    Records { data: R, on_missing: OnMissingSeparator, level: i32 },
     Frames { input: &'a File, from: u64, cnt: Option<u64>, check: RangeCheck },
 }
 ```

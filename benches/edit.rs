@@ -24,8 +24,8 @@ use std::hint::black_box;
 use std::path::PathBuf;
 
 use seekzstdsep::{
-    Alignment, CompressOptions, OnMissingSeparator, RangeCheck, SeparatorCheck, append_frames,
-    append_records, compress_to_seekable_zst_with_opts, copy_range, count_frames,
+    Alignment, CompressOptions, CompressionLevel, OnMissingSeparator, RangeCheck, SeparatorCheck,
+    append_frames, append_records, compress_to_seekable_zst_with_opts, copy_range, count_frames,
 };
 use zeekstd::SeekTable;
 
@@ -199,6 +199,7 @@ fn append_to(c: &mut Criterion) {
                     body.as_slice(),
                     SEPARATOR,
                     OnMissingSeparator::Refuse,
+                    CompressionLevel::default(),
                 )
                 .expect("failed to append records")
             },
