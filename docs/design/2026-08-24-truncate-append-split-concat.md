@@ -3,7 +3,7 @@
 **Status:** `truncate`, `append` (records and `--input-seekable`) and `copy-range` are implemented
 in `src/edit.rs`. `split`, `concat` and `compress --align` were designed here and dropped; see
 [What was dropped](#what-was-dropped).
-**Date:** 2026-08-24, revised 2026-08-28
+**Date:** 2026-08-24, revised 2026-08-29
 
 Operations that modify or derive from an existing file, all working at frame boundaries and never
 rewriting the interior. `truncate` and `append` came first. The two that were to follow, `split` and
@@ -180,13 +180,12 @@ truncate(f: &mut File, record_len: u64, separator: &[u8]) -> Result<()>
 1. Validate the separator, obtaining `n`. Decompress the last data frame to get the current total.
 2. Refuse if `record_len` exceeds the total. Refuse if `record_len == 0`; a zero-frame file
    makes `seek_table_decomp_frames` return `None` and panics every reader.
-3. `k = record_len / n`, `rem = record_len % n`.
-4. If `rem != 0`, decode frame `k` and encode its first `rem` records as one frame.
-5. `set_len(frame_end_comp(k-1))`, then append the re-encoded frame if there is one.
-6. Append a fresh table built from entries `0..k` and the re-encoded frame if there is one.
+3. Refuse unless the cut lands on a frame boundary: `record_len` a multiple of `n` that does not
+   fall inside a last frame holding a count of its own.
+4. `set_len(frame_end_comp(k-1))` with `k = record_len / n`.
+5. Append a fresh table built from entries `0..k`.
 
-Nothing before `frame_end_comp(k-1)` is read or written. `k == 0` — keeping fewer records than one
-frame holds — cuts at 0, so the re-encoded frame becomes the whole file.
+Nothing is re-encoded, and nothing before `frame_end_comp(k-1)` is read or written.
 
 Cost: at most one frame decoded and re-encoded.
 
@@ -389,6 +388,13 @@ choice.
 Dividing files finely enough also bounds the cost of a count-changing update above.
 
 ## What was dropped
+
+`truncate` originally cut anywhere: a cut inside a frame decoded that frame and re-encoded its
+first records as a short replacement, the one place the operation compressed anything. Every
+composition in this document cuts at a boundary — `copy-range` refuses a start off one — and a
+boundary cut drops a trailing fragment or short frame together with the frame that holds it, so
+the re-encode served no pattern. It went in 2026-08-29, and with it the question of what
+compression level a re-encoded frame should use.
 
 `split` wrote the back half itself and shortened `f` in place. `copy-range` plus `truncate` does the
 same with one non-destructive operation and one existing one, so there was nothing left for it to do.

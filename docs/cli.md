@@ -51,9 +51,10 @@ count is measured on the first and last few frames and assumed for the rest; pas
 
 ## Truncate
 
-Shortens the file in place to its first `--records` records, cutting on a record boundary. Picking
-that number means knowing how many records the file holds: `inspect` reports the record count of
-every frame, and their sum is the record count of the file.
+Shortens the file in place to its first `--records` records, cutting at a frame boundary: the
+count has to be a multiple of the records per frame, which `inspect` reports as `cnt_of_sep` of
+any frame but the last. Picking that number means knowing how many records the file holds:
+`inspect` reports the record count of every frame, and their sum is the record count of the file.
 
 How you add them up depends on the shell. In bash or zsh, with `jq`:
 
@@ -75,8 +76,8 @@ Then cut to a number you picked from that:
 seekzstdsep truncate events.jsonl.seek.zst --records 10000
 ```
 
-Only the frame the cut falls inside is re-encoded, and nothing before it is read or written. The
-seek table is rebuilt in full, so that part is linear in the number of frames.
+The frames past the cut are dropped and nothing is re-encoded or rewritten before it. The seek
+table is rebuilt in full, so that part is linear in the number of frames.
 
 Destructive — clone the file first if the original matters, which `cp --reflink=auto` does in about a
 millisecond where the filesystem supports it. The separator is validated against the file before

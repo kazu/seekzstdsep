@@ -50,9 +50,6 @@ fn assert_truncated_to_with(path: &Path, separator: &[u8], expected: &[u8]) {
     assert_decompresses_to(path, expected);
 }
 
-// Two whole frames and 16 records of the third, so the third is re-encoded.
-const TRUNCATE_INSIDE: usize = 2 * FIXTURE_RECORDS_PER_FRAME + 16;
-
 #[test]
 fn test_truncate_at_a_frame_boundary() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
@@ -67,37 +64,17 @@ fn test_truncate_at_a_frame_boundary() {
 }
 
 #[test]
-fn test_truncate_inside_a_frame() {
-    let temp_dir = tempdir().expect("Failed to create temp dir");
-    let out_path = compress_fixture(temp_dir.path());
-    let records = fixture_records();
-
-    truncate_file(&out_path, TRUNCATE_INSIDE as u64, b"\n").expect("Failed to truncate");
-
-    assert_framing(
-        &out_path,
-        &[FIXTURE_RECORDS_PER_FRAME, FIXTURE_RECORDS_PER_FRAME, 16],
-    );
-    assert_truncated_to(&out_path, &records[..TRUNCATE_INSIDE].concat());
-}
-
-#[test]
 fn test_truncate_keeps_records_addressable() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
     let out_path = compress_fixture(temp_dir.path());
     let records = fixture_records();
+    let kept = 2 * FIXTURE_RECORDS_PER_FRAME;
 
-    truncate_file(&out_path, TRUNCATE_INSIDE as u64, b"\n").expect("Failed to truncate");
+    truncate_file(&out_path, kept as u64, b"\n").expect("Failed to truncate");
 
-    let kept = &records[..TRUNCATE_INSIDE];
-    // Inside frame 0, across the 0/1 boundary, at the start of frame 1, and in the re-encoded frame.
-    for (from, cnt) in [
-        (0usize, 3usize),
-        (116, 3),
-        (117, 2),
-        (TRUNCATE_INSIDE - 1, 1),
-    ] {
-        assert_cat_returns(&out_path, kept, from, cnt);
+    // Inside frame 0, across the 0/1 boundary, at the start of frame 1, and the last record kept.
+    for (from, cnt) in [(0usize, 3usize), (116, 3), (117, 2), (kept - 1, 1)] {
+        assert_cat_returns(&out_path, &records[..kept], from, cnt);
     }
 }
 
@@ -111,7 +88,8 @@ fn test_truncate_keeps_the_prefix_byte_for_byte() {
         .expect("Failed to inspect zst file");
     let untouched = frames[1].comp_end as usize;
 
-    truncate_file(&out_path, TRUNCATE_INSIDE as u64, b"\n").expect("Failed to truncate");
+    truncate_file(&out_path, 2 * FIXTURE_RECORDS_PER_FRAME as u64, b"\n")
+        .expect("Failed to truncate");
 
     let after = std::fs::read(&out_path).expect("Failed to read compressed file");
     assert!(
@@ -121,7 +99,7 @@ fn test_truncate_keeps_the_prefix_byte_for_byte() {
     assert_eq!(
         after[..untouched],
         before[..untouched],
-        "truncate rewrote bytes before the frame it re-encodes"
+        "truncate rewrote bytes before the cut"
     );
 }
 
@@ -131,14 +109,27 @@ fn test_truncate_drops_a_trailing_fragment() {
     // The fixture with the last record's separator removed: 599 records and a fragment after them.
     let records = fixture_records_upto(FIXTURE_RECORDS, false);
     let out_path = compress_body(temp_dir.path(), "fragment", &records.concat());
-    let kept = FIXTURE_RECORDS - 1;
+    let kept = 5 * FIXTURE_RECORDS_PER_FRAME;
 
-    // Truncating to the record count the file already holds is not a no-op here: the fragment is
-    // not a record and the result has to end with a separator.
+    // The fragment shares the last frame with the records before it, so dropping it is dropping
+    // that frame: the cut is the last boundary before the fragment.
     truncate_file(&out_path, kept as u64, b"\n").expect("Failed to truncate");
 
-    assert_framing(&out_path, &[117, 117, 117, 117, 117, 14]);
+    assert_framing(&out_path, &[FIXTURE_RECORDS_PER_FRAME; 5]);
     assert_truncated_to(&out_path, &records[..kept].concat());
+}
+
+#[test]
+fn test_truncate_refuses_a_cut_inside_a_frame() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let out_path = compress_fixture(temp_dir.path());
+
+    // Two whole frames and 16 records of the third.
+    let err = assert_refused(&out_path, 250, b"\n");
+    assert!(
+        err.to_string().contains("frame boundary"),
+        "refused, but not for the cut missing a frame boundary: {err}"
+    );
 }
 
 #[test]
@@ -209,17 +200,12 @@ fn test_truncate_refuses_a_file_with_fewer_than_three_frames() {
 }
 
 #[test]
-fn test_truncate_to_less_than_one_frame() {
+fn test_truncate_refuses_less_than_one_frame() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
     let out_path = compress_fixture(temp_dir.path());
-    let records = fixture_records();
 
-    // No frame survives whole, so the cut is at byte 0 and the re-encoded frame is the only one.
-    truncate_file(&out_path, 10, b"\n").expect("Failed to truncate");
-
-    assert_framing(&out_path, &[10]);
-    assert_truncated_to(&out_path, &records[..10].concat());
-    assert_cat_returns(&out_path, &records[..10], 7, 3);
+    // The first boundary is a whole frame, so no shorter length can remain.
+    assert_refused(&out_path, 10, b"\n");
 }
 
 #[test]
@@ -267,8 +253,9 @@ fn test_truncate_a_last_frame_larger_than_the_others() {
         &[5, 5, 10],
     );
 
-    // Every length the file can be cut to, since the frame the cut lands in is what goes wrong.
-    for keep in 1..=20usize {
+    // The boundaries are the ends of the two uniform frames. A multiple of 5 inside the oversized
+    // last frame is not one, and neither is the end of the file it makes.
+    for keep in [5usize, 10] {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let out_path = uneven_file(temp_dir.path(), &format!("keep-{keep}"), &records);
 
@@ -276,6 +263,11 @@ fn test_truncate_a_last_frame_larger_than_the_others() {
             .unwrap_or_else(|e| panic!("truncate to {keep} records failed: {e}"));
 
         assert_truncated_to(&out_path, &records[..keep].concat());
+    }
+    for keep in [3u64, 15, 20] {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let out_path = uneven_file(temp_dir.path(), &format!("refuse-{keep}"), &records);
+        assert_refused(&out_path, keep, b"\n");
     }
 }
 
@@ -291,7 +283,6 @@ fn test_truncate_a_last_frame_larger_than_the_others_refuses_out_of_range() {
 
 #[test]
 fn test_truncate_with_a_multi_byte_separator() {
-    // The cut ends just past a separator, so the separator's length is part of the position.
     const SEP: &[u8] = b"-=-";
     let records: Vec<Vec<u8>> = (0..10)
         .map(|i| format!("record {i}-=-").into_bytes())
@@ -309,11 +300,10 @@ fn test_truncate_with_a_multi_byte_separator() {
     );
     assert_framing_with(&out_path, SEP, &[4, 4, 2]);
 
-    // Six records is one whole frame and two of the second, so the second is re-encoded.
-    truncate_file(&out_path, 6, SEP).expect("Failed to truncate");
+    truncate_file(&out_path, 4, SEP).expect("Failed to truncate");
 
-    assert_framing_with(&out_path, SEP, &[4, 2]);
-    assert_truncated_to_with(&out_path, SEP, &records[..6].concat());
+    assert_framing_with(&out_path, SEP, &[4]);
+    assert_truncated_to_with(&out_path, SEP, &records[..4].concat());
 }
 
 #[test]
@@ -327,39 +317,9 @@ fn test_truncate_with_one_record_per_frame() {
     );
     assert_framing(&out_path, &[1; 5]);
 
-    // Every frame holds one record, so the remainder is always zero and no frame is re-encoded.
+    // Every frame holds one record, so every count is a frame boundary.
     truncate_file(&out_path, 3, b"\n").expect("Failed to truncate");
 
     assert_framing(&out_path, &[1; 3]);
     assert_truncated_to(&out_path, &records[..3].concat());
-}
-
-#[test]
-fn test_truncate_keeps_the_checksum_the_file_already_had() {
-    let temp_dir = tempdir().expect("Failed to create temp dir");
-    let out_path = compress_fixture(temp_dir.path());
-
-    truncate_file(&out_path, 250, b"\n").expect("Failed to truncate");
-
-    assert_framing(&out_path, &[117, 117, 16]);
-    let flags = frame_checksum_flags(&out_path);
-    assert!(
-        flags.iter().all(|&on| on),
-        "truncate dropped the checksum from a frame: {flags:?}"
-    );
-}
-
-#[test]
-fn test_truncate_adds_no_checksum_to_a_file_written_without_one() {
-    let temp_dir = tempdir().expect("Failed to create temp dir");
-    let out_path = compress_fixture_with_checksum(temp_dir.path(), false);
-
-    truncate_file(&out_path, 250, b"\n").expect("Failed to truncate");
-
-    assert_framing(&out_path, &[117, 117, 16]);
-    let flags = frame_checksum_flags(&out_path);
-    assert!(
-        flags.iter().all(|&on| !on),
-        "truncate added a checksum to a frame: {flags:?}"
-    );
 }

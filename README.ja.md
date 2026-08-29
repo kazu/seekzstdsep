@@ -47,9 +47,10 @@ seekzstdsep cat events.jsonl.seek.zst --from 10000 --cnt 3   # --from は 0 始�
 seekzstdsep inspect events.jsonl.seek.zst                    # フレームごとの範囲とレコード数
 ```
 
-`truncate` と `append` は既存のファイルをその場で編集し、再エンコードするのは編集が落ちたフレーム
-だけです。`append --input-seekable` で別の seekable ファイルを継ぐときは 1 バイトも再エンコード
-しません。`copy-range` はレコード範囲を別のファイルへ書き出し、フレームはそのままコピーします。
+`truncate` はファイルをフレーム境界までその場で切り詰め、何も再エンコードしません。`append` は
+その場で追記し、再エンコードするのは編集が落ちたフレームだけです。`append --input-seekable` で
+別の seekable ファイルを継ぐときは 1 バイトも再エンコードしません。`copy-range` はレコード範囲を
+別のファイルへ書き出し、フレームはそのままコピーします。
 全サブコマンドとフラグは `docs/cli.md` にあります。
 
 ライブラリとしては、任意の `Read`/`Write` の組に対して圧縮できます:
