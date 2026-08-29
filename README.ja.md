@@ -1,5 +1,9 @@
 # seekzstdsep
 
+[![Crates.io](https://img.shields.io/crates/v/seekzstdsep.svg)](https://crates.io/crates/seekzstdsep)
+[![CI](https://img.shields.io/github/actions/workflow/status/kazu/seekzstdsep/rust.yml?branch=0.114%2Fnu)](https://github.com/kazu/seekzstdsep/actions/workflows/rust.yml)
+[![nushell](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkazu%2Fseekzstdsep%2F0.114%2Fnu%2F.github%2Fworkflows%2Frust.yml&query=%24.env.NU_VERSION&label=nushell&color=4E9A06)](https://github.com/kazu/seekzstdsep/tree/0.114/nu/nu_plugin_zstdsep)
+
 **圧縮されたファイルから、その手前を展開せずに任意のレコードを読み出します。**
 
 | ブランチ | nushell | タグ |
