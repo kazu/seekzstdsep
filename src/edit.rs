@@ -66,14 +66,14 @@ pub enum SeparatorCheck {
 
 /// Shortens `f` to `record_len` records, which is the length that remains, not the number removed.
 ///
-/// The cut lands immediately after a separator, so the result always ends with one and a trailing
-/// fragment is dropped. `f` is rewritten from the frame the cut falls in; earlier bytes are left
-/// byte for byte as they were.
+/// The cut is a frame boundary, so the frames that stay are left byte for byte as they were and
+/// nothing is re-encoded. Dropping a trailing fragment or a short last frame is truncating to the
+/// last boundary before it.
 ///
 /// # Errors
 ///
-/// Refuses a `record_len` of 0 or one past the records `f` holds, along with the refusals every
-/// operation in [this module](crate::edit) shares.
+/// Refuses a `record_len` of 0, one past the records `f` holds, or one that does not land on a
+/// frame boundary, along with the refusals every operation in [this module](crate::edit) shares.
 pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Result<()> {
     let (finder, table) = open_target(f, separator)?;
     let frames = table.num_frames();
@@ -81,8 +81,7 @@ pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Resu
     let mut reader = FrameReader::new(&*f, &table)?;
     let n = validate_separator(&mut reader, &finder)?;
     let last = frame_records(&mut reader, &finder, frames - 1)?;
-    let before_last = n * u64::from(frames - 1);
-    let total = before_last + last;
+    let total = n * u64::from(frames - 1) + last;
 
     if record_len == 0 {
         bail!("refusing to truncate to 0 records: a file of no frames cannot be read back");
@@ -90,46 +89,24 @@ pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Resu
     if record_len > total {
         bail!("refusing to truncate to {record_len} records: the file holds {total}");
     }
-
-    // A cut past every frame but the last one falls inside the last, whatever it holds. Dividing
-    // there would place it by a record count the last frame does not have to obey.
-    let (k, rem) = if record_len > before_last {
-        (u64::from(frames - 1), record_len - before_last)
-    } else {
-        (record_len / n, record_len % n)
-    };
-
-    let tail = if rem == 0 {
-        None
-    } else {
-        let frame = reader.take_frame(k as u32)?;
-        let Some(end) = record::nth_end(&frame, &finder, separator.len(), rem as usize - 1) else {
-            bail!("frame {k} holds fewer than the {rem} records the truncation cuts it at");
-        };
-        Some(encode_frame(
-            &frame[..end],
-            frame_has_checksum(f, &table, k as u32)?,
-        )?)
-    };
+    // The last frame does not have to hold n records, so a multiple of n past the other frames is
+    // not a boundary either.
+    let k = record_len / n;
+    if record_len % n != 0 || (k >= u64::from(frames) && last != n) {
+        bail!(
+            "refusing to truncate to {record_len} records: the cut has to land on a frame \
+             boundary, and a frame holds {n} records"
+        );
+    }
 
     // Every read of `f` is done, and the writes below need it exclusively. The decoder holds it
     // until it is dropped.
     drop(reader);
 
-    let cut = if k == 0 {
-        0
-    } else {
-        table.frame_end_comp(k as u32 - 1)?
-    };
-    cut_at(f, cut)?;
+    cut_at(f, table.frame_end_comp(k as u32 - 1)?)?;
 
     let mut out = SeekTable::new();
     log_frames(&mut out, &table, k as u32)?;
-    if let Some((bytes, c_size, d_size)) = tail {
-        f.write_all(&bytes)?;
-        out.log_frame(c_size, d_size)?;
-    }
-
     write_seek_table(f, out)
 }
 

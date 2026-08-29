@@ -52,7 +52,8 @@ for frame in inspect(path, b"\n").unwrap() {
 
 ## Truncate
 
-`truncate` shortens a file in place, and needs it open for both reading and writing:
+`truncate` shortens a file in place to a whole number of frames — the record count has to be a
+multiple of the records per frame — and needs it open for both reading and writing:
 
 ```rust,no_run
 use seekzstdsep::truncate;

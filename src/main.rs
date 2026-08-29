@@ -46,7 +46,8 @@ struct InspectArgs {
 struct TruncateArgs {
     #[arg(value_name = "FILE", required = true)]
     zstfile: PathBuf,
-    /// Records to keep. The resulting length, not the number removed.
+    /// Records to keep: the resulting length, not the number removed. Has to be a multiple of the
+    /// records per frame, so the cut lands on a frame boundary
     #[arg(short, long, required = true)]
     records: u64,
     #[arg(short, long, default_value = "\n")]

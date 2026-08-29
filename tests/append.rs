@@ -378,46 +378,21 @@ fn test_append_after_truncate() {
     let out_path = compress_fixture(temp_dir.path());
     let records = fixture_records();
 
-    // Truncation leaves a short final frame, which is the state append has to handle anyway.
+    // Truncation cuts at a boundary, so append finds a file whose last frame is full.
     let mut f = OpenOptions::new()
         .read(true)
         .write(true)
         .open(&out_path)
         .expect("Failed to open the compressed file");
-    truncate(&mut f, 250, b"\n").expect("Failed to truncate");
+    truncate(&mut f, 351, b"\n").expect("Failed to truncate");
     drop(f);
-    assert_framing(&out_path, &framing_for(250));
+    assert_framing(&out_path, &framing_for(351));
 
     let added: Vec<u8> = records[..20].concat();
     append_records(&out_path, &added).expect("Failed to append");
 
-    assert_framing(&out_path, &framing_for(270));
-    assert_decompresses_to(&out_path, &[records[..250].concat(), added].concat());
-}
-
-#[test]
-fn test_append_then_truncate_restores_the_file() {
-    let temp_dir = tempdir().expect("Failed to create temp dir");
-    let out_path = compress_fixture(temp_dir.path());
-    let records = fixture_records();
-    let before = std::fs::read(&out_path).expect("Failed to read compressed file");
-
-    append_records(&out_path, &records[..40].concat()).expect("Failed to append");
-    let mut f = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&out_path)
-        .expect("Failed to open the compressed file");
-    truncate(&mut f, FIXTURE_RECORDS as u64, b"\n").expect("Failed to truncate");
-    drop(f);
-
-    assert_framing(&out_path, &framing_for(FIXTURE_RECORDS));
-    assert_decompresses_to(&out_path, &records.concat());
-    assert_eq!(
-        std::fs::read(&out_path).expect("Failed to read compressed file"),
-        before,
-        "a round trip through append and truncate did not restore the file"
-    );
+    assert_framing(&out_path, &framing_for(371));
+    assert_decompresses_to(&out_path, &[records[..351].concat(), added].concat());
 }
 
 #[test]
