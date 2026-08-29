@@ -1,5 +1,9 @@
 # seekzstdsep
 
+[![Crates.io](https://img.shields.io/crates/v/seekzstdsep.svg)](https://crates.io/crates/seekzstdsep)
+[![CI](https://img.shields.io/github/actions/workflow/status/kazu/seekzstdsep/rust.yml?branch=master)](https://github.com/kazu/seekzstdsep/actions/workflows/rust.yml)
+[![nushell](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkazu%2Fseekzstdsep%2Fmaster%2F.github%2Fworkflows%2Frust.yml&query=%24.env.NU_VERSION&label=nushell&color=4E9A06)](https://github.com/kazu/seekzstdsep/tree/master/nu_plugin_zstdsep)
+
 **Reads any record out of a compressed file without decompressing what comes before it.**
 
 | branch | nushell | tag |
