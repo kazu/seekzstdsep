@@ -19,10 +19,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose --workspace
-    - name: Run tests
-      run: cargo test --verbose --workspace
+    - name: Run the gate
+      run: make ci
 
   hook:
     # nu_plugin_zstdsep/tests/hook.nu drives a real nushell rather than the plugin
@@ -37,7 +35,5 @@ jobs:
         name=nu-${NU_VERSION}-x86_64-unknown-linux-gnu
         curl -fsSL "https://github.com/nushell/nushell/releases/download/${NU_VERSION}/${name}.tar.gz" | tar xz -C /tmp
         echo "/tmp/${name}" >> "$GITHUB_PATH"
-    - name: Build the plugin
-      run: cargo build --verbose -p nu_plugin_zstdsep
     - name: Run the hook tests
-      run: nu nu_plugin_zstdsep/tests/run-hook.nu
+      run: make hook
