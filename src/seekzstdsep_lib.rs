@@ -230,22 +230,10 @@ pub fn compress_to_seekable_zst_with_opts<R: ReadSeekable, W: Write>(
                         line_num_per_frame = line_num_per_frame / 2;
                     }
 
-                    opts = if p_opts.clone().is_some() {
-                        let o_opts = p_opts.clone().unwrap();
-                        Some(CompressOptions {
-                            max_of_separator: Some(line_num_per_frame),
-                            out_dir: o_opts.out_dir.clone(),
-                            out_path: o_opts.out_path.clone(),
-                            checksum: o_opts.checksum,
-                        })
-                    } else {
-                        Some(CompressOptions {
-                            max_of_separator: Some(line_num_per_frame),
-                            out_dir: None,
-                            out_path: None,
-                            checksum: true,
-                        })
-                    };
+                    opts = Some(CompressOptions {
+                        max_of_separator: Some(line_num_per_frame),
+                        ..p_opts.clone().unwrap_or_default()
+                    });
                     reader
                         .seek(std::io::SeekFrom::Start(0))
                         .expect("fail to seek(start)"); // 読み込み位置をリセット
