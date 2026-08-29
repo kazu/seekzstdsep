@@ -1,13 +1,9 @@
-//! The two functions `cat_data` reads a frame through, before and after they were taken through
-//! `record` and `decompressed_range`.
+//! The readers a range read and `into_records` go through, before and after.
 //!
-//! Two rather than three: `cnt_of_separetor_in_frame_via_buf` is called by the second of them, and
-//! `decompressed_range` by both, so neither needs a case of its own.
-//!
-//! The `before` cases below are the bodies as they stood at the branch point, kept here rather than
-//! in the crate: if they measure the same, nothing has to be added to the crate to keep measuring
-//! them.
-//!
+//! The `before` cases are the bodies as they stood at the branch point, kept here rather than in
+//! the crate: if they measure the same, nothing has to be added to the crate to keep measuring
+//! them. Comparing against an older implementation than that means building it from its own
+//! checkout and running the two binaries alternately.
 //!
 //! **Read both orders before believing a difference.** criterion measures the cases in a group one
 //! after the other, and the one measured second comes out slower by a percent or so whatever it is.
@@ -20,13 +16,13 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use memchr::memmem::Finder;
 use std::hint::black_box;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use seekzstdsep::seekzstdsep_lib::{
-    cnt_of_separetor_in_frame, lines_between_by_separator_in_frame, seek_table_decomp_frames,
+    cnt_of_separetor_in_frame, records_between_by_separator_in_frame, seek_table_decomp_frames,
 };
-use seekzstdsep::{CompressOptions, compress_to_seekable_zst_with_opts};
+use seekzstdsep::{CompressOptions, RecordReader, compress_to_seekable_zst_with_opts};
 use zeekstd::Decoder;
 
 const RECORDS: usize = 200_000;
@@ -35,7 +31,7 @@ const SEPARATOR: &[u8] = b"\n";
 
 // ------------------------------------------------------- the bodies as they were
 
-/// `lines_between_by_separator_in_frame` at the branch point: one `read`, and the record boundaries
+/// `records_between_by_separator_in_frame` at the branch point: one `read`, and the record boundaries
 /// spelled out. The discarded read amount is what it did; see `docs/bugs.md`.
 #[allow(clippy::unused_io_amount)]
 fn before_lines_between<'a>(
@@ -98,6 +94,50 @@ fn before_cnt_in_frame<'a>(
     Ok(finder.find_iter(&data).count())
 }
 
+/// `cat` at the branch point: open the file once, read the seek table, place the range over
+/// frames, decode the whole of that span into one buffer, cut the records out of it and hand back
+/// the `Vec`. `cat_data` was this, down to reading frame 0 and the range through the one decoder
+/// it opened — opening a second one here would charge this case an open and a seek table the
+/// `after` case does not pay.
+#[allow(clippy::unused_io_amount)]
+fn before_cat(path: &PathBuf, from: usize, cnt: usize, finder: &Finder) -> anyhow::Result<Vec<u8>> {
+    let mut d = decoder(path);
+    let frames = seek_table_decomp_frames(&d).expect("no frames");
+    let sep_cnt = {
+        let (start, len) = frames[0];
+        before_cnt_in_frame(&mut d, start, len, finder)?
+    };
+
+    // Where the range lands, as the reader placed it before this branch.
+    let total = sep_cnt * frames.len();
+    let frame_idx = frames.len() * from / total;
+    let idx_in_frame = from % sep_cnt;
+    let start = frames[frame_idx].0;
+    let end_idx = (frames.len() * (from + cnt + 1) / total).min(frames.len() - 1);
+    let len = frames[end_idx].0 + frames[end_idx].1 - start;
+
+    // The whole span in one buffer, one read, as decompressed_range did.
+    d.seek(SeekFrom::Start(start))?;
+    let mut data = vec![0u8; len as usize];
+    d.read(&mut data[..])?;
+
+    let begin = if idx_in_frame == 0 {
+        0
+    } else {
+        finder
+            .find_iter(&data)
+            .nth(idx_in_frame - 1)
+            .map(|p| p + SEPARATOR.len())
+            .unwrap_or(data.len())
+    };
+    let end = finder
+        .find_iter(&data[begin..])
+        .nth(cnt - 1)
+        .map(|p| begin + p + SEPARATOR.len())
+        .unwrap_or(data.len());
+    Ok(data[begin..end].to_vec())
+}
+
 // ------------------------------------------------------- fixture
 
 fn fixture() -> (tempfile::TempDir, PathBuf) {
@@ -158,7 +198,7 @@ fn read(c: &mut Criterion) {
             .expect("cannot count") as u64
     };
     {
-        let mut group = c.benchmark_group("lines_between_by_separator_in_frame");
+        let mut group = c.benchmark_group("records_between_by_separator_in_frame");
         let mut d = decoder(&path);
         group.bench_function("before", |b| {
             b.iter(|| {
@@ -177,7 +217,7 @@ fn read(c: &mut Criterion) {
         let mut d = decoder(&path);
         group.bench_function("after", |b| {
             b.iter(|| {
-                lines_between_by_separator_in_frame(
+                records_between_by_separator_in_frame(
                     &mut d,
                     black_box(frame_start),
                     black_box(frame_len),
@@ -206,7 +246,6 @@ fn read(c: &mut Criterion) {
                 .unwrap()
             })
         });
-        let mut d = decoder(&path);
         group.bench_function("after", |b| {
             b.iter(|| {
                 cnt_of_separetor_in_frame(
@@ -219,6 +258,44 @@ fn read(c: &mut Criterion) {
                 .unwrap()
             })
         });
+        group.finish();
+    }
+
+    {
+        // The whole file, record by record.
+        let mut group = c.benchmark_group("into_records");
+        group.sample_size(20);
+        group.bench_function("after", |b| {
+            b.iter(|| {
+                let reader =
+                    RecordReader::open(path.clone(), SEPARATOR).expect("Failed to open reader");
+                black_box(reader.into_records().filter(|r| r.is_ok()).count())
+            })
+        });
+        group.finish();
+    }
+
+    {
+        // What `cat` does: a record range out of the middle of the file, to a sink. `before` is
+        // the whole-span read that `cat_data` returned a `Vec` from; `after` writes the
+        // window's own bytes and never builds that `Vec`.
+        let mut group = c.benchmark_group("cat");
+        let from = RECORDS / 2;
+        for cnt in [3usize, 1000] {
+            group.bench_function(format!("before/{cnt}"), |b| {
+                b.iter(|| {
+                    let out = before_cat(&path, black_box(from), black_box(cnt), &finder).unwrap();
+                    std::io::sink().write_all(&out).unwrap();
+                })
+            });
+            group.bench_function(format!("after/{cnt}"), |b| {
+                b.iter(|| {
+                    let mut reader =
+                        RecordReader::open(path.clone(), SEPARATOR).expect("Failed to open reader");
+                    reader.records(black_box(from), black_box(cnt)).unwrap()
+                })
+            });
+        }
         group.finish();
     }
 }

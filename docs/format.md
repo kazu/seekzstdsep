@@ -89,7 +89,7 @@ half-written file at the destination.
 Three things break if the invariant stops holding. All of them are silent failures — they produce
 wrong answers rather than errors.
 
-**1. `cat_data` record lookup.** It reads the separator count of frame 0, then computes:
+**1. `RecordReader::records` record lookup.** It reads the separator count of frame 0, then computes:
 
 ```text
 total_sep_cnt = sep_cnt * frames.len()
@@ -148,8 +148,8 @@ invariant doing its job.
 ## Rules for changes
 
 1. **Do not break the uniform separator count.** If a change can produce frames with differing
-   counts, `cat_data` returns wrong records with no error. Whatever the change, the body of the file
-   must keep a uniform count, or the lookup path must be replaced at the same time.
+   counts, `RecordReader::records` returns wrong records with no error. Whatever the change, the
+   body of the file must keep a uniform count, or the lookup path must be replaced at the same time.
 2. **A partial frame is only ever allowed at the end.** Consumers special-case the tail; they do not
    special-case the middle.
 3. **Frame byte sizes are not a contract.** They drift by design. Nothing should assume a frame's

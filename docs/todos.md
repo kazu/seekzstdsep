@@ -45,8 +45,8 @@ write finds no seek table, and one reading near the tail sees the frame replaced
 
 ### Separate metadata from lookup
 
-`cat_data` opens the file, reads the whole seek table, and decompresses frame 0 to count separators
-on every call. Two of those are already recorded in `docs/performances.md`.
+A reader opened per range opens the file, reads the whole seek table, and decompresses frame 0 to
+count separators on every call. Two of those are already recorded in `docs/performances.md`.
 
 A reader that acquires the metadata once and answers many lookups fixes both, and makes parallel
 reads possible: the metadata is immutable and shareable, so each thread can hold its own file handle

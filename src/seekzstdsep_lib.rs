@@ -1,7 +1,7 @@
 //! Separator-aware seekable Zstandard compression.
 //!
 //! Frames are cut at separator boundaries. With `is_same_separator_cnt` set, every frame holds the
-//! same number of separators, which is what lets [`cat_data`] locate a record by division instead
+//! same number of separators, which is what lets [`crate::RecordReader`] locate a record by division instead
 //! of scanning. See `docs/format.md` for the format and the invariant.
 //!
 //! [`convert_to_seekable_zst_reader`] streams from any `Read` to any `Write`.
@@ -13,7 +13,6 @@ use std::{
     path::PathBuf,
 };
 
-use crate::RecordReader;
 use crate::record;
 
 pub use zeekstd::CompressionLevel;
@@ -36,7 +35,7 @@ pub(crate) const READ_FRAME_BUF_SIZE: usize = READ_BUF_SIZE;
 
 /// Shorthand for [`convert_to_seekable_zst_reader`] with `is_same_separator_cnt` set to `false`.
 ///
-/// Frames are cut by size alone, so [`cat_data`] cannot locate records in the result.
+/// Frames are cut by size alone, so [`crate::RecordReader`] cannot locate records in the result.
 pub fn convert_text_to_seekable_zst_reader<R: Read, W: Write>(
     reader: R,
     writer: W,
@@ -78,7 +77,7 @@ impl Default for CompressOptions {
 /// Compresses `reader` to `writer`, cutting frames at `separator`.
 ///
 /// Set `is_same_separator_cnt` to hold the separator count uniform across frames, which
-/// [`cat_data`] requires. `frame_size` is a target in bytes, not a bound; see
+/// [`crate::RecordReader`] requires. `frame_size` is a target in bytes, not a bound; see
 /// [`convert_to_seekable_zst_reader_with_opts`] for framing and for the lower bound on
 /// `frame_size * limit_multiplier`.
 ///
@@ -830,7 +829,7 @@ fn old_encode_frame_on_same_separator_cnt<W: Write>(
 // MENTION: the buffer and both bounds could be a chain — take + read_to_end, then find_iter().nth()
 // with map_or for start and end — dropping is_none, and_then and unwrap. Would also settle the
 // FIXME above, which on its own changes nothing: see docs/bugs.md.
-pub fn lines_between_by_separator_in_frame<'a>(
+pub fn records_between_by_separator_in_frame<'a>(
     decoder: &mut Decoder<'a, std::fs::File>,
     frame_start: u64,
     frame_len: u64,
@@ -867,14 +866,40 @@ pub fn lines_between_by_separator_in_frame<'a>(
     Ok(data[start.unwrap()..end_pos].to_vec())
 }
 
-/// Superseded by [`lines_between_by_separator_in_frame`], which fixes the name and takes a count
+/// Renamed to [`records_between_by_separator_in_frame`]: a separator is not a newline, so what
+/// lies between two of them is a record rather than a line.
+#[deprecated(
+    since = "0.4.90",
+    note = "renamed to records_between_by_separator_in_frame"
+)]
+pub fn lines_between_by_separator_in_frame<'a>(
+    decoder: &mut Decoder<'a, std::fs::File>,
+    frame_start: u64,
+    frame_len: u64,
+    start_sep_cnt: u64,
+    cnt_of_sep: u64,
+    finder: &Finder,
+    separator: &[u8],
+) -> anyhow::Result<Vec<u8>> {
+    records_between_by_separator_in_frame(
+        decoder,
+        frame_start,
+        frame_len,
+        start_sep_cnt,
+        cnt_of_sep,
+        finder,
+        separator,
+    )
+}
+
+/// Superseded by [`records_between_by_separator_in_frame`], which fixes the name and takes a count
 /// of separators in place of `end_sep_cnt`.
 ///
 /// `end_sep_cnt` is inclusive, so this returns `end_sep_cnt - start_sep_cnt + 1` records. Kept for
 /// compatibility, down to dropping the last byte when the closing separator is not found.
 #[deprecated(
     since = "0.3.0",
-    note = "renamed to lines_between_by_separator_in_frame, which takes a count of separators instead of an inclusive end index"
+    note = "renamed to records_between_by_separator_in_frame, which takes a count of separators instead of an inclusive end index"
 )]
 pub fn lines_betwee_by_separator_in_frame<'a>(
     decoder: &mut Decoder<'a, std::fs::File>,
@@ -886,7 +911,7 @@ pub fn lines_betwee_by_separator_in_frame<'a>(
     separator: &[u8],
 ) -> anyhow::Result<Vec<u8>> {
     let cnt_of_sep = end_sep_cnt.saturating_sub(start_sep_cnt) + 1;
-    let mut out = lines_between_by_separator_in_frame(
+    let mut out = records_between_by_separator_in_frame(
         decoder,
         frame_start,
         frame_len,
@@ -1035,33 +1060,6 @@ pub fn seek_table_decomp_frames<'a>(
         prev_end = end;
     }
     Some(out)
-}
-
-/// Reads `cnt` records starting at `from`, or fewer when the file holds fewer. Errors when `from`
-/// is past the last record.
-///
-/// The frame is found by dividing `from` by the separator count of frame 0, so this depends on
-/// every frame holding the same count. On a file compressed without that invariant it returns the
-/// wrong records and reports no error.
-///
-/// # Examples
-///
-/// ```no_run
-/// use seekzstdsep::cat_data;
-/// use std::path::PathBuf;
-///
-/// let records = cat_data(PathBuf::from("events.jsonl.seek.zst"), 10_000, 3, b"\n")?;
-/// print!("{}", String::from_utf8_lossy(&records));
-/// # Ok::<(), anyhow::Error>(())
-/// ```
-pub fn cat_data(
-    input: PathBuf,
-    from: usize,
-    cnt: usize,
-    separator: &[u8],
-) -> anyhow::Result<Vec<u8>> {
-    let file = std::fs::File::open(&input).expect("fail open");
-    RecordReader::from_file(input, file, separator)?.records(from, cnt)
 }
 
 use serde::{Deserialize, Serialize};

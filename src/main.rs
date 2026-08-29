@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use seekzstdsep::cli::{ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
 use seekzstdsep::{
-    AppendInput, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck, append,
-    cat_data, seekzstdsep_lib::inspect_with_opts, truncate,
+    AppendInput, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck, RecordReader,
+    append, seekzstdsep_lib::inspect_with_opts, truncate,
 };
 use std::io::{self, Read, Write};
 
@@ -130,12 +130,9 @@ fn main() -> anyhow::Result<()> {
     // body here can only be reached by spawning the binary.
     match cli.command {
         Commands::Cat(args) => {
-            let outs = cat_data(
-                args.input.expect("not found"),
-                args.from,
-                args.cnt,
-                args.separator.as_bytes(),
-            )?;
+            let outs =
+                RecordReader::open(args.input.expect("not found"), args.separator.as_bytes())?
+                    .records(args.from, args.cnt)?;
 
             let mut stdout = io::stdout().lock(); // ロックを取得すると高速
             stdout.write_all(&outs).expect("write fail"); // バイナリをそのまま書き出す

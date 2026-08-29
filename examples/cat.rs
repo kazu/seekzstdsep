@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use seekzstdsep::cat_data;
+use seekzstdsep::RecordReader;
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
     let from: usize = args.next().expect(usage).parse()?;
     let cnt: usize = args.next().expect(usage).parse()?;
 
-    let records = cat_data(path, from, cnt, b"\n")?;
+    let records = RecordReader::open(path, b"\n")?.records(from, cnt)?;
     print!("{}", String::from_utf8_lossy(&records));
 
     Ok(())

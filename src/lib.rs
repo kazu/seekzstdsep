@@ -28,7 +28,6 @@ pub use seekzstdsep_lib::CompressOptions;
 pub use seekzstdsep_lib::CompressionLevel;
 pub use seekzstdsep_lib::InspectOptions;
 pub use seekzstdsep_lib::ReadSeekable;
-pub use seekzstdsep_lib::cat_data;
 pub use seekzstdsep_lib::compress_to_seekable_zst;
 pub use seekzstdsep_lib::compress_to_seekable_zst_with_opts;
 pub use seekzstdsep_lib::convert_text_to_seekable_zst_reader;

@@ -3,7 +3,7 @@ use common::*;
 
 use rand::Rng;
 use seekzstdsep::InspectOptions;
-use seekzstdsep::cat_data;
+use seekzstdsep::RecordReader;
 use seekzstdsep::convert_to_seekable_zst_reader;
 use seekzstdsep::seekzstdsep_lib::{inspect_with_opts, seek_table_decomp_frames};
 
@@ -395,7 +395,7 @@ fn test_deprecated_wrapper_keeps_its_result() {
     let frames = seek_table_decomp_frames(&decoder).expect("no frames");
 
     // end_sep_cnt is inclusive, so 0 through 5 is six records. That is what this name has always
-    // returned and what forwarding to lines_between_by_separator_in_frame has to keep returning.
+    // returned and what forwarding to records_between_by_separator_in_frame has to keep returning.
     let (start, len) = frames[0];
     let got = lines_betwee_by_separator_in_frame(&mut decoder, start, len, 0, 5, &finder, b"\n")
         .expect("Failed to read records");
@@ -406,7 +406,7 @@ fn test_deprecated_wrapper_keeps_its_result() {
     );
 
     // Asking for more separators than the region holds drops the last byte. That is a defect, kept
-    // here on purpose; lines_between_by_separator_in_frame returns the byte.
+    // here on purpose; records_between_by_separator_in_frame returns the byte.
     let (idx, &(start, len)) = frames
         .iter()
         .enumerate()
@@ -431,7 +431,9 @@ fn test_cat_fixture_from_past_the_last_record() {
     let out_path = compress_fixture(temp_dir.path());
 
     // `from` itself is out of range, so there is no record to start at. An error, not a panic.
-    let result = cat_data(out_path, FIXTURE_RECORDS * 10, 1, b"\n");
+    let result = RecordReader::open(out_path, b"\n")
+        .expect("Failed to open reader")
+        .records(FIXTURE_RECORDS * 10, 1);
     assert!(
         result.is_err(),
         "expected an error, got {} bytes",
@@ -465,7 +467,9 @@ fn assert_boundary_is_sound(label: &str, records: &[Vec<u8>]) {
     assert!(matched, "{label}: decompressed data doesn't match original");
 
     let last = records.len() - 1;
-    let got = cat_data(out_path, last, 1, b"\n")
+    let got = RecordReader::open(out_path, b"\n")
+        .expect("Failed to open reader")
+        .records(last, 1)
         .unwrap_or_else(|e| panic!("{label}: failed to read record {last}: {e}"));
     assert_eq!(
         String::from_utf8_lossy(&got),
@@ -556,7 +560,8 @@ fn test_a_flipped_byte_in_a_frame_is_caught() {
     let out_path = compress_body(dir.path(), "random", &body);
     corrupt_frame_zero(&out_path, true);
 
-    let err = cat_data(out_path, 0, CORRUPT_RECORDS, b"\n")
+    let err = RecordReader::open(out_path, b"\n")
+        .and_then(|mut reader| reader.records(0, CORRUPT_RECORDS))
         .expect_err("a corrupted frame decompressed without complaint");
     assert!(
         err.to_string().to_lowercase().contains("checksum"),
@@ -571,7 +576,10 @@ fn test_a_flipped_byte_goes_unnoticed_without_a_checksum() {
     let out_path = compress_body_with_checksum(dir.path(), "random", &body, false);
     corrupt_frame_zero(&out_path, false);
 
-    let got = cat_data(out_path, 0, CORRUPT_RECORDS, b"\n").expect("Failed to cat data");
+    let got = RecordReader::open(out_path, b"\n")
+        .expect("Failed to open reader")
+        .records(0, CORRUPT_RECORDS)
+        .expect("Failed to cat data");
     assert_ne!(
         got, body,
         "the corruption did not reach the data, so this proves nothing about the checksum"
@@ -592,7 +600,7 @@ fn test_compress_options_default_writes_a_checksum() {
 ///
 /// zeekstd ends a frame there by default, wherever that lands, so the frame gets split at a byte
 /// count rather than at a record count and the interior of the file ends up with frames of
-/// differing record counts — which `cat_data` resolves by dividing. See `docs/bugs.md`.
+/// differing record counts — which the reader resolves by dividing. See `docs/bugs.md`.
 #[test]
 fn test_compress_does_not_cut_a_frame_at_two_mib() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
@@ -678,5 +686,33 @@ fn test_compression_level_reaches_the_encoder() {
         std::fs::read(&fast).expect("Failed to read output"),
         std::fs::read(&high).expect("Failed to read output"),
         "levels 1 and 19 wrote identical bytes, so the level never reached the encoder"
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_renamed_wrapper_forwards_to_the_new_name() {
+    use memchr::memmem::Finder;
+    use seekzstdsep::seekzstdsep_lib::{
+        lines_between_by_separator_in_frame, records_between_by_separator_in_frame,
+    };
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let out_path = compress_fixture(temp_dir.path());
+    let finder = Finder::new(b"\n");
+
+    let mut decoder =
+        Decoder::new(File::open(&out_path).expect("Failed to open output")).expect("no decoder");
+    let frames = seek_table_decomp_frames(&decoder).expect("no frames");
+    let (start, len) = frames[0];
+
+    let old = lines_between_by_separator_in_frame(&mut decoder, start, len, 3, 5, &finder, b"\n")
+        .expect("Failed to read records through the old name");
+    let new = records_between_by_separator_in_frame(&mut decoder, start, len, 3, 5, &finder, b"\n")
+        .expect("Failed to read records through the new name");
+    assert_eq!(
+        String::from_utf8_lossy(&old),
+        String::from_utf8_lossy(&new),
+        "the old name stopped forwarding to records_between_by_separator_in_frame"
     );
 }

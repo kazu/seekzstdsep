@@ -45,7 +45,7 @@ Performance costs that are not defects live in `docs/performances.md`.
 
 ### A file that cannot be opened panics instead of being reported
 
-`src/seekzstdsep_lib.rs:735` in `cat_data` and `:815` in `inspect_with_opts`, both
+`src/seekzstdsep_lib.rs` in `inspect_with_opts`,
 
 ```rust
 std::fs::File::open(&input).expect("fail open")
@@ -61,9 +61,9 @@ $ echo $?
 101
 ```
 
-**Why this is wrong rather than a matter of taste: both functions are public API.**
-`src/lib.rs:16` and `:22` re-export them, and both are declared to return a `Result`. A caller that
-writes `match cat_data(..)` cannot catch this — the process is gone before the `match` is reached.
+**Why this is wrong rather than a matter of taste: the function is public API.**
+`src/lib.rs` re-exports it and it is declared to return a `Result`. A caller that writes
+`match inspect(..)` cannot catch this — the process is gone before the `match` is reached.
 The signature promises a reported failure and the body does not deliver one. In a binary,
 `.expect()` on a path the user typed would be defensible; in a library entry point it takes the
 choice away from the caller.
@@ -74,11 +74,11 @@ violated invariant panics; I/O and user input return `Err`. A missing path is th
 The inconsistency is visible from the shell, since both are the same class of user error:
 
 ```
-$ seekzstdsep cat missing.zst --from 0 --cnt 1     ; echo $?   # 101, backtrace note
+$ seekzstdsep inspect missing.zst                        ; echo $?   # 101, backtrace note
 $ seekzstdsep cat records.seek.zst --from 999999 --cnt 1 ; echo $?   # 1, "Error: record 999999 is past the end"
 ```
 
-Fixed by `?` at both sites. Neither is reached by any current test.
+Fixed by `?` at the site. It is not reached by any current test.
 
 ### A record count near `u64::MAX` overflows while the range is placed
 
@@ -120,22 +120,22 @@ instead of mapping straight to `InspectResult`.
 
 ### Wrong records are returned without an error when the invariant does not hold
 
-Stated in the rustdoc on `cat_data`. The frame is located by dividing `from` by frame 0's separator
-count, which is only valid if every frame holds the same count.
+Stated in the rustdoc on `RecordReader::records`. The frame is located by dividing `from` by frame
+0's separator count, which is only valid if every frame holds the same count.
 
 Settled by compressing a file with `is_same_separator_cnt` false, reading a known record index from
 it, and comparing against the same index in the uncompressed source.
 
 ### A frame 0 with no separator divides by zero
 
-`src/reader.rs:143-155`, in `RecordReader::records`, which `cat_data` is now a wrapper over.
+`src/reader.rs`, in `RecordReader::records_request`, which every record range goes through.
 
 `total_sep_cnt = self.sep_cnt * self.frames.len()` (143) is the divisor for `frame_idx` (144) and
 `end_frame_idx` (154), and `from % self.sep_cnt` (151) divides by `sep_cnt` directly.
 
 Settled by running `cat` with a `--separator` that does not occur in the file, or on a file whose
 first frame holds no complete record. The nushell plugin refuses that separator before it gets
-here (`nu_plugin_zstdsep/src/source.rs`); `cat_data` does not.
+here (`nu_plugin_zstdsep/src/source.rs`); `RecordReader` does not.
 
 ### The frame is read with a single `read` call
 
