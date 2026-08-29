@@ -9,8 +9,8 @@ use nu_protocol::{
     Type, shell_error::generic::GenericError,
 };
 use seekzstdsep::{
-    CompressOptions, OnMissingSeparator, append_records, compress_to_seekable_zst_with_opts,
-    convert_to_seekable_zst_reader_with_opts,
+    CompressOptions, CompressionLevel, OnMissingSeparator, append_records,
+    compress_to_seekable_zst_with_opts, convert_to_seekable_zst_reader_with_opts,
 };
 use tempfile::spooled_tempfile;
 
@@ -178,8 +178,14 @@ impl PluginCommand for Save {
                 .write(true)
                 .open(&path)
                 .map_err(|e| io_failed(&path, &e, call))?;
-            append_records(&mut file, records, separator.as_bytes(), on_missing)
-                .map_err(|e| failed(&path, &e.to_string(), call))?;
+            append_records(
+                &mut file,
+                records,
+                separator.as_bytes(),
+                on_missing,
+                CompressionLevel::default(),
+            )
+            .map_err(|e| failed(&path, &e.to_string(), call))?;
         } else {
             compress(&path, &mut records, &separator, call)?;
         }
@@ -231,6 +237,7 @@ fn compress(
         out_dir: path.parent().map(PathBuf::from),
         out_path: Some(path.to_path_buf()),
         checksum: !call.has_flag("no-check")?,
+        level: CompressionLevel::default(),
     };
     // The output file is opened here and handed over as well: the library delivers to `out_path`
     // by reflink and falls back to writing this handle when the filesystem has no reflink.

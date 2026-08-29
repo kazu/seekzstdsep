@@ -16,6 +16,7 @@ use std::{
 use crate::RecordReader;
 use crate::record;
 
+pub use zeekstd::CompressionLevel;
 use zeekstd::{Decoder, EncodeOptions, Encoder, FrameSizePolicy, SEEKABLE_MAX_FRAME_SIZE};
 
 use memchr::memmem::Finder;
@@ -57,6 +58,8 @@ pub struct CompressOptions {
     pub out_path: Option<PathBuf>,
     /// Whether each frame ends with a 32-bit content checksum.
     pub checksum: bool,
+    /// Zstandard compression level. 0 uses the zstd default.
+    pub level: i32,
 }
 
 /// Everything derived or unset, except `checksum`, which is written unless a caller says otherwise.
@@ -67,6 +70,7 @@ impl Default for CompressOptions {
             out_dir: None,
             out_path: None,
             checksum: true,
+            level: CompressionLevel::default(),
         }
     }
 }
@@ -476,7 +480,13 @@ pub fn new_convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
     } else {
         limit_multiplier.unwrap()
     };
-    let mut encoder = frame_encoder(&mut writer, opt_args.as_ref().is_none_or(|o| o.checksum))?;
+    let mut encoder = frame_encoder(
+        &mut writer,
+        opt_args.as_ref().is_none_or(|o| o.checksum),
+        opt_args
+            .as_ref()
+            .map_or(CompressionLevel::default(), |o| o.level),
+    )?;
     let buf = Vec::with_capacity(frame_size * limit_multiplier); // 全データを連続配置
     let mut frame_end = 0; // 現在のフレームの終端位置（セパレータ除く）
     let mut max_of_separator: i64 = -1; // 同一セパレータの最大数（is_same_separator_cntがtrueの場合）
@@ -903,9 +913,11 @@ pub fn lines_betwee_by_separator_in_frame<'a>(
 pub(crate) fn frame_encoder<W: Write>(
     writer: W,
     checksum: bool,
+    level: i32,
 ) -> anyhow::Result<Encoder<'static, W>> {
     Ok(EncodeOptions::new()
         .checksum_flag(checksum)
+        .compression_level(level)
         .frame_size_policy(FrameSizePolicy::Uncompressed(
             SEEKABLE_MAX_FRAME_SIZE as u32,
         ))

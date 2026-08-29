@@ -25,7 +25,15 @@ fn append_file(
         .write(true)
         .open(path)
         .expect("Failed to open the compressed file");
-    append(&mut f, AppendInput::Records { data, on_missing }, separator)
+    append(
+        &mut f,
+        AppendInput::Records {
+            data,
+            on_missing,
+            level: 0,
+        },
+        separator,
+    )
 }
 
 /// The common case: newline separated, and a file that ends with one.
@@ -1084,6 +1092,7 @@ fn test_append_refuses_a_zstd_stream_that_arrives_a_byte_at_a_time() {
         AppendInput::Records {
             data: OneByteAtATime(&compressed[..]),
             on_missing: OnMissingSeparator::Refuse,
+            level: 0,
         },
         b"\n",
     )
@@ -1097,5 +1106,43 @@ fn test_append_refuses_a_zstd_stream_that_arrives_a_byte_at_a_time() {
         before,
         std::fs::read(&target).expect("Failed to read the target"),
         "a refused append rewrote the file"
+    );
+}
+
+/// The level given to append has to reach the encoder: appending the same records at levels 1 and
+/// 19 disagrees on the appended bytes, while both results still hold the records.
+#[test]
+fn test_append_level_reaches_the_encoder() {
+    let records = fixture_records();
+    let added: Vec<u8> = records[..300].concat();
+
+    let append_at = |level: i32| -> Vec<u8> {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let out_path = compress_fixture(temp_dir.path());
+        let mut f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&out_path)
+            .expect("Failed to open the compressed file");
+        append(
+            &mut f,
+            AppendInput::Records {
+                data: added.as_slice(),
+                on_missing: OnMissingSeparator::Refuse,
+                level,
+            },
+            b"\n",
+        )
+        .expect("Failed to append");
+        drop(f);
+
+        assert_decompresses_to(&out_path, &[records.concat(), added.clone()].concat());
+        std::fs::read(&out_path).expect("Failed to read compressed file")
+    };
+
+    assert_ne!(
+        append_at(1),
+        append_at(19),
+        "levels 1 and 19 wrote identical bytes, so the level never reached the encoder"
     );
 }

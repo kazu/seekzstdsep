@@ -120,6 +120,8 @@ pub enum AppendInput<'a, R> {
         data: R,
         /// What to do with a file that ends in a fragment rather than in a record.
         on_missing: OnMissingSeparator,
+        /// Zstandard compression level of the frames this writes. 0 uses the zstd default.
+        level: i32,
     },
     /// A record range of another seekable file, whose frames are copied as compressed bytes.
     ///
@@ -175,7 +177,11 @@ pub fn append<R: Read>(
     separator: &[u8],
 ) -> anyhow::Result<()> {
     match input {
-        AppendInput::Records { data, on_missing } => append_records(f, data, separator, on_missing),
+        AppendInput::Records {
+            data,
+            on_missing,
+            level,
+        } => append_records(f, data, separator, on_missing, level),
         AppendInput::Frames {
             input,
             from,
@@ -192,7 +198,8 @@ pub fn append<R: Read>(
 ///
 /// The last data frame generally holds fewer records than the rest, so appending after it would
 /// leave a short frame in the interior. It is decoded, joined with `data` and cut again instead.
-/// An empty `data` rewrites nothing.
+/// An empty `data` rewrites nothing. The frames this writes are compressed at `level`, 0 being
+/// the zstd default; the frames before them keep whatever they were written with.
 ///
 /// # Errors
 ///
@@ -204,6 +211,7 @@ pub fn append_records(
     mut data: impl Read,
     separator: &[u8],
     on_missing: OnMissingSeparator,
+    level: i32,
 ) -> anyhow::Result<()> {
     let (finder, table) = open_target(f, separator)?;
 
@@ -281,7 +289,7 @@ pub fn append_records(
         Some(group) => (group, true),
         None => (cutter.take_remainder(), false),
     };
-    let (first_bytes, first_comp, first_decomp) = encode_frame(&first, checksum)?;
+    let (first_bytes, first_comp, first_decomp) = encode_frame(&first, checksum, level)?;
 
     let cut = table.frame_start_comp(last)?;
     cut_at(f, cut)?;
@@ -292,7 +300,7 @@ pub fn append_records(
     out.log_frame(first_comp, first_decomp)?;
 
     if whole {
-        let mut encoder = frame_encoder(&mut *f, checksum)?;
+        let mut encoder = frame_encoder(&mut *f, checksum, level)?;
         let mut frames = 0;
         while let Some(group) = cutter.next_group()? {
             encoder.write_all(&group)?;
@@ -888,9 +896,9 @@ fn frame_records(reader: &mut FrameReader, finder: &Finder, index: u32) -> anyho
 
 /// Compresses `data` as a single frame, returning its bytes and the sizes its seek table entry
 /// needs.
-fn encode_frame(data: &[u8], checksum: bool) -> anyhow::Result<(Vec<u8>, u32, u32)> {
+fn encode_frame(data: &[u8], checksum: bool, level: i32) -> anyhow::Result<(Vec<u8>, u32, u32)> {
     let mut out = Vec::new();
-    let mut encoder = frame_encoder(&mut out, checksum)?;
+    let mut encoder = frame_encoder(&mut out, checksum, level)?;
 
     encoder.write_all(data)?;
     encoder.end_frame()?;

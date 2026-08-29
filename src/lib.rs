@@ -25,6 +25,7 @@ pub use edit::truncate;
 pub use reader::RecordIter;
 pub use reader::RecordReader;
 pub use seekzstdsep_lib::CompressOptions;
+pub use seekzstdsep_lib::CompressionLevel;
 pub use seekzstdsep_lib::InspectOptions;
 pub use seekzstdsep_lib::ReadSeekable;
 pub use seekzstdsep_lib::cat_data;

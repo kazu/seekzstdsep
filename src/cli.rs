@@ -11,7 +11,7 @@ use tempfile::spooled_tempfile;
 
 use crate::edit::{Alignment, SeparatorCheck, copy_range};
 use crate::seekzstdsep_lib::{
-    CompressOptions, ReadSeekable, compress_to_seekable_zst_with_opts,
+    CompressOptions, CompressionLevel, ReadSeekable, compress_to_seekable_zst_with_opts,
     convert_to_seekable_zst_reader_with_opts,
 };
 
@@ -142,6 +142,9 @@ pub struct ConvertArgs {
     /// Leave the 32-bit content checksum out of every frame (default: written)
     #[arg(long)]
     no_check: bool,
+    /// Zstandard compression level (default: zstd's default, 3)
+    #[arg(long)]
+    level: Option<i32>,
 }
 
 /// Runs `compress` over `stdin` and `stdout`, which are parameters so a caller can supply its own.
@@ -169,6 +172,7 @@ pub fn run_compress(
     let mut comp_opts = CompressOptions {
         out_path: output_path.clone(),
         checksum: !args.no_check,
+        level: args.level.unwrap_or(CompressionLevel::default()),
         ..Default::default()
     };
 

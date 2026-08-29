@@ -88,6 +88,7 @@ append(
     AppendInput::Records {
         data: File::open("more.jsonl").unwrap(),
         on_missing: OnMissingSeparator::Refuse,
+        level: 0,
     },
     b"\n",
 )
@@ -95,7 +96,8 @@ append(
 ```
 
 The records come from any `Read`. `OnMissingSeparator::Insert` writes a separator at the join
-instead of refusing a file that ends in a fragment.
+instead of refusing a file that ends in a fragment. `level` is the Zstandard compression level of
+the frames this writes, 0 the zstd default.
 
 `AppendInput::Frames` joins another seekable file instead, copying its frames as compressed bytes:
 

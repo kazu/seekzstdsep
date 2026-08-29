@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use seekzstdsep::cli::{ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
 use seekzstdsep::{
-    AppendInput, InspectOptions, OnMissingSeparator, RangeCheck, append, cat_data,
-    seekzstdsep_lib::inspect_with_opts, truncate,
+    AppendInput, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck, append,
+    cat_data, seekzstdsep_lib::inspect_with_opts, truncate,
 };
 use std::io::{self, Read, Write};
 
@@ -83,6 +83,9 @@ struct AppendArgs {
     /// copy exists to avoid
     #[arg(long, requires = "input_seekable")]
     check_input_frames: bool,
+    /// Zstandard compression level of the appended frames (default: zstd's default, 3)
+    #[arg(long, conflicts_with = "input_seekable")]
+    level: Option<i32>,
 }
 
 #[derive(Subcommand)]
@@ -175,6 +178,7 @@ fn main() -> anyhow::Result<()> {
                     } else {
                         OnMissingSeparator::Refuse
                     },
+                    level: args.level.unwrap_or(CompressionLevel::default()),
                 }
             };
             append(&mut file, input, args.separator.as_bytes())?;

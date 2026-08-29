@@ -957,3 +957,71 @@ fn test_append_subcommand_from_a_pipe_that_delivers_a_byte_at_a_time() {
         "the record delivered a byte at a time did not come back whole"
     );
 }
+
+/// `--level` has to reach the encoder: levels 1 and 19 disagree on the output bytes, while both
+/// outputs still hold the input.
+#[test]
+fn test_compress_level_reaches_the_encoder() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let (input, body) = small_input(temp_dir.path(), "in.jsonl");
+
+    let compress_at = |level: &str, name: &str| -> PathBuf {
+        let out_path = temp_dir.path().join(name);
+        let out = compress_cmd(&[
+            input.to_str().unwrap(),
+            out_path.to_str().unwrap(),
+            "--frame-size",
+            SMALL_FRAME_SIZE,
+            "--level",
+            level,
+        ])
+        .output()
+        .expect("Failed to run compress");
+        assert!(
+            out.status.success(),
+            "compress --level {level} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out_path
+    };
+
+    let fast = compress_at("1", "fast.seek.zst");
+    let high = compress_at("19", "high.seek.zst");
+
+    assert_usable(&fast, &body, SMALL_RECORDS);
+    assert_usable(&high, &body, SMALL_RECORDS);
+    assert_ne!(
+        std::fs::read(&fast).expect("Failed to read output"),
+        std::fs::read(&high).expect("Failed to read output"),
+        "levels 1 and 19 wrote identical bytes, so --level never reached the encoder"
+    );
+}
+
+/// `append --level` has to reach the encoder: appending the same records at levels 1 and 19
+/// disagrees on the appended bytes, while both results still hold the records.
+#[test]
+fn test_append_level_reaches_the_encoder() {
+    let append_at = |level: &str| -> Vec<u8> {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let out_path = compress_fixture(temp_dir.path());
+        let body = cat(&out_path, 0, 300);
+        let added = temp_dir.path().join("added.jsonl");
+        std::fs::write(&added, &body).expect("Failed to write the records to append");
+
+        let out = run_append(&out_path, &[added.to_str().unwrap(), "--level", level]);
+        assert!(
+            out.status.success(),
+            "append --level {level} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        assert_eq!(cat(&out_path, FIXTURE_RECORDS, 300), body);
+        std::fs::read(&out_path).expect("Failed to read output")
+    };
+
+    assert_ne!(
+        append_at("1"),
+        append_at("19"),
+        "levels 1 and 19 wrote identical bytes, so --level never reached the encoder"
+    );
+}
