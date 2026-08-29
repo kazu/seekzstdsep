@@ -1,4 +1,4 @@
-//! `RecordReader`: the same records `cat_data` returns, plus the ones it cannot address one at a
+//! `RecordReader`: the records a range read returns, plus the ones it cannot address one at a
 //! time.
 mod common;
 

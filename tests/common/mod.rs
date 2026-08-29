@@ -6,7 +6,7 @@
 
 use seekzstdsep::CompressOptions;
 use seekzstdsep::InspectOptions;
-use seekzstdsep::cat_data;
+use seekzstdsep::RecordReader;
 use seekzstdsep::compress_to_seekable_zst_with_opts;
 use seekzstdsep::edit::frame_has_checksum;
 use seekzstdsep::seekzstdsep_lib::{inspect_with_opts, seek_table_decomp_frames};
@@ -132,13 +132,16 @@ pub fn compress_fixture_with_checksum(dir: &Path, checksum: bool) -> PathBuf {
 
 pub fn assert_cat_returns(out_path: &Path, records: &[Vec<u8>], from: usize, cnt: usize) {
     assert_no_empty_frame(out_path, records.is_empty());
-    let got = cat_data(out_path.to_path_buf(), from, cnt, b"\n").expect("Failed to cat data");
+    let got = RecordReader::open(out_path.to_path_buf(), b"\n")
+        .expect("Failed to open reader")
+        .records(from, cnt)
+        .expect("Failed to cat data");
     let end = (from + cnt).min(records.len());
     let expected: Vec<u8> = records[from..end].concat();
     assert_eq!(
         String::from_utf8_lossy(&got),
         String::from_utf8_lossy(&expected),
-        "cat_data(from = {from}, cnt = {cnt}) returned the wrong records"
+        "records(from = {from}, cnt = {cnt}) returned the wrong records"
     );
 }
 

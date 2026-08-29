@@ -35,13 +35,13 @@ that passes `false`.
 Reading a record range back needs a real file, because it seeks:
 
 ```rust,no_run
-use seekzstdsep::{cat_data, inspect};
+use seekzstdsep::{RecordReader, inspect};
 use std::path::PathBuf;
 
 let path = PathBuf::from("events.jsonl.seek.zst");
 
 // Records starting at index 10000.
-let records: Vec<u8> = cat_data(path.clone(), 10000, 3, b"\n").unwrap();
+let records: Vec<u8> = RecordReader::open(path.clone(), b"\n").unwrap().records(10000, 3).unwrap();
 print!("{}", String::from_utf8_lossy(&records));
 
 // Per-frame layout.

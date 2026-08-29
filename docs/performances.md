@@ -61,7 +61,7 @@ and `append --input-seekable`, and `--check-input-frames`, which reads the whole
 
 ## The seek table is read in full on every call
 
-`Decoder::new` in `RecordReader::from_file` (`src/reader.rs:62`), which `cat_data` builds one of per
+`Decoder::new` in `RecordReader::from_file` (`src/reader.rs:62`), which a fresh reader builds one of per
 call, reads the entire seek table before anything else happens. Each entry is 8 bytes — 4 for the compressed size, 4 for the decompressed
 size, no checksum — plus 17 bytes of header and footer.
 
@@ -81,7 +81,7 @@ frame reads 9 kB of table alongside it at a million records, and 90 kB at ten mi
 `seek_table_decomp_frames` (`src/seekzstdsep_lib.rs:991`) loops over every frame and returns a
 `Vec<(u64, u64)>` holding all of them.
 
-`cat_data` uses three of those entries: `frames[0]`, `frames[frame_idx]` and
+`RecordReader::records_request` uses three of those entries: `frames[0]`, `frames[frame_idx]` and
 `frames[end_frame_idx]`. The rest are allocated, filled and dropped. 16 bytes per frame and a full
 pass over the table, on every call.
 
@@ -90,7 +90,7 @@ Does not vary with `--from`. Grows with the file.
 ## Frame 0 is decompressed on every call
 
 `RecordReader::from_file` derives the records-per-frame invariant by decompressing frame 0 and
-counting separators (`src/reader.rs:74-75`), and `cat_data` builds a reader per call.
+counting separators (`src/reader.rs:74-75`), and a caller that opens a reader per call pays it each time.
 
 On the benchmark fixture that is 65,579 bytes of decompression, on top of the 65 kB of the frame
 actually wanted. Every lookup decompresses two frames, and one of them is always frame 0.
@@ -101,8 +101,8 @@ that never changes.
 Does not vary with `--from` or with the file size.
 
 The reader keeps that frame, so `RecordReader::record` reads it from the cache. `RecordReader::records`
-does not: it goes through `lines_between_by_separator_in_frame`, which decompresses the range
-itself, so frame 0 is still decompressed twice on the `cat_data` path. Holding one reader open is
+does not: it goes through `records_between_by_separator_in_frame`, which decompresses the range
+itself, so frame 0 is still decompressed twice when a reader is opened per range. Holding one reader open is
 what removes all three costs above — see below.
 
 ## The frame checksum costs 4 bytes per frame

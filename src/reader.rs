@@ -1,11 +1,10 @@
 //! Reading records back out of a compressed file.
 //!
-//! [`cat_data`](crate::cat_data) is one call over one range, and pays for the open, the seek table
-//! and frame 0's separator count every time it is made. Reading record 10 and then record 11 pays
-//! for all three twice. [`RecordReader`] is those three held open, so a caller that reads one
-//! record at a time — the nushell plugin's cell paths, say — pays once.
+//! Opening a reader costs the open, the seek table and frame 0's separator count. A reader
+//! opened per range pays for all three every time. [`RecordReader`] is those three held open, so a
+//! caller that reads one record at a time — the nushell plugin's cell paths, say — pays once.
 //!
-//! The reader inherits the same-count-per-frame invariant that `cat_data` locates records by: a
+//! The reader inherits the same-count-per-frame invariant that it locates records by: a
 //! file compressed without it is read at the wrong offsets and reports no error. See
 //! `docs/format.md`.
 use std::{
@@ -19,13 +18,27 @@ use zeekstd::Decoder;
 
 use crate::record;
 use crate::seekzstdsep_lib::{
-    decompressed_range, lines_between_by_separator_in_frame, seek_table_decomp_frames,
+    decompressed_range, records_between_by_separator_in_frame, seek_table_decomp_frames,
 };
 
 /// The one frame kept decompressed, and which frame it is.
 struct CachedFrame {
     index: usize,
     data: Vec<u8>,
+}
+
+/// The arguments a read of a record range hands
+/// [`records_between_by_separator_in_frame`](crate::seekzstdsep_lib::records_between_by_separator_in_frame).
+///
+/// A record has no offset of its own — it is found by decoding from a frame boundary and counting
+/// separators — so the bytes to decode and the records to skip inside them travel together.
+struct RecordsRequest {
+    /// Offset in the decompressed stream to seek to: the start of the frame the range begins in.
+    start: u64,
+    /// Decompressed bytes readable from `start`, out to the end of the frame the range can reach.
+    len: u64,
+    /// Records to skip after seeking to `start`, before the first one asked for.
+    skip: u64,
 }
 
 /// A compressed file held open for reading records by index.
@@ -133,13 +146,13 @@ impl RecordReader {
         }
     }
 
-    /// `cnt` records from `from`, or fewer when the file holds fewer. This is what
-    /// [`cat_data`](crate::cat_data) returns.
+    /// What a read of `cnt` records from `from` has to ask
+    /// [`records_between_by_separator_in_frame`] for.
     ///
     /// # Errors
     ///
-    /// `from` being past the last frame, or a frame not decompressing.
-    pub fn records(&mut self, from: usize, cnt: usize) -> anyhow::Result<Vec<u8>> {
+    /// `from` being past the last frame.
+    fn records_request(&self, from: usize, cnt: usize) -> anyhow::Result<RecordsRequest> {
         let total_sep_cnt = self.sep_cnt * self.frames.len();
         let frame_idx = self.frames.len() * from / total_sep_cnt;
         if frame_idx >= self.frames.len() {
@@ -153,11 +166,27 @@ impl RecordReader {
 
         let end_frame_idx =
             (self.frames.len() * (from + cnt + 1) / total_sep_cnt).min(self.frames.len() - 1);
-        lines_between_by_separator_in_frame(
-            &mut self.decoder,
+        let len = self.frames[end_frame_idx].0 + self.frames[end_frame_idx].1 - start;
+        Ok(RecordsRequest {
             start,
-            self.frames[end_frame_idx].0 + self.frames[end_frame_idx].1 - start,
-            idx_in_frame as u64,
+            len,
+            skip: idx_in_frame as u64,
+        })
+    }
+
+    /// `cnt` records from `from`, or fewer when the file holds fewer. This is what
+    /// the CLI `cat` subcommand prints.
+    ///
+    /// # Errors
+    ///
+    /// `from` being past the last frame, or a frame not decompressing.
+    pub fn records(&mut self, from: usize, cnt: usize) -> anyhow::Result<Vec<u8>> {
+        let req = self.records_request(from, cnt)?;
+        records_between_by_separator_in_frame(
+            &mut self.decoder,
+            req.start,
+            req.len,
+            req.skip,
             cnt as u64,
             &self.finder,
             &self.separator,
