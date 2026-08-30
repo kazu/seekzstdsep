@@ -244,6 +244,26 @@ pub fn assert_decompresses_to(path: &Path, expected: &[u8]) {
     );
 }
 
+/// Records that do not compress, so a frame of them stays large after compression.
+pub fn incompressible_records(count: usize, per_record: usize) -> Vec<Vec<u8>> {
+    // A cheap xorshift rather than a dependency: what matters is only that zstd cannot shrink it.
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    (0..count)
+        .map(|_| {
+            let mut record = Vec::with_capacity(per_record + 1);
+            while record.len() < per_record {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                record.extend_from_slice(format!("{state:016x}").as_bytes());
+            }
+            record.truncate(per_record);
+            record.push(b'\n');
+            record
+        })
+        .collect()
+}
+
 /// Compresses one frame per group. The crate's own compressor cannot produce this: it closes every
 /// frame at the same record count, so its last frame always holds fewer than the rest.
 pub fn compress_frames(dir: &Path, label: &str, groups: &[Vec<u8>]) -> PathBuf {
