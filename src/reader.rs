@@ -28,6 +28,28 @@ struct CachedFrame {
     data: Vec<u8>,
 }
 
+/// The decoder, and the window records are read through.
+///
+/// The window owns the decoder rather than borrowing it: one that borrowed it could not outlive
+/// the call that built it, and a reader holds its window for as long as it is open. Everything
+/// that reads the file another way takes the decoder back through [`Self::decoder`].
+struct Lookup {
+    window: record::Reader<Take<Decoder<'static, File>>>,
+}
+
+impl Lookup {
+    fn new(decoder: Decoder<'static, File>) -> Self {
+        Self {
+            window: record::Reader::new(decoder.take(0)),
+        }
+    }
+
+    /// The decoder, for a caller that seeks it itself.
+    fn decoder(&mut self) -> &mut Decoder<'static, File> {
+        self.window.source_mut().get_mut()
+    }
+}
+
 /// The arguments a read of a record range hands
 /// [`records_between_by_separator_in_frame`](crate::seekzstdsep_lib::records_between_by_separator_in_frame).
 ///
@@ -48,7 +70,7 @@ struct RecordsRequest {
 /// [`Self::record`] last decompressed: consecutive indices in the same frame decompress it once.
 pub struct RecordReader {
     path: PathBuf,
-    decoder: Decoder<'static, File>,
+    lookup: Lookup,
     frames: Vec<(u64, u64)>,
     separator: Vec<u8>,
     finder: Finder<'static>,
@@ -78,7 +100,7 @@ impl RecordReader {
             .ok_or_else(|| anyhow::anyhow!("no frames in {}", path.display()))?;
         let mut reader = Self {
             path,
-            decoder,
+            lookup: Lookup::new(decoder),
             frames,
             separator: separator.to_vec(),
             finder: Finder::new(separator).into_owned(),
@@ -87,7 +109,7 @@ impl RecordReader {
         };
         let (start, len) = reader.frames[0];
         reader.sep_cnt = cnt_of_separetor_in_frame(
-            &mut reader.decoder,
+            reader.lookup.decoder(),
             start,
             len,
             &reader.finder,
@@ -124,7 +146,7 @@ impl RecordReader {
         let last = self.frames.len() - 1;
         let (start, len) = self.frames[last];
         let in_last = cnt_of_separetor_in_frame(
-            &mut self.decoder,
+            self.lookup.decoder(),
             start,
             len,
             &self.finder,
@@ -201,7 +223,7 @@ impl RecordReader {
     pub fn records(&mut self, from: usize, cnt: usize) -> anyhow::Result<Vec<u8>> {
         let req = self.records_request(from, cnt)?;
         records_between_by_separator_in_frame(
-            &mut self.decoder,
+            self.lookup.decoder(),
             req.start,
             req.len,
             req.skip,
@@ -225,7 +247,7 @@ impl RecordReader {
         dst: &mut impl Write,
     ) -> anyhow::Result<()> {
         let req = self.records_request(from, cnt)?;
-        let reader = record::region(&mut self.decoder, req.start, req.len)?;
+        let reader = record::region(self.lookup.decoder(), req.start, req.len)?;
         reader
             .records(&self.finder, self.separator.len())
             .skip_records(req.skip)?
@@ -245,7 +267,7 @@ impl RecordReader {
             armed: false,
             finder: self.finder,
             separator_len: self.separator.len(),
-            reader: record::Reader::new(self.decoder.take(0)),
+            reader: self.lookup.window,
         }
     }
 
@@ -253,16 +275,17 @@ impl RecordReader {
     ///
     /// The decoder this was reading frames through, rewound — no second open, no second seek
     /// table.
-    pub fn into_bytes(mut self) -> anyhow::Result<impl Read + Send + 'static> {
-        self.decoder.seek(SeekFrom::Start(0))?;
-        Ok(self.decoder)
+    pub fn into_bytes(self) -> anyhow::Result<impl Read + Send + 'static> {
+        let mut decoder = self.lookup.window.into_source().into_inner();
+        decoder.seek(SeekFrom::Start(0))?;
+        Ok(decoder)
     }
 
     /// Puts frame `index` in the cache, decompressing it unless it is the one already there.
     fn decompress_frame(&mut self, index: usize) -> anyhow::Result<()> {
         if self.cache.as_ref().map(|c| c.index) != Some(index) {
             let (start, len) = self.frames[index];
-            let data = decompressed_range(&mut self.decoder, start, len)?;
+            let data = decompressed_range(self.lookup.decoder(), start, len)?;
             self.cache = Some(CachedFrame { index, data });
         }
         Ok(())
@@ -300,13 +323,10 @@ impl Iterator for RecordIter {
             }
             if !self.armed {
                 let (start, len) = self.frames[self.frame];
-                let source = self.reader.source_mut();
-                if let Err(e) = source.get_mut().seek(SeekFrom::Start(start)) {
+                if let Err(e) = self.reader.seek_to(start, len) {
                     self.frame = self.frames.len();
-                    return Some(Err(e.into()));
+                    return Some(Err(e));
                 }
-                source.set_limit(len);
-                self.reader.reset();
                 self.armed = true;
             }
             match self

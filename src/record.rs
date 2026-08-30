@@ -9,7 +9,7 @@
 //! same. [`ends_whole`] is the test.
 
 use std::cell::{Ref, RefCell};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Take, Write};
 
 use memchr::memmem::Finder;
 
@@ -227,18 +227,17 @@ pub(crate) struct Run {
     pub(crate) count: u64,
 }
 
-/// A [`Reader`] over the decompressed bytes in `[start, start + len)`.
-///
-/// Seeking and bounding the decoder is what every caller that reads a region does, and they do it
-/// the same way.
+/// A [`Reader`] over the decompressed bytes in `[start, start + len)`, for a caller that only
+/// needs one for the length of a call. [`Reader::seek_to`] is the same move on a reader that
+/// outlives it.
 pub(crate) fn region<'d, 'z, S: zeekstd::Seekable>(
     decoder: &'d mut zeekstd::Decoder<'z, S>,
     start: u64,
     len: u64,
-) -> anyhow::Result<Reader<std::io::Take<&'d mut zeekstd::Decoder<'z, S>>>> {
-    use std::io::Seek;
-    decoder.seek(std::io::SeekFrom::Start(start))?;
-    Ok(Reader::new(decoder.take(len)))
+) -> anyhow::Result<Reader<Take<&'d mut zeekstd::Decoder<'z, S>>>> {
+    let mut reader = Reader::new(decoder.take(0));
+    reader.seek_to(start, len)?;
+    Ok(reader)
 }
 
 impl<R: Read> Reader<R> {
@@ -254,17 +253,15 @@ impl<R: Read> Reader<R> {
         }
     }
 
-    /// The source, for a caller that moves it to another region. Pair with [`Self::reset`].
+    /// The source, for a caller that reads it another way. What the window holds is left behind,
+    /// so pair a move of the source with [`Reader::seek_to`].
     pub(crate) fn source_mut(&mut self) -> &mut R {
         &mut self.window.get_mut().source
     }
 
-    /// Forgets what is buffered, for reading a new region after the source moved.
-    pub(crate) fn reset(&mut self) {
-        let window = self.window.get_mut();
-        window.filled = 0;
-        window.pos = 0;
-        window.eof = false;
+    /// The source, leaving the window behind. For a caller that reads the rest another way.
+    pub(crate) fn into_source(self) -> R {
+        self.window.into_inner().source
     }
 
     /// The bytes of `run`, in the window the source read them into.
@@ -300,7 +297,26 @@ impl<R: Read> Reader<R> {
     }
 }
 
+impl<S: Read + Seek> Reader<Take<S>> {
+    /// Points the window at the decompressed bytes in `[start, start + len)`, dropping what it
+    /// holds of wherever it was pointed before.
+    pub(crate) fn seek_to(&mut self, start: u64, len: u64) -> anyhow::Result<()> {
+        let window = self.window.get_mut();
+        window.source.get_mut().seek(SeekFrom::Start(start))?;
+        window.source.set_limit(len);
+        window.clear();
+        Ok(())
+    }
+}
+
 impl<R: Read> Window<R> {
+    /// Forgets what is buffered, for reading a region after the source moved.
+    fn clear(&mut self) {
+        self.filled = 0;
+        self.pos = 0;
+        self.eof = false;
+    }
+
     /// How many bytes the records that end in the window take, and how many records that is, up to
     /// `want` of them.
     ///
