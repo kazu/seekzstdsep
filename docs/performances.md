@@ -4,7 +4,7 @@ Costs that are known and still present. Tick an item when it is gone.
 
 Ordered by how much each one costs, worst first.
 
-- [ ] [Frame 0 is decompressed on every call](#frame-0-is-decompressed-on-every-call) — doubles the decompression per lookup
+- [ ] [Frame 0 is read on every call](#frame-0-is-read-on-every-call) — doubles the decoding per lookup
 - [ ] [The seek table is read in full on every call](#the-seek-table-is-read-in-full-on-every-call) — grows with the file: 9 kB at a million records, 90 kB at ten million
 - [ ] [The frame table is built in full when three entries are needed](#the-frame-table-is-built-in-full-when-three-entries-are-needed) — also grows with the file, but only an allocation and a pass
 - [ ] [The frame checksum costs 4 bytes per frame](#the-frame-checksum-costs-4-bytes-per-frame) — 0.06% of the file, paid for corruption detection
@@ -61,7 +61,7 @@ and `append --input-seekable`, and `--check-input-frames`, which reads the whole
 
 ## The seek table is read in full on every call
 
-`Decoder::new` in `RecordReader::from_file` (`src/reader.rs:62`), which a fresh reader builds one of per
+`Decoder::new` in `RecordReader::from_file` (`src/reader.rs`), which a fresh reader builds one of per
 call, reads the entire seek table before anything else happens. Each entry is 8 bytes — 4 for the compressed size, 4 for the decompressed
 size, no checksum — plus 17 bytes of header and footer.
 
@@ -78,7 +78,7 @@ frame reads 9 kB of table alongside it at a million records, and 90 kB at ten mi
 
 ## The frame table is built in full when three entries are needed
 
-`seek_table_decomp_frames` (`src/seekzstdsep_lib.rs:991`) loops over every frame and returns a
+`seek_table_decomp_frames` (`src/seekzstdsep_lib.rs`) loops over every frame and returns a
 `Vec<(u64, u64)>` holding all of them.
 
 `RecordReader::records_request` uses three of those entries: `frames[0]`, `frames[frame_idx]` and
@@ -87,23 +87,21 @@ pass over the table, on every call.
 
 Does not vary with `--from`. Grows with the file.
 
-## Frame 0 is decompressed on every call
+## Frame 0 is read on every call
 
-`RecordReader::from_file` derives the records-per-frame invariant by decompressing frame 0 and
-counting separators (`src/reader.rs:74-75`), and a caller that opens a reader per call pays it each time.
+`RecordReader::from_file` derives the records-per-frame invariant by reading frame 0 and counting
+separators (`src/reader.rs`), and a caller that opens a reader per call pays it each time.
 
-On the benchmark fixture that is 65,579 bytes of decompression, on top of the 65 kB of the frame
-actually wanted. Every lookup decompresses two frames, and one of them is always frame 0.
+On the benchmark fixture that is 65,579 bytes decoded, on top of the 65 kB of the frame actually
+wanted. Every lookup reads two frames, and one of them is always frame 0.
 
 The count is a property of the file, not of the request, so it is re-derived per call for a value
 that never changes.
 
-Does not vary with `--from` or with the file size.
+Does not vary with `--from` or with the file size. The frame is streamed through the record
+reader's window rather than held, so the cost is the decode, not the memory.
 
-The reader keeps that frame, so `RecordReader::record` reads it from the cache. `RecordReader::records`
-does not: it goes through `records_between_by_separator_in_frame`, which decompresses the range
-itself, so frame 0 is still decompressed twice when a reader is opened per range. Holding one reader open is
-what removes all three costs above — see below.
+Holding one reader open is what removes all three costs above — see below.
 
 ## The frame checksum costs 4 bytes per frame
 

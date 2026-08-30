@@ -69,6 +69,16 @@ fn cat(path: &Path, from: usize, cnt: usize) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// `cat` streams to stdout through `records_to`; the whole file read back in one call pins the
+/// bytes it hands over, separators included.
+#[test]
+fn test_cat_subcommand_returns_the_whole_file() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let out_path = compress_fixture(temp_dir.path());
+    let expected = std::fs::read_to_string(fixture_path()).expect("Failed to read fixture");
+    assert_eq!(cat(&out_path, 0, FIXTURE_RECORDS), expected);
+}
+
 #[test]
 fn test_truncate_subcommand_shortens_the_file() {
     let temp_dir = tempdir().expect("Failed to create temp dir");

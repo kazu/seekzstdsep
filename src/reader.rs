@@ -9,7 +9,7 @@
 //! `docs/format.md`.
 use std::{
     fs::File,
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom, Take, Write},
     path::PathBuf,
 };
 
@@ -18,7 +18,8 @@ use zeekstd::Decoder;
 
 use crate::record;
 use crate::seekzstdsep_lib::{
-    decompressed_range, records_between_by_separator_in_frame, seek_table_decomp_frames,
+    cnt_of_separetor_in_frame, decompressed_range, records_between_by_separator_in_frame,
+    seek_table_decomp_frames,
 };
 
 /// The one frame kept decompressed, and which frame it is.
@@ -43,8 +44,8 @@ struct RecordsRequest {
 
 /// A compressed file held open for reading records by index.
 ///
-/// Holds the decoder, the frame list and frame 0's separator count, plus one decompressed frame:
-/// consecutive indices in the same frame decompress it once.
+/// Holds the decoder, the frame list and frame 0's separator count, plus the one frame
+/// [`Self::record`] last decompressed: consecutive indices in the same frame decompress it once.
 pub struct RecordReader {
     path: PathBuf,
     decoder: Decoder<'static, File>,
@@ -84,8 +85,14 @@ impl RecordReader {
             sep_cnt: 0,
             cache: None,
         };
-        reader.decompress_frame(0)?;
-        reader.sep_cnt = record::count(reader.cached_frame(), &reader.finder);
+        let (start, len) = reader.frames[0];
+        reader.sep_cnt = cnt_of_separetor_in_frame(
+            &mut reader.decoder,
+            start,
+            len,
+            &reader.finder,
+            &reader.separator,
+        )?;
         Ok(reader)
     }
 
@@ -115,8 +122,15 @@ impl RecordReader {
     // does, which this crate's compressor never writes. See `docs/bugs.md`.
     pub fn total_records(&mut self) -> anyhow::Result<usize> {
         let last = self.frames.len() - 1;
-        self.decompress_frame(last)?;
-        Ok(self.sep_cnt * last + record::count(self.cached_frame(), &self.finder))
+        let (start, len) = self.frames[last];
+        let in_last = cnt_of_separetor_in_frame(
+            &mut self.decoder,
+            start,
+            len,
+            &self.finder,
+            &self.separator,
+        )?;
+        Ok(self.sep_cnt * last + in_last)
     }
 
     /// Record `index`, or `None` when the file holds no such whole record.
@@ -174,8 +188,12 @@ impl RecordReader {
         })
     }
 
-    /// `cnt` records from `from`, or fewer when the file holds fewer. This is what
-    /// the CLI `cat` subcommand prints.
+    /// `cnt` records from `from`, or fewer when the file holds fewer, gathered into a `Vec`.
+    /// [`Self::records_to`] writes the same records without building it.
+    ///
+    /// The frame is found by dividing `from` by the separator count of frame 0, so this rests on
+    /// every frame holding the same count. On a file compressed without that invariant it returns
+    /// the wrong records and reports no error.
     ///
     /// # Errors
     ///
@@ -193,16 +211,41 @@ impl RecordReader {
         )
     }
 
-    /// Every whole record in the file, in order, decompressing one frame at a time.
+    /// [`Self::records`] into `dst`: the same `cnt` records from `from`, written as they are
+    /// decoded instead of gathered into a `Vec`, so no more than the window is held at once.
+    /// Decoding stops within one window of the separator that ends the last record asked for.
+    ///
+    /// # Errors
+    ///
+    /// `from` being past the last frame, a frame not decompressing, or `dst` refusing bytes.
+    pub fn records_to(
+        &mut self,
+        from: usize,
+        cnt: usize,
+        dst: &mut impl Write,
+    ) -> anyhow::Result<()> {
+        let req = self.records_request(from, cnt)?;
+        let reader = record::region(&mut self.decoder, req.start, req.len)?;
+        reader
+            .records(&self.finder, self.separator.len())
+            .skip_records(req.skip)?
+            .take_records(cnt as u64)
+            .write_to(dst)
+    }
+
+    /// Every whole record in the file, in order, decoding a window at a time.
     ///
     /// Scans rather than divides, so unlike [`Self::record`] it does not rest on the
     /// same-count-per-frame invariant. What follows the last separator of a frame is dropped: the
     /// compressor cuts frames at separator boundaries, so only the end of the file can hold one.
     pub fn into_records(self) -> RecordIter {
         RecordIter {
-            reader: self,
+            frames: self.frames,
             frame: 0,
-            offset: 0,
+            armed: false,
+            finder: self.finder,
+            separator_len: self.separator.len(),
+            reader: record::Reader::new(self.decoder.take(0)),
         }
     }
 
@@ -232,12 +275,19 @@ impl RecordReader {
 }
 
 /// Every whole record of a [`RecordReader`], in order. Made by [`RecordReader::into_records`].
+///
+/// Decodes each frame through the record stream's fixed window, so no frame has to fit in
+/// memory — only the record being handed out does.
 pub struct RecordIter {
-    reader: RecordReader,
+    frames: Vec<(u64, u64)>,
     /// The frame being handed out, past the last one once the iterator is spent.
     frame: usize,
-    /// How far into that frame the last record ended.
-    offset: usize,
+    /// Whether the reader's source is positioned at `frame`'s bytes.
+    armed: bool,
+    finder: Finder<'static>,
+    separator_len: usize,
+    /// The record reader, holding the decoder limited to the armed frame.
+    reader: record::Reader<Take<Decoder<'static, File>>>,
 }
 
 impl Iterator for RecordIter {
@@ -245,24 +295,35 @@ impl Iterator for RecordIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.frame >= self.reader.frames.len() {
+            if self.frame >= self.frames.len() {
                 return None;
             }
-            if let Err(e) = self.reader.decompress_frame(self.frame) {
-                self.frame = self.reader.frames.len();
-                return Some(Err(e));
-            }
-            let separator_len = self.reader.separator.len();
-            let data = self.reader.cached_frame();
-            match record::first_end(&data[self.offset..], &self.reader.finder, separator_len) {
-                Some(len) => {
-                    let start = self.offset;
-                    self.offset += len;
-                    return Some(Ok(data[start..start + len].to_vec()));
+            if !self.armed {
+                let (start, len) = self.frames[self.frame];
+                let source = self.reader.source_mut();
+                if let Err(e) = source.get_mut().seek(SeekFrom::Start(start)) {
+                    self.frame = self.frames.len();
+                    return Some(Err(e.into()));
                 }
-                None => {
+                source.set_limit(len);
+                self.reader.reset();
+                self.armed = true;
+            }
+            match self
+                .reader
+                .records(&self.finder, self.separator_len)
+                .next_owned()
+            {
+                Ok(Some(item)) => return Some(Ok(item)),
+                Err(e) => {
+                    self.frame = self.frames.len();
+                    return Some(Err(e));
+                }
+                Ok(None) => {
+                    // Only a fragment, or nothing, is left in this frame: drop it and move on,
+                    // as the frame-at-a-time iterator did.
                     self.frame += 1;
-                    self.offset = 0;
+                    self.armed = false;
                 }
             }
         }

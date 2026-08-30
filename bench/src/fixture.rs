@@ -74,8 +74,10 @@ pub fn ensure(dir: &Path, records: u64, frame_size: usize, zstd_level: i32) -> R
     let t = tag(records);
     let raw = dir.join(format!("f{t}.jsonl"));
     let zstd_path = dir.join(format!("f{t}.jsonl.zst"));
-    let seek = dir.join(format!("f{t}.seek.zst"));
-    let meta_path = dir.join(format!("f{t}.meta.json"));
+    // The seek file depends on frame_size, so it carries it; the raw and plain zstd files do
+    // not, and are shared by every frame size of the same record count.
+    let seek = dir.join(format!("f{t}-fs{frame_size}.seek.zst"));
+    let meta_path = dir.join(format!("f{t}-fs{frame_size}.meta.json"));
 
     let complete = [&raw, &zstd_path, &seek, &meta_path]
         .iter()
@@ -92,9 +94,16 @@ pub fn ensure(dir: &Path, records: u64, frame_size: usize, zstd_level: i32) -> R
         }
     }
 
-    eprintln!("# generating fixture: {records} records in {}", dir.display());
-    write_raw(&raw, records)?;
-    write_zstd(&raw, &zstd_path, zstd_level)?;
+    eprintln!(
+        "# generating fixture: {records} records, frame size {frame_size} in {}",
+        dir.display()
+    );
+    if !raw.exists() {
+        write_raw(&raw, records)?;
+    }
+    if !zstd_path.exists() {
+        write_zstd(&raw, &zstd_path, zstd_level)?;
+    }
     write_seek(&raw, &seek, frame_size)?;
 
     let (seek_frames, seek_rpf) = seek_stats(&seek)?;

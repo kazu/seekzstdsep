@@ -8,11 +8,12 @@
 //! `"a\n\n\n"` holds one record and one byte over, and its last two bytes are a separator all the
 //! same. [`ends_whole`] is the test.
 
-use std::io::Read;
+use std::cell::{Ref, RefCell};
+use std::io::{Read, Write};
 
 use memchr::memmem::Finder;
 
-use crate::seekzstdsep_lib::READ_BUF_SIZE;
+use crate::seekzstdsep_lib::{READ_BUF_SIZE, READ_FRAME_BUF_SIZE};
 
 /// Refuses a separator that no record could end with.
 ///
@@ -179,5 +180,304 @@ impl<'a, R: Read> Stream<'a, R> {
     pub(crate) fn drop_front(&mut self, upto: usize) {
         self.buf.drain(..upto);
         self.end -= upto;
+    }
+}
+
+/// Reads records out of a byte source through one reused window of [`READ_FRAME_BUF_SIZE`].
+///
+/// The source writes straight into the window and [`Self::records`] walks it, so nothing is copied
+/// between the read and the caller. A run is handed out as offsets and its bytes are taken from
+/// [`Self::bytes`], which is what lets the walk be an [`Iterator`]: an item that borrowed the
+/// window could not survive the read that follows it.
+///
+/// The window never grows. A record longer than it comes out in pieces, and what a caller does
+/// with a piece — write it on, or add it to what it is building — is the same thing it does with a
+/// whole record.
+///
+/// [`Stream`] is the compress side's accumulator, which holds records until a frame is cut. This
+/// does not accumulate, which is why it is not that.
+pub(crate) struct Reader<R> {
+    /// Behind a cell because the walk reads it and the consumer takes bytes out of it while that
+    /// walk is alive: both hold `&Reader`, and only [`Iterator::next`] borrows the inside mutably.
+    window: RefCell<Window<R>>,
+}
+
+/// The window a [`Reader`] reads through, and where it is up to.
+struct Window<R> {
+    source: R,
+    /// What the source reads into, [`READ_FRAME_BUF_SIZE`] long for the life of the reader.
+    buf: Vec<u8>,
+    /// How much of `buf` holds data.
+    filled: usize,
+    /// How much of that the caller has consumed.
+    pos: usize,
+    /// Whether the source has returned 0.
+    eof: bool,
+}
+
+/// Records that lie next to each other in the window: where they start, how many bytes they take
+/// and how many records that is. [`Reader::bytes`] is the bytes.
+///
+/// `count` is 0 for the piece of a record longer than the window, which is bytes to pass on but
+/// not a record that has ended.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Run {
+    start: usize,
+    len: usize,
+    pub(crate) count: u64,
+}
+
+/// A [`Reader`] over the decompressed bytes in `[start, start + len)`.
+///
+/// Seeking and bounding the decoder is what every caller that reads a region does, and they do it
+/// the same way.
+pub(crate) fn region<'d, 'z, S: zeekstd::Seekable>(
+    decoder: &'d mut zeekstd::Decoder<'z, S>,
+    start: u64,
+    len: u64,
+) -> anyhow::Result<Reader<std::io::Take<&'d mut zeekstd::Decoder<'z, S>>>> {
+    use std::io::Seek;
+    decoder.seek(std::io::SeekFrom::Start(start))?;
+    Ok(Reader::new(decoder.take(len)))
+}
+
+impl<R: Read> Reader<R> {
+    pub(crate) fn new(source: R) -> Self {
+        Self {
+            window: RefCell::new(Window {
+                source,
+                buf: vec![0u8; READ_FRAME_BUF_SIZE],
+                filled: 0,
+                pos: 0,
+                eof: false,
+            }),
+        }
+    }
+
+    /// The source, for a caller that moves it to another region. Pair with [`Self::reset`].
+    pub(crate) fn source_mut(&mut self) -> &mut R {
+        &mut self.window.get_mut().source
+    }
+
+    /// Forgets what is buffered, for reading a new region after the source moved.
+    pub(crate) fn reset(&mut self) {
+        let window = self.window.get_mut();
+        window.filled = 0;
+        window.pos = 0;
+        window.eof = false;
+    }
+
+    /// The bytes of `run`, in the window the source read them into.
+    pub(crate) fn bytes(&self, run: &Run) -> Ref<'_, [u8]> {
+        Ref::map(self.window.borrow(), |window| {
+            &window.buf[run.start..run.start + run.len]
+        })
+    }
+
+    /// Everything read and not handed out — after the source is spent, the trailing fragment.
+    pub(crate) fn remainder(&self) -> Ref<'_, [u8]> {
+        Ref::map(self.window.borrow(), |window| {
+            &window.buf[window.pos..window.filled]
+        })
+    }
+
+    /// The records of this source, a [`Run`] of the window at a time rather than one record at a
+    /// time: consecutive records go out in one write, and [`Self::bytes`] is where an item's bytes
+    /// come from.
+    ///
+    /// `finder` has to match the separator `separator_len` measures.
+    pub(crate) fn records<'a>(
+        &'a self,
+        finder: &'a Finder<'a>,
+        separator_len: usize,
+    ) -> Records<'a, R> {
+        Records {
+            reader: self,
+            finder,
+            separator_len,
+            left: None,
+        }
+    }
+}
+
+impl<R: Read> Window<R> {
+    /// How many bytes the records that end in the window take, and how many records that is, up to
+    /// `want` of them.
+    ///
+    /// `Finder::find` per record rather than [`ends`]: `find_iter` hands the iterator a `Finder`
+    /// of its own, so building one per call would copy the whole searcher.
+    fn walk(&self, finder: &Finder<'_>, separator_len: usize, want: Option<u64>) -> (usize, u64) {
+        let held = &self.buf[self.pos..self.filled];
+        let mut used = 0usize;
+        let mut count = 0u64;
+        while want.is_none_or(|want| count < want) {
+            match first_end(&held[used..], finder, separator_len) {
+                Some(end) => {
+                    used += end;
+                    count += 1;
+                }
+                None => break,
+            }
+        }
+        (used, count)
+    }
+
+    /// Slides what is not consumed to the front and reads on behind it. `false` once the source is
+    /// spent.
+    fn refill(&mut self) -> anyhow::Result<bool> {
+        if self.eof {
+            return Ok(false);
+        }
+        if self.pos > 0 {
+            self.buf.copy_within(self.pos..self.filled, 0);
+            self.filled -= self.pos;
+            self.pos = 0;
+        }
+        let read = self.source.read(&mut self.buf[self.filled..])?;
+        self.filled += read;
+        if read == 0 {
+            self.eof = true;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+}
+
+/// The runs of a [`Reader`], each the records that end in one window.
+///
+/// Records in a run are next to each other in the window, so a run goes out in one write of the
+/// decoder's own bytes. A record longer than the window comes out as runs of no record, holding
+/// all but the last separator's worth of what the window could not end.
+pub(crate) struct Records<'a, R> {
+    reader: &'a Reader<R>,
+    finder: &'a Finder<'a>,
+    separator_len: usize,
+    /// Records still wanted, or `None` for all of them.
+    left: Option<u64>,
+}
+
+impl<R: Read> Iterator for Records<'_, R> {
+    type Item = anyhow::Result<Run>;
+
+    /// The next run, refilling the window until one turns up. `None` once the source is spent or
+    /// the count asked for is reached.
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.left == Some(0) {
+            return None;
+        }
+        let mut window = self.reader.window.borrow_mut();
+        loop {
+            let (used, count) = window.walk(self.finder, self.separator_len, self.left);
+            if count > 0 {
+                let run = Run {
+                    start: window.pos,
+                    len: used,
+                    count,
+                };
+                window.pos += used;
+                if let Some(left) = self.left.as_mut() {
+                    *left -= count;
+                }
+                return Some(Ok(run));
+            }
+            if window.pos == 0 && window.filled == window.buf.len() {
+                // A record longer than the window. The tail a separator could still start in stays
+                // for the next window, so no boundary is missed by handing this much out.
+                let run = Run {
+                    start: 0,
+                    len: window.filled - (self.separator_len - 1),
+                    count: 0,
+                };
+                window.pos = run.len;
+                return Some(Ok(run));
+            }
+            match window.refill() {
+                Ok(true) => {}
+                Ok(false) => return None,
+                Err(e) => return Some(Err(e)),
+            }
+        }
+    }
+}
+
+impl<'a, R: Read> Records<'a, R> {
+    /// At most `n` records in all. [`Iterator::take`] counts runs, which is not the same question.
+    pub(crate) fn take_records(mut self, n: u64) -> Self {
+        self.left = Some(n);
+        self
+    }
+
+    /// Past the first `n` records.
+    ///
+    /// # Errors
+    ///
+    /// The source ending before `n` of them, or a read failing.
+    pub(crate) fn skip_records(mut self, n: u64) -> anyhow::Result<Self> {
+        if n == 0 {
+            return Ok(self);
+        }
+        let wanted = self.left;
+        self.left = Some(n);
+        let skipped = self
+            .by_ref()
+            .try_fold(0u64, |skipped, run| run.map(|run| skipped + run.count))?;
+        self.left = wanted;
+        if skipped < n {
+            return Err(anyhow::anyhow!("No separator found in frame"));
+        }
+        Ok(self)
+    }
+
+    /// How many records there are.
+    ///
+    /// # Errors
+    ///
+    /// A read failing.
+    pub(crate) fn count_records(mut self) -> anyhow::Result<usize> {
+        let count = self.try_fold(0u64, |count, run| run.map(|run| count + run.count))?;
+        Ok(count as usize)
+    }
+
+    /// Writes them to `dst`, one write per run.
+    ///
+    /// When the source ends before the count asked for, what followed the last separator goes to
+    /// `dst` as well: that is what a whole-span read returned.
+    ///
+    /// # Errors
+    ///
+    /// A read failing, or `dst` refusing bytes.
+    pub(crate) fn write_to(mut self, dst: &mut impl Write) -> anyhow::Result<()> {
+        let reader = self.reader;
+        self.by_ref().try_for_each(|run| -> anyhow::Result<()> {
+            dst.write_all(&reader.bytes(&run?))?;
+            Ok(())
+        })?;
+        if self.left.is_some_and(|left| left > 0) {
+            dst.write_all(&reader.remainder())?;
+        }
+        Ok(())
+    }
+
+    /// The first one, owned, for a caller that outlives the window.
+    ///
+    /// # Errors
+    ///
+    /// A read failing.
+    pub(crate) fn next_owned(mut self) -> anyhow::Result<Option<Vec<u8>>> {
+        self.left = Some(1);
+        let reader = self.reader;
+        let record =
+            self.by_ref()
+                .try_fold(None::<Vec<u8>>, |record, run| -> anyhow::Result<_> {
+                    let run = run?;
+                    let mut record = record.unwrap_or_default();
+                    record.extend_from_slice(&reader.bytes(&run));
+                    Ok(Some(record))
+                })?;
+        // A trailing fragment is not a record: only a run that ended one leaves `left` short.
+        Ok(match self.left {
+            Some(0) => record,
+            _ => None,
+        })
     }
 }
