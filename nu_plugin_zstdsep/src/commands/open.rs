@@ -24,8 +24,9 @@ impl PluginCommand for Open {
     }
 
     fn extra_description(&self) -> &str {
-        "Returns a handle. A cell path into it (`get 10`, `$h.10`) decompresses one frame and \
-         returns one record; nothing else is read.\n\n\
+        "Returns a handle. A cell path into it (`get 10`, `$h.10`) decodes its frame up to that \
+         record and returns it; nothing else is read. A frame's content checksum is checked only \
+         when something decodes all of it.\n\n\
          The engine runs list commands itself and refuses a handle: `first`, `last`, `skip`, \
          `take`, `slice`, `length` and `where` all fail on one. Pass --no-partial to get a plain \
          list stream instead. That reads the whole file, though the engine still drops the stream \

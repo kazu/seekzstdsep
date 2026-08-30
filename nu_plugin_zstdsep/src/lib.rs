@@ -45,8 +45,9 @@ struct OpenFile {
 
 /// The open files, keyed by the id their handles carry.
 ///
-/// A `RecordReader` holds a decoder, the seek table and one decompressed frame, so the entry is
-/// what makes reading record 11 after record 10 cost a lookup rather than a reopen.
+/// A `RecordReader` holds a decoder, the seek table and the window its last lookup read through,
+/// so the entry is what makes reading record 11 after record 10 cost a walk on rather than a
+/// reopen.
 ///
 /// **Ids are not unique across plugin processes.** Handles live engine-side and outlive the process
 /// that made them, and the engine garbage collects an idle one after ten seconds; the next `open`
@@ -235,7 +236,7 @@ impl Plugin for ZstdsepPlugin {
         }
     }
 
-    /// `$h.10` and `get 10`: one frame decompressed, one record parsed.
+    /// `$h.10` and `get 10`: one frame decoded up to the record, one record parsed.
     fn custom_value_follow_path_int(
         &self,
         _engine: &EngineInterface,

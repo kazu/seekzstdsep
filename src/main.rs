@@ -95,6 +95,10 @@ enum Commands {
     Compress(ConvertArgs),
     /// Inspect zst file frames
     Inspect(InspectArgs),
+    /// Write a range of records to stdout. Reads only the frames the range covers.
+    ///
+    /// A frame's content checksum is checked only when something decodes all of it, which this
+    /// does not: see `docs/bugs.md`.
     Cat(CatArgs),
     /// Shorten a zst file to a record count, in place. Destructive.
     Truncate(TruncateArgs),

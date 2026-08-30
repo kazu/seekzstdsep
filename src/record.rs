@@ -45,33 +45,6 @@ pub(crate) fn first_end(data: &[u8], finder: &Finder, separator_len: usize) -> O
     finder.find(data).map(|pos| pos + separator_len)
 }
 
-/// Where the record at `index` ends, if `data` holds that many.
-pub(crate) fn nth_end(
-    data: &[u8],
-    finder: &Finder,
-    separator_len: usize,
-    index: usize,
-) -> Option<usize> {
-    ends(data, finder, separator_len).nth(index)
-}
-
-/// Where the record at `index` starts, if `data` holds that many before it.
-///
-/// A record starts where the one before it ended, and record 0 starts at the top. Both callers
-/// that address a record by its number in a frame need exactly that, and disagree only on what a
-/// `None` means.
-pub(crate) fn nth_start(
-    data: &[u8],
-    finder: &Finder,
-    separator_len: usize,
-    index: usize,
-) -> Option<usize> {
-    match index.checked_sub(1) {
-        None => Some(0),
-        Some(before) => nth_end(data, finder, separator_len, before),
-    }
-}
-
 /// How many whole records `data` holds. A fragment after the last one does not count.
 pub(crate) fn count(data: &[u8], finder: &Finder) -> usize {
     finder.find_iter(data).count()
@@ -213,6 +186,13 @@ struct Window<R> {
     pos: usize,
     /// Whether the source has returned 0.
     eof: bool,
+    /// Records that ended before `pos`, counted from where the window was last pointed.
+    walked: u64,
+    /// The record that starts at the front of the buffer, when one does. `None` once a slide has
+    /// cut a record in two, which only a record longer than the window can do.
+    front: Option<u64>,
+    /// Whether `pos` sits where a record ended rather than inside such a record.
+    on_boundary: bool,
 }
 
 /// Records that lie next to each other in the window: where they start, how many bytes they take
@@ -249,6 +229,9 @@ impl<R: Read> Reader<R> {
                 filled: 0,
                 pos: 0,
                 eof: false,
+                walked: 0,
+                front: Some(0),
+                on_boundary: true,
             }),
         }
     }
@@ -276,6 +259,26 @@ impl<R: Read> Reader<R> {
         Ref::map(self.window.borrow(), |window| {
             &window.buf[window.pos..window.filled]
         })
+    }
+
+    /// Puts the walk on record `index`, counted from where the window was last pointed, and
+    /// returns how many records it still has to pass to reach it.
+    ///
+    /// A record ahead of the walk needs nothing put back: walking reads on, sliding what is
+    /// consumed out of the window. One behind it is still there to walk to for as long as the
+    /// buffer holds it. `None` once a slide has dropped it, which is the caller's cue to point the
+    /// window at the region again.
+    pub(crate) fn walk_from(&mut self, index: u64) -> Option<u64> {
+        let window = self.window.get_mut();
+        if index >= window.walked {
+            return Some(index - window.walked);
+        }
+        let front = window.front?;
+        let skip = index.checked_sub(front)?;
+        window.walked = front;
+        window.pos = 0;
+        window.on_boundary = true;
+        Some(skip)
     }
 
     /// The records of this source, a [`Run`] of the window at a time rather than one record at a
@@ -315,6 +318,9 @@ impl<R: Read> Window<R> {
         self.filled = 0;
         self.pos = 0;
         self.eof = false;
+        self.walked = 0;
+        self.front = Some(0);
+        self.on_boundary = true;
     }
 
     /// How many bytes the records that end in the window take, and how many records that is, up to
@@ -348,6 +354,9 @@ impl<R: Read> Window<R> {
             self.buf.copy_within(self.pos..self.filled, 0);
             self.filled -= self.pos;
             self.pos = 0;
+            // What the slide drops is gone for good: the source cannot be read backwards. The
+            // record now at the front is the one the walk is on, unless the slide cut one in two.
+            self.front = self.on_boundary.then_some(self.walked);
         }
         let read = self.source.read(&mut self.buf[self.filled..])?;
         self.filled += read;
@@ -391,6 +400,8 @@ impl<R: Read> Iterator for Records<'_, R> {
                     count,
                 };
                 window.pos += used;
+                window.walked += count;
+                window.on_boundary = true;
                 if let Some(left) = self.left.as_mut() {
                     *left -= count;
                 }
@@ -405,6 +416,7 @@ impl<R: Read> Iterator for Records<'_, R> {
                     count: 0,
                 };
                 window.pos = run.len;
+                window.on_boundary = false;
                 return Some(Ok(run));
             }
             match window.refill() {
@@ -423,14 +435,15 @@ impl<'a, R: Read> Records<'a, R> {
         self
     }
 
-    /// Past the first `n` records.
+    /// Past the first `n` records, and how many there were to pass. Fewer than `n` means the
+    /// source ended first, which is not an error to every caller.
     ///
     /// # Errors
     ///
-    /// The source ending before `n` of them, or a read failing.
-    pub(crate) fn skip_records(mut self, n: u64) -> anyhow::Result<Self> {
+    /// A read failing.
+    pub(crate) fn skip_up_to(mut self, n: u64) -> anyhow::Result<(Self, u64)> {
         if n == 0 {
-            return Ok(self);
+            return Ok((self, 0));
         }
         let wanted = self.left;
         self.left = Some(n);
@@ -438,10 +451,20 @@ impl<'a, R: Read> Records<'a, R> {
             .by_ref()
             .try_fold(0u64, |skipped, run| run.map(|run| skipped + run.count))?;
         self.left = wanted;
+        Ok((self, skipped))
+    }
+
+    /// Past the first `n` records.
+    ///
+    /// # Errors
+    ///
+    /// The source ending before `n` of them, or a read failing.
+    pub(crate) fn skip_records(self, n: u64) -> anyhow::Result<Self> {
+        let (records, skipped) = self.skip_up_to(n)?;
         if skipped < n {
             return Err(anyhow::anyhow!("No separator found in frame"));
         }
-        Ok(self)
+        Ok(records)
     }
 
     /// How many records there are.

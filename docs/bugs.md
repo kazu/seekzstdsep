@@ -9,6 +9,7 @@ investigation is only worth reading while the bug is open.
 Each has a command below that produces the stated output on the benchmark fixture. Ordered by
 damage, worst first.
 
+- [ ] [A record read leaves its frame's checksum unchecked](#a-record-read-leaves-its-frames-checksum-unchecked)
 - [ ] [A file that cannot be opened panics instead of being reported](#a-file-that-cannot-be-opened-panics-instead-of-being-reported)
 - [ ] [`inspect` panics on a frame that fails to decode](#inspect-panics-on-a-frame-that-fails-to-decode)
 - [ ] [A record count near `u64::MAX` overflows while the range is placed](#a-record-count-near-u64max-overflows-while-the-range-is-placed)
@@ -42,6 +43,56 @@ Performance costs that are not defects live in `docs/performances.md`.
 - [x] `compress` cuts a frame at 2 MiB whatever the record count is
 - [x] The encoder emits a trailing empty frame
 - [x] `seekzstdsep compress` runs the compressor twice
+
+### A record read leaves its frame's checksum unchecked
+
+The checksum is the XXH64 of a frame's **whole** decompressed content and sits at its end, so only
+something that decodes all of it can check it. A record read stops at the last record asked for, so
+a flipped byte elsewhere in that frame comes back as data, silently. What does decode a frame
+whole: `open` frame 0, `total_records` the last frame, `inspect --no-fast-mode` every frame, and an
+edit the frames it rewrites.
+
+bash or zsh, with `dd`, `od` and `cmp`:
+
+```sh
+seq 1 15000000 > big.txt
+seekzstdsep compress big.txt big.seek.zst --frame-size 16777216
+cp big.seek.zst flipped.seek.zst
+# Frame 1 is compressed 711771..1432604 and holds records 2236041..4472081. Flip one byte near its
+# end, far past the records read below. `cmp` is the check that it was flipped: writing a fixed
+# value does nothing when the byte already held it.
+byte=$(dd if=flipped.seek.zst bs=1 skip=1430000 count=1 2>/dev/null | od -An -tu1 | tr -d ' \n')
+printf "$(printf '\\x%02x' $((byte ^ 255)))" | dd of=flipped.seek.zst bs=1 seek=1430000 count=1 conv=notrunc
+cmp big.seek.zst flipped.seek.zst    # => 異なります: バイト 1430001、行 3512
+seekzstdsep cat flipped.seek.zst --from 2236050 --cnt 2
+# => 2236051 / 2236052, exit 0. Nothing is reported.
+```
+
+The same in nushell, which needs no external command:
+
+```nu
+seq 1 15000000 | str join "\n" | save --raw --force big.txt
+^seekzstdsep compress big.txt big.seek.zst --frame-size 16777216
+let b = (open --raw big.seek.zst | into binary)
+let byte = ($b | bytes at 1430000..<1430001)
+bytes build ($b | bytes at ..<1430000) (if $byte == 0x[ff] { 0x[00] } else { 0x[ff] }) ($b | bytes at 1430001..) | save --force flipped.seek.zst
+^seekzstdsep cat flipped.seek.zst --from 2236050 --cnt 2
+```
+
+Corruption inside a block the read **does** decode is still caught — zstd reports `Data corruption
+detected` — so what is lost is detection of the part of the frame the read skipped.
+
+Lost in two steps. `a48fb5d` put range reads on the window, which stopped `cat` checking; the
+commit that put lookups there did the same to `RecordReader::record`. `master` and `0.114/nu`
+already carry the first half.
+
+**The remedy is a flag, defaulting to off.** Checking means decoding the frame to its end, which
+puts the time back in proportion to the frame size — 16 MiB for three records where the window
+decodes 32 KiB — and that proportion is what the window commits exist to remove. `zstd -d` checks
+by default because it decompresses everything anyway; that reason does not carry here. Memory is
+not the cost: the rest of the frame can be decoded and dropped, on its own thread with its own
+decoder and file handle, since the check needs nothing the read produces. Both `--help` texts have
+to say which way the flag is set.
 
 ### A file that cannot be opened panics instead of being reported
 
@@ -139,8 +190,8 @@ here (`nu_plugin_zstdsep/src/source.rs`); `RecordReader` does not.
 
 ### The frame is read with a single `read` call
 
-`src/seekzstdsep_lib.rs`, in `decompressed_range_into`, which `RecordReader::record` and
-`FrameReader` take a frame's bytes from:
+`src/seekzstdsep_lib.rs`, in `decompressed_range_into`, which `FrameReader` takes a frame's bytes
+from:
 
 ```rust
 let mut data = vec![0u8; len as usize];
@@ -149,7 +200,7 @@ let _n = decoder.read(&mut data[..])?;
 
 `Read::read` may return fewer bytes than the buffer holds without that being an error. There is no
 loop and the return value is discarded, so a short read would leave the remainder of `data` as NUL:
-the reader would return them as record bytes and the counter would count separators short.
+an edit would copy them into the file it writes and count the frame's separators short.
 
 zeekstd does not promise a full buffer. `Decoder::decompress` is documented "call this repetetively
 to fill `buf`", and its example loops until a call returns 0.

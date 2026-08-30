@@ -160,6 +160,59 @@ fn before_cat(path: &PathBuf, from: usize, cnt: usize, finder: &Finder) -> anyho
     Ok(data[begin..end].to_vec())
 }
 
+/// `RecordReader` at the branch point, as far as `record` needed it: the decoder and the frame
+/// list held open, and the one frame a lookup decompressed kept in a `Vec` for the next one.
+struct BeforeReader {
+    decoder: Decoder<'static, std::fs::File>,
+    frames: Vec<(u64, u64)>,
+    sep_cnt: usize,
+    cache: Option<(usize, Vec<u8>)>,
+}
+
+impl BeforeReader {
+    fn open(path: &PathBuf, finder: &Finder) -> Self {
+        let mut decoder = decoder(path);
+        let frames = seek_table_decomp_frames(&decoder).expect("no frames");
+        let (start, len) = frames[0];
+        let sep_cnt = before_cnt_in_frame(&mut decoder, start, len, finder).expect("cannot count");
+        Self {
+            decoder,
+            frames,
+            sep_cnt,
+            cache: None,
+        }
+    }
+
+    /// The body `RecordReader::record` had: the whole frame in one buffer, then the record cut out
+    /// of it by counting separators from the top.
+    #[allow(clippy::unused_io_amount)]
+    fn record(&mut self, index: usize, finder: &Finder) -> Option<Vec<u8>> {
+        let frame = index / self.sep_cnt;
+        if frame >= self.frames.len() {
+            return None;
+        }
+        let in_frame = index % self.sep_cnt;
+        if self.cache.as_ref().map(|c| c.0) != Some(frame) {
+            let (start, len) = self.frames[frame];
+            self.decoder.seek(SeekFrom::Start(start)).expect("no seek");
+            let mut data = vec![0u8; len as usize];
+            self.decoder.read(&mut data[..]).expect("no read");
+            self.cache = Some((frame, data));
+        }
+        let data = &self.cache.as_ref().expect("no frame").1;
+        let start = match in_frame.checked_sub(1) {
+            None => 0,
+            Some(before) => finder
+                .find_iter(data)
+                .nth(before)
+                .map(|p| p + SEPARATOR.len())?,
+        };
+        finder
+            .find(&data[start..])
+            .map(|p| data[start..start + p + SEPARATOR.len()].to_vec())
+    }
+}
+
 // ------------------------------------------------------- fixture
 
 fn fixture() -> (tempfile::TempDir, PathBuf) {
@@ -297,6 +350,57 @@ fn read(c: &mut Criterion) {
                 black_box(reader.into_records().filter(|r| r.is_ok()).count())
             })
         });
+        group.finish();
+    }
+
+    {
+        // What `$h.10` and `$h | get 10 11` do: one or two indices into a frame, through a reader
+        // held open between them. Each iteration moves to the next frame, so neither the frame the
+        // `before` reader cached nor the window the `after` one carried is the one asked for —
+        // which is what a lookup arriving on its own looks like.
+        let mut group = c.benchmark_group("record");
+        let sep_cnt = {
+            let mut d = decoder(&path);
+            let (start, len) = frames[0];
+            cnt_of_separetor_in_frame(&mut d, start, len, &finder, SEPARATOR).expect("cannot count")
+        };
+        // The last frame holds fewer records than the rest, so it is left out of the rotation.
+        let frame_count = frames.len() - 1;
+        // A stride rather than the next frame along: reading whole frames leaves the decoder on
+        // the boundary the following frame starts at, and stepping in order would hand that saving
+        // to whichever side reads the most.
+        let base = |turn: usize| (turn * 7 % frame_count) * sep_cnt + sep_cnt / 2;
+
+        // Every pair of indices a lookup can be asked for: one on its own, the next one after it,
+        // and the one before it, which the window has to decode the frame again for.
+        for (name, second) in [("one", None), ("next", Some(1isize)), ("back", Some(-1))] {
+            let mut before = BeforeReader::open(&path, &finder);
+            let mut turn = 0usize;
+            group.bench_function(format!("before/{name}"), |b| {
+                b.iter(|| {
+                    let first = base(turn);
+                    turn += 1;
+                    black_box(before.record(black_box(first), &finder));
+                    if let Some(step) = second {
+                        let next = first.wrapping_add_signed(step);
+                        black_box(before.record(black_box(next), &finder));
+                    }
+                })
+            });
+            let mut after = RecordReader::open(path.clone(), SEPARATOR).expect("no reader");
+            let mut turn = 0usize;
+            group.bench_function(format!("after/{name}"), |b| {
+                b.iter(|| {
+                    let first = base(turn);
+                    turn += 1;
+                    black_box(after.record(black_box(first)).unwrap());
+                    if let Some(step) = second {
+                        let next = first.wrapping_add_signed(step);
+                        black_box(after.record(black_box(next)).unwrap());
+                    }
+                })
+            });
+        }
         group.finish();
     }
 
