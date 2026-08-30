@@ -3,7 +3,7 @@ members = ["nu_plugin_zstdsep"]
 
 [package]
 name = "seekzstdsep"
-version = "0.4.90"
+version = "0.4.91"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Kazuhisa TAKEI <kazuhisa@gmail.com>"]
