@@ -933,24 +933,11 @@ pub(crate) fn frame_encoder<W: Write>(
         .into_encoder(writer)?)
 }
 
-/// The decompressed bytes in `[start, start + len)`.
+/// The decompressed bytes in `[start, start + len)`, into a buffer the caller owns so that one
+/// reading frame after frame does not allocate for each.
 ///
-/// One `read`, as both of the sites this was taken from did. `Decoder::read` may return fewer bytes
-/// than the buffer holds without that being an error, and the unfilled tail is then NUL; see
-/// `docs/bugs.md`. The two sites differed in what they did with a read error, one panicking and one
-/// returning it — a shared body can only do one, and it returns it.
-pub(crate) fn decompressed_range<S: zeekstd::Seekable>(
-    decoder: &mut Decoder<'_, S>,
-    start: u64,
-    len: u64,
-) -> anyhow::Result<Vec<u8>> {
-    let mut data = Vec::new();
-    decompressed_range_into(decoder, start, len, &mut data)?;
-    Ok(data)
-}
-
-/// [`decompressed_range`] into a buffer the caller owns, for one that reads frame after frame and
-/// would otherwise allocate for each.
+/// One `read`. `Decoder::read` may return fewer bytes than the buffer holds without that being an
+/// error, and the unfilled tail is then NUL; see `docs/bugs.md`.
 ///
 /// `data` is emptied and filled with NUL first, so what a short `read` leaves behind is the NUL the
 /// caller allocating a fresh buffer would have got, not the frame read before it.

@@ -72,9 +72,9 @@ Returns a **handle**, not the data.
 
 ```text
 > let h = zstdsep open events.jsonl.seek.zst
-> $h.10              # one frame decompressed, one record parsed
+> $h.10              # its frame decoded up to the record, one record parsed
 > $h.10.user.name    # the engine follows the rest of the path itself
-> $h | get 10 11 12  # three calls, one frame, one decompression
+> $h | get 10 11 12  # three calls, one frame, decoded once
 > $h                 # the summary: path, separator, format, frames, records_per_frame, records
 > $h.records         # a field of that summary
 ```

@@ -7,8 +7,9 @@ Ordered by how much each one costs, worst first.
 - [ ] [Frame 0 is read on every call](#frame-0-is-read-on-every-call) — doubles the decoding per lookup
 - [ ] [The seek table is read in full on every call](#the-seek-table-is-read-in-full-on-every-call) — grows with the file: 9 kB at a million records, 90 kB at ten million
 - [ ] [The frame table is built in full when three entries are needed](#the-frame-table-is-built-in-full-when-three-entries-are-needed) — also grows with the file, but only an allocation and a pass
-- [ ] [The frame checksum costs 4 bytes per frame](#the-frame-checksum-costs-4-bytes-per-frame) — 0.06% of the file, paid for corruption detection
+- [ ] [The frame checksum costs 4 bytes per frame](#the-frame-checksum-costs-4-bytes-per-frame) — 0.06% of the file, collected only where a whole frame is decoded
 - [x] [Reading several frames rebuilt the decoder for each](#reading-several-frames-rebuilt-the-decoder-for-each) — 4 to 18% of the time spent reading two frames or more
+- [x] [A lookup by index held a whole frame](#a-lookup-by-index-held-a-whole-frame) — peak RSS followed the frame size: 36.8 MiB at 32 MiB frames
 
 Numbers come from `docs/bench/`; the harness is in `bench/`.
 
@@ -58,6 +59,41 @@ and it is what the numbers above were first taken against, which is how they cam
 
 What it buys is every read of two frames or more: the separator validation in `truncate`, `append`
 and `append --input-seekable`, and `--check-input-frames`, which reads the whole copied range.
+
+## A lookup by index held a whole frame
+
+`RecordReader::record` decompressed the frame the index falls in into a `Vec` and kept it for the
+next lookup, so what a lookup held followed the frame size. Reading it through the record window
+instead holds 32 KiB whatever the frame is, and the walk is left where the record ended so the next
+index in the same frame goes on from there.
+
+Peak RSS of three lookups (`record(10)`, `record(11)`, `record(12)`) on 124 MB of input compressed
+at three frame sizes, `/usr/bin/time -v`:
+
+| frame size | before | after |
+| ---: | ---: | ---: |
+| 1 MiB | 4.5 MiB | 3.5 MiB |
+| 16 MiB | 20.6 MiB | 4.8 MiB |
+| 32 MiB | 36.8 MiB | 4.7 MiB |
+
+What is left is the decoder's own buffers and the seek table, neither of which follows the frame
+size.
+
+`benches/read.rs` measures the time as `record`, three cases through one reader held open: an index
+on its own, the next one after it, and the one before it. **The frames have to be visited out of
+order.** Reading whole frames leaves the decoder exactly at the next frame's start, so stepping
+through them in order hands the version that reads the most a free seek, and the measurement comes
+out backwards — the whole-frame reader looked 15% faster until the case was fixed.
+
+| | before | after |
+| --- | ---: | ---: |
+| `record/one` | 25.16 µs | 24.57 µs |
+| `record/next` | 26.93 µs | 24.37 µs |
+| `record/back` | 27.04 µs | 24.82 µs |
+
+`record/one` is 2.4%, which is too small to read as a gain from a wall clock — it says the lookup
+did not get slower, and nothing more. `next` and `back` are 9.5% and 8.2%, which the clock can
+carry.
 
 ## The seek table is read in full on every call
 
@@ -110,4 +146,4 @@ records at `--frame-size 65536` — 2,161 frames — the output is 15,320,474 by
 15,311,830 with `--no-check`, a difference of 8,644 bytes: exactly 4 per frame, 0.056% of the file.
 
 It is not a defect and is listed here so the cost is on the record. What it buys is stated in
-`docs/format.md`: the frame a lookup decompresses is verified as it is read.
+`docs/format.md`, and only a whole-frame decode collects it (`docs/bugs.md`).

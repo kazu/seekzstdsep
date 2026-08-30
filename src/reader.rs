@@ -18,35 +18,57 @@ use zeekstd::Decoder;
 
 use crate::record;
 use crate::seekzstdsep_lib::{
-    cnt_of_separetor_in_frame, decompressed_range, records_between_by_separator_in_frame,
-    seek_table_decomp_frames,
+    cnt_of_separetor_in_frame, records_between_by_separator_in_frame, seek_table_decomp_frames,
 };
-
-/// The one frame kept decompressed, and which frame it is.
-struct CachedFrame {
-    index: usize,
-    data: Vec<u8>,
-}
 
 /// The decoder, and the window records are read through.
 ///
 /// The window owns the decoder rather than borrowing it: one that borrowed it could not outlive
-/// the call that built it, and a reader holds its window for as long as it is open. Everything
-/// that reads the file another way takes the decoder back through [`Self::decoder`].
+/// the call that built it, and [`RecordReader::record`] leaves its window where the record ended
+/// for the next lookup to walk on from. Everything that reads the file another way takes the
+/// decoder back through [`Self::load_decoder`].
 struct Lookup {
     window: record::Reader<Take<Decoder<'static, File>>>,
+    /// The frame the window is pointed at, or `None` once the decoder has moved since.
+    frame: Option<usize>,
 }
 
 impl Lookup {
     fn new(decoder: Decoder<'static, File>) -> Self {
         Self {
             window: record::Reader::new(decoder.take(0)),
+            frame: None,
         }
     }
 
-    /// The decoder, for a caller that seeks it itself.
-    fn decoder(&mut self) -> &mut Decoder<'static, File> {
+    /// The decoder, for a caller that seeks it itself. What the window holds goes with it: after
+    /// an arbitrary seek it no longer reads on from where it says it does.
+    fn load_decoder(&mut self) -> &mut Decoder<'static, File> {
+        self.frame = None;
         self.window.source_mut().get_mut()
+    }
+
+    /// How many records the window has to walk past to reach record `in_frame` of the frame
+    /// covering `[start, start + len)`.
+    ///
+    /// The window is pointed at that frame first unless the walk can go on from where the last
+    /// lookup left it — same frame, and the record either ahead of the walk or still buffered
+    /// behind it. A compressed frame cannot be entered partway, so anything else is a decode from
+    /// its start.
+    fn walk_to(
+        &mut self,
+        frame: usize,
+        (start, len): (u64, u64),
+        in_frame: u64,
+    ) -> anyhow::Result<u64> {
+        if self.frame == Some(frame) {
+            if let Some(skip) = self.window.walk_from(in_frame) {
+                return Ok(skip);
+            }
+        }
+        self.window.seek_to(start, len)?;
+        self.frame = Some(frame);
+        Ok(in_frame)
     }
 }
 
@@ -66,8 +88,8 @@ struct RecordsRequest {
 
 /// A compressed file held open for reading records by index.
 ///
-/// Holds the decoder, the frame list and frame 0's separator count, plus the one frame
-/// [`Self::record`] last decompressed: consecutive indices in the same frame decompress it once.
+/// Holds the decoder, the frame list and frame 0's separator count, plus the window
+/// [`Self::record`] last read through: consecutive indices in the same frame decode it once.
 pub struct RecordReader {
     path: PathBuf,
     lookup: Lookup,
@@ -76,7 +98,6 @@ pub struct RecordReader {
     finder: Finder<'static>,
     /// Separators in frame 0, taken as the record count of every frame.
     sep_cnt: usize,
-    cache: Option<CachedFrame>,
 }
 
 impl RecordReader {
@@ -105,11 +126,10 @@ impl RecordReader {
             separator: separator.to_vec(),
             finder: Finder::new(separator).into_owned(),
             sep_cnt: 0,
-            cache: None,
         };
         let (start, len) = reader.frames[0];
         reader.sep_cnt = cnt_of_separetor_in_frame(
-            reader.lookup.decoder(),
+            reader.lookup.load_decoder(),
             start,
             len,
             &reader.finder,
@@ -146,7 +166,7 @@ impl RecordReader {
         let last = self.frames.len() - 1;
         let (start, len) = self.frames[last];
         let in_last = cnt_of_separetor_in_frame(
-            self.lookup.decoder(),
+            self.lookup.load_decoder(),
             start,
             len,
             &self.finder,
@@ -159,27 +179,30 @@ impl RecordReader {
     ///
     /// The returned bytes carry the separator, as [`Self::records`] does. A trailing fragment with
     /// no separator after it is not a record and is not returned.
+    ///
+    /// What is held is one window, not the frame the record is in: the walk is left where the
+    /// record ended, and the next index in the same frame goes on from there. See
+    /// [`Lookup::walk_to`] for what an index elsewhere costs.
     pub fn record(&mut self, index: usize) -> anyhow::Result<Option<Vec<u8>>> {
         if self.sep_cnt == 0 {
             return Ok(None);
         }
-        let frame_index = index / self.sep_cnt;
-        if frame_index >= self.frames.len() {
+        let frame = index / self.sep_cnt;
+        if frame >= self.frames.len() {
             return Ok(None);
         }
-        let index_in_frame = index % self.sep_cnt;
-        let separator_len = self.separator.len();
-        self.decompress_frame(frame_index)?;
-        let data = self.cached_frame();
-
-        let start = match record::nth_start(data, &self.finder, separator_len, index_in_frame) {
-            Some(pos) => pos,
-            None => return Ok(None),
-        };
-        match record::first_end(&data[start..], &self.finder, separator_len) {
-            Some(len) => Ok(Some(data[start..start + len].to_vec())),
-            None => Ok(None),
+        let in_frame = (index % self.sep_cnt) as u64;
+        let region = self.frames[frame];
+        let skip = self.lookup.walk_to(frame, region, in_frame)?;
+        let (records, skipped) = self
+            .lookup
+            .window
+            .records(&self.finder, self.separator.len())
+            .skip_up_to(skip)?;
+        if skipped < skip {
+            return Ok(None);
         }
+        records.next_owned()
     }
 
     /// What a read of `cnt` records from `from` has to ask
@@ -223,7 +246,7 @@ impl RecordReader {
     pub fn records(&mut self, from: usize, cnt: usize) -> anyhow::Result<Vec<u8>> {
         let req = self.records_request(from, cnt)?;
         records_between_by_separator_in_frame(
-            self.lookup.decoder(),
+            self.lookup.load_decoder(),
             req.start,
             req.len,
             req.skip,
@@ -247,7 +270,7 @@ impl RecordReader {
         dst: &mut impl Write,
     ) -> anyhow::Result<()> {
         let req = self.records_request(from, cnt)?;
-        let reader = record::region(self.lookup.decoder(), req.start, req.len)?;
+        let reader = record::region(self.lookup.load_decoder(), req.start, req.len)?;
         reader
             .records(&self.finder, self.separator.len())
             .skip_records(req.skip)?
@@ -279,21 +302,6 @@ impl RecordReader {
         let mut decoder = self.lookup.window.into_source().into_inner();
         decoder.seek(SeekFrom::Start(0))?;
         Ok(decoder)
-    }
-
-    /// Puts frame `index` in the cache, decompressing it unless it is the one already there.
-    fn decompress_frame(&mut self, index: usize) -> anyhow::Result<()> {
-        if self.cache.as_ref().map(|c| c.index) != Some(index) {
-            let (start, len) = self.frames[index];
-            let data = decompressed_range(self.lookup.decoder(), start, len)?;
-            self.cache = Some(CachedFrame { index, data });
-        }
-        Ok(())
-    }
-
-    /// The frame [`Self::decompress_frame`] last put in the cache. Panics if called before it.
-    fn cached_frame(&self) -> &[u8] {
-        &self.cache.as_ref().expect("no frame decompressed yet").data
     }
 }
 

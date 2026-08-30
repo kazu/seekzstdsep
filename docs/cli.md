@@ -26,9 +26,9 @@ stdin and the result goes to stdout. Useful options:
 sizes vary while the record count per frame stays fixed. Leaving the defaults alone is fine for most
 input; `docs/format.md` explains when it is not.
 
-Each frame ends with a content checksum, so the one frame a lookup decompresses is verified as it is
-read. It costs 4 bytes per frame, which `docs/performances.md` measures against a real file, and
-`--no-check` drops it.
+Each frame ends with a content checksum. It costs 4 bytes per frame, which `docs/performances.md`
+measures against a real file, and `--no-check` drops it. A frame is checked against it only when
+something decodes all of it, which a record range does not; `docs/bugs.md` carries that.
 
 ## Read a record range
 

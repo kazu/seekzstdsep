@@ -68,6 +68,15 @@ fn outcome(result: anyhow::Result<Vec<u8>>) -> String {
     }
 }
 
+/// [`outcome`] for a lookup, which answers with `None` where a range read errors.
+fn lookup_outcome(result: anyhow::Result<Option<Vec<u8>>>) -> String {
+    match result {
+        Ok(None) => "none".to_string(),
+        Ok(Some(bytes)) => outcome(Ok(bytes)),
+        Err(e) => outcome(Err(e)),
+    }
+}
+
 /// Replaces any absolute path in `msg` with its file name.
 fn strip_dir(msg: &str) -> String {
     msg.split_whitespace()
@@ -206,14 +215,55 @@ fn cases_for(out: &mut String, label: &str, path: &Path, separator: &[u8]) {
     for index in [0usize, 1, 116, 117, 300, 10_000] {
         let r = guard(|| {
             let mut reader = RecordReader::open(path.to_path_buf(), separator).expect("no reader");
-            match reader.record(index) {
-                Ok(Some(bytes)) => format!("ok {} {:016x}", bytes.len(), digest(&bytes)),
-                Ok(None) => "none".to_string(),
-                Err(e) => format!("err {}", strip_dir(&e.to_string())),
-            }
+            lookup_outcome(reader.record(index))
         });
         let _ = writeln!(out, "{label}\trecord\t{index}\t{r}");
     }
+
+    // The same lookups through one reader, which answers each from wherever the last one left it:
+    // on from the record before, back to one still to hand, and over to another frame.
+    let seq = guard(|| {
+        let mut reader = RecordReader::open(path.to_path_buf(), separator).expect("no reader");
+        let mut line = String::new();
+        for index in [
+            0usize, 1, 2, 3, 2, 1, 0, 116, 117, 118, 117, 300, 299, 10_000, 0,
+        ] {
+            let _ = write!(line, "{index}={} ", lookup_outcome(reader.record(index)));
+        }
+        line
+    });
+    let _ = writeln!(out, "{label}\tsequence\t{seq}");
+
+    // The same, with the calls that move the decoder put between a record and the next one — the
+    // pair a window is carried across. One carried over such a call reads on from where that call
+    // left the file.
+    let mixed = guard(|| {
+        let mut reader = RecordReader::open(path.to_path_buf(), separator).expect("no reader");
+        let mut line = String::new();
+        for index in [0usize, 4, 116, 300] {
+            let _ = write!(line, "{index}={} ", lookup_outcome(reader.record(index)));
+            let total = match reader.total_records() {
+                Ok(n) => format!("{n}"),
+                Err(e) => format!("err {}", strip_dir(&e.to_string())),
+            };
+            let _ = write!(
+                line,
+                "total={total} {}={} ",
+                index + 1,
+                lookup_outcome(reader.record(index + 1))
+            );
+            let mut written = Vec::new();
+            let ranged = outcome(reader.records_to(0, 2, &mut written).map(|()| written));
+            let _ = write!(
+                line,
+                "range={ranged} {}={} ",
+                index + 2,
+                lookup_outcome(reader.record(index + 2))
+            );
+        }
+        line
+    });
+    let _ = writeln!(out, "{label}\tsequence-mixed\t{mixed}");
     for from in [0usize, 1, 117, 300] {
         for cnt in [1usize, 2, 117] {
             let r = guard(|| {

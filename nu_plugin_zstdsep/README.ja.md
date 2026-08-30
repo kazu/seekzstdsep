@@ -73,9 +73,9 @@ git checkout nu_v.0.114     # nushell 0.114 と話せる最も新しいリビジ
 
 ```text
 > let h = zstdsep open events.jsonl.seek.zst
-> $h.10              # フレーム 1 つを展開し、レコード 1 つをパースする
+> $h.10              # そのフレームをレコードまでデコードし、レコード 1 つをパースする
 > $h.10.user.name    # 残りのパスはエンジンが自分で辿る
-> $h | get 10 11 12  # 呼び出しは 3 回、フレームは 1 つ、展開は 1 回
+> $h | get 10 11 12  # 呼び出しは 3 回、フレームは 1 つ、デコードは 1 回
 > $h                 # サマリ: path, separator, format, frames, records_per_frame, records
 > $h.records         # そのサマリの 1 フィールド
 ```

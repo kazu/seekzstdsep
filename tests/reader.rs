@@ -3,8 +3,8 @@
 mod common;
 
 use common::{
-    FIXTURE_RECORDS, FIXTURE_RECORDS_PER_FRAME, compress_body, compress_fixture, fixture_records,
-    fixture_records_upto,
+    FIXTURE_RECORDS, FIXTURE_RECORDS_PER_FRAME, compress_body, compress_fixture, compress_frames,
+    fixture_records, fixture_records_upto, incompressible_records,
 };
 use seekzstdsep::RecordReader;
 use tempfile::tempdir;
@@ -44,8 +44,86 @@ fn reads_every_record_by_index() {
     }
 }
 
-/// Reading forwards and backwards returns the same records: the one-frame cache must not depend on
-/// the order it is asked in.
+/// Records that do not compress, six to a frame, so each frame is far larger than the window a
+/// lookup reads through. Anything the window gets wrong between two lookups shows here and not on
+/// a fixture whose frames fit in one fill.
+const LARGE_FRAME_RECORDS: usize = 24;
+const LARGE_FRAME_PER_FRAME: usize = 6;
+
+fn open_large_frames(dir: &std::path::Path) -> (Vec<Vec<u8>>, RecordReader) {
+    let records = incompressible_records(LARGE_FRAME_RECORDS, 64 * 1024);
+    let groups: Vec<Vec<u8>> = records
+        .chunks(LARGE_FRAME_PER_FRAME)
+        .map(<[Vec<u8>]>::concat)
+        .collect();
+    let path = compress_frames(dir, "large", &groups);
+    let reader = RecordReader::open(path, b"\n").expect("Failed to open the reader");
+    (records, reader)
+}
+
+fn assert_reads(reader: &mut RecordReader, records: &[Vec<u8>], index: usize) {
+    let got = reader
+        .record(index)
+        .expect("Failed to read a record")
+        .unwrap_or_else(|| panic!("record {index} came back missing"));
+    assert_eq!(got, records[index], "record {index} did not match");
+}
+
+/// A lookup goes on from where the last one left the window, so what it hands out has to be right
+/// whatever order the indices arrive in.
+#[test]
+fn reads_records_in_any_order_from_frames_larger_than_the_window() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let (records, mut reader) = open_large_frames(dir.path());
+    assert_eq!(reader.records_per_frame(), LARGE_FRAME_PER_FRAME);
+
+    let forwards: Vec<usize> = (0..records.len()).collect();
+    let backwards: Vec<usize> = (0..records.len()).rev().collect();
+    // On from the record before, back to one the window may still hold, and over to another frame.
+    let about: Vec<usize> = vec![10, 11, 11, 10, 9, 6, 7, 8, 7, 23, 0, 5, 12, 12, 11];
+    for order in [forwards, backwards, about] {
+        for index in order {
+            assert_reads(&mut reader, &records, index);
+        }
+    }
+}
+
+/// Everything else the reader does seeks the same file the window reads through. A lookup after
+/// one of those must not read on from where it left the file.
+///
+/// Each move goes between a record and the next one in the same frame, which is the pair a window
+/// is carried across. Reading the same index twice would not do: that is a lookup behind the walk,
+/// which reads the frame again whether the window was given up or not.
+#[test]
+fn a_lookup_after_a_read_that_moved_the_file_reads_the_right_record() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let (records, mut reader) = open_large_frames(dir.path());
+
+    for index in [0usize, 1, 6, 12, 18, 22] {
+        assert_reads(&mut reader, &records, index);
+        assert_eq!(
+            reader.total_records().expect("Failed to count records"),
+            LARGE_FRAME_RECORDS
+        );
+        assert_reads(&mut reader, &records, index + 1);
+
+        assert_reads(&mut reader, &records, index);
+        let mut written = Vec::new();
+        reader
+            .records_to(2, 3, &mut written)
+            .expect("Failed to write records");
+        assert_eq!(written, records[2..5].concat());
+        assert_reads(&mut reader, &records, index + 1);
+
+        assert_reads(&mut reader, &records, index);
+        let gathered = reader.records(8, 2).expect("Failed to read records");
+        assert_eq!(gathered, records[8..10].concat());
+        assert_reads(&mut reader, &records, index + 1);
+    }
+}
+
+/// Reading forwards and backwards returns the same records: what the window carries must not
+/// depend on the order it is asked in.
 #[test]
 fn reads_records_backwards_too() {
     let dir = tempdir().expect("Failed to create temp dir");

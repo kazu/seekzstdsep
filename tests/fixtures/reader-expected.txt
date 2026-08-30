@@ -45,6 +45,8 @@ random-0-1	record	116	ok 6 470c4712fd1af07e
 random-0-1	record	117	ok 22 6cf69441f2c06b82
 random-0-1	record	300	ok 15 49ce776104be8bf3
 random-0-1	record	10000	none
+random-0-1	sequence	0=ok 16 2b155452315778db 1=ok 10 4dda336a82c848cb 2=ok 8 b25446b7ebaeb04e 3=ok 11 29119694cad6ff3b 2=ok 8 b25446b7ebaeb04e 1=ok 10 4dda336a82c848cb 0=ok 16 2b155452315778db 116=ok 6 470c4712fd1af07e 117=ok 22 6cf69441f2c06b82 118=ok 3 004d1c191349c65c 117=ok 22 6cf69441f2c06b82 300=ok 15 49ce776104be8bf3 299=ok 23 15073711cc7bdba6 10000=none 0=ok 16 2b155452315778db 
+random-0-1	sequence-mixed	0=ok 16 2b155452315778db total=2163 1=ok 10 4dda336a82c848cb range=ok 26 378ddbb95f5f2ba9 2=ok 8 b25446b7ebaeb04e 4=ok 4 c414db78fe464005 total=2163 5=ok 10 a24d5983b7b8ec44 range=ok 26 378ddbb95f5f2ba9 6=ok 12 4b17bc0d8e442a95 116=ok 6 470c4712fd1af07e total=2163 117=ok 22 6cf69441f2c06b82 range=ok 26 378ddbb95f5f2ba9 118=ok 3 004d1c191349c65c 300=ok 15 49ce776104be8bf3 total=2163 301=ok 8 a7165eaafac16414 range=ok 26 378ddbb95f5f2ba9 302=ok 17 0a411e54633722a3 
 random-0-1	records	0	1	ok 16 2b155452315778db
 random-0-1	records	0	2	ok 26 378ddbb95f5f2ba9
 random-0-1	records	0	117	ok 888 0b9694de5bd0c1d4
@@ -105,6 +107,8 @@ random-0-2	record	116	ok 80 a3aacd0efec860ba
 random-0-2	record	117	ok 77 cddbab2a7d415b78
 random-0-2	record	300	none
 random-0-2	record	10000	none
+random-0-2	sequence	0=ok 214 9c3ee886bb5e8acb 1=ok 268 659625071ed7b317 2=ok 28 09a4ab19a878b341 3=ok 32 b528113fce6f84e2 2=ok 28 09a4ab19a878b341 1=ok 268 659625071ed7b317 0=ok 214 9c3ee886bb5e8acb 116=ok 80 a3aacd0efec860ba 117=ok 77 cddbab2a7d415b78 118=ok 261 034ec3100e52fff5 117=ok 77 cddbab2a7d415b78 300=none 299=none 10000=none 0=ok 214 9c3ee886bb5e8acb 
+random-0-2	sequence-mixed	0=ok 214 9c3ee886bb5e8acb total=131 1=ok 268 659625071ed7b317 range=ok 482 778e0a16e4c7a2e1 2=ok 28 09a4ab19a878b341 4=ok 250 5558df14d11ba1c8 total=131 5=ok 69 d184a30843a65927 range=ok 482 778e0a16e4c7a2e1 6=ok 204 14513af15fc5dded 116=ok 80 a3aacd0efec860ba total=131 117=ok 77 cddbab2a7d415b78 range=ok 482 778e0a16e4c7a2e1 118=ok 261 034ec3100e52fff5 300=none total=131 301=none range=ok 482 778e0a16e4c7a2e1 302=none 
 random-0-2	records	0	1	ok 214 9c3ee886bb5e8acb
 random-0-2	records	0	2	ok 482 778e0a16e4c7a2e1
 random-0-2	records	0	117	ok 17991 bddfdc5becdfa41e
@@ -165,6 +169,8 @@ random-0-3	record	116	ok 151 856cebce923267e3
 random-0-3	record	117	ok 67 9b9655af382327b6
 random-0-3	record	300	none
 random-0-3	record	10000	none
+random-0-3	sequence	0=ok 215 186f2368864c240e 1=ok 4 22cad7cbdcec3d5d 2=ok 10 f4d9984e52e0bfbd 3=ok 255 e59d9373e8c20358 2=ok 10 f4d9984e52e0bfbd 1=ok 4 22cad7cbdcec3d5d 0=ok 215 186f2368864c240e 116=ok 151 856cebce923267e3 117=ok 67 9b9655af382327b6 118=ok 66 8b9dedfc9388e25f 117=ok 67 9b9655af382327b6 300=none 299=none 10000=none 0=ok 215 186f2368864c240e 
+random-0-3	sequence-mixed	0=ok 215 186f2368864c240e total=151 1=ok 4 22cad7cbdcec3d5d range=ok 219 fda1de008fb31206 2=ok 10 f4d9984e52e0bfbd 4=ok 29 8e9b4a3fef021c9c total=151 5=ok 32 2e6585e8dd03e8b9 range=ok 219 fda1de008fb31206 6=ok 115 6f16104fc206f67b 116=ok 151 856cebce923267e3 total=151 117=ok 67 9b9655af382327b6 range=ok 219 fda1de008fb31206 118=ok 66 8b9dedfc9388e25f 300=none total=151 301=none range=ok 219 fda1de008fb31206 302=none 
 random-0-3	records	0	1	ok 215 186f2368864c240e
 random-0-3	records	0	2	ok 219 fda1de008fb31206
 random-0-3	records	0	117	ok 16074 96e6ff216069ed9f
@@ -225,6 +231,8 @@ random-1-1	record	116	ok 9 2a5592be22fc551d
 random-1-1	record	117	ok 10 dbeea65ee7dd4b69
 random-1-1	record	300	ok 1 af63c74c8601c8dd
 random-1-1	record	10000	none
+random-1-1	sequence	0=ok 1 af63c74c8601c8dd 1=ok 6 b4aac306d37cfb7c 2=ok 2 08d59e07b575f69f 3=ok 11 6f00fbc481889808 2=ok 2 08d59e07b575f69f 1=ok 6 b4aac306d37cfb7c 0=ok 1 af63c74c8601c8dd 116=ok 9 2a5592be22fc551d 117=ok 10 dbeea65ee7dd4b69 118=ok 11 1dcca2eb2232a26e 117=ok 10 dbeea65ee7dd4b69 300=ok 1 af63c74c8601c8dd 299=ok 3 006bb6191363c999 10000=none 0=ok 1 af63c74c8601c8dd 
+random-1-1	sequence-mixed	0=ok 1 af63c74c8601c8dd total=1850 1=ok 6 b4aac306d37cfb7c range=ok 7 b9b20c581eb4d434 2=ok 2 08d59e07b575f69f 4=ok 4 90392884422dbd60 total=1850 5=ok 19 8764156d2db92030 range=ok 7 b9b20c581eb4d434 6=ok 2 08d59e07b575f69f 116=ok 9 2a5592be22fc551d total=1850 117=ok 10 dbeea65ee7dd4b69 range=ok 7 b9b20c581eb4d434 118=ok 11 1dcca2eb2232a26e 300=ok 1 af63c74c8601c8dd total=1850 301=ok 8 231b7622632f12c6 range=ok 7 b9b20c581eb4d434 302=ok 3 1a242f1921e20666 
 random-1-1	records	0	1	ok 1 af63c74c8601c8dd
 random-1-1	records	0	2	ok 7 b9b20c581eb4d434
 random-1-1	records	0	117	ok 1103 12681f6aebbb476e
@@ -275,6 +283,8 @@ random-1-2	record	116	none
 random-1-2	record	117	none
 random-1-2	record	300	none
 random-1-2	record	10000	none
+random-1-2	sequence	0=ok 122 b3008d797d3cd238 1=ok 164 ef43139dfd46ed82 2=ok 59 92d4de1bb74b4c6e 3=ok 220 f475e226ab18d0f0 2=ok 59 92d4de1bb74b4c6e 1=ok 164 ef43139dfd46ed82 0=ok 122 b3008d797d3cd238 116=none 117=none 118=none 117=none 300=none 299=none 10000=none 0=ok 122 b3008d797d3cd238 
+random-1-2	sequence-mixed	0=ok 122 b3008d797d3cd238 total=110 1=ok 164 ef43139dfd46ed82 range=ok 286 324695d64cb13853 2=ok 59 92d4de1bb74b4c6e 4=ok 272 0e44aa3a0b2d96c6 total=110 5=ok 65 094104034c674fae range=ok 286 324695d64cb13853 6=ok 55 04f05cc2e7984db0 116=none total=110 117=none range=ok 286 324695d64cb13853 118=none 300=none total=110 301=none range=ok 286 324695d64cb13853 302=none 
 random-1-2	records	0	1	ok 122 b3008d797d3cd238
 random-1-2	records	0	2	ok 286 324695d64cb13853
 random-1-2	records	0	117	ok 17227 cffe3e679edaf806
@@ -325,6 +335,8 @@ random-1-3	record	116	ok 115 aff1b15448a43c3c
 random-1-3	record	117	ok 168 f99ff9958852b130
 random-1-3	record	300	none
 random-1-3	record	10000	none
+random-1-3	sequence	0=ok 123 bbf1eb8a8f91b794 1=ok 165 a1a67b11d4c2a25f 2=ok 60 c3eedaa8575231f6 3=ok 221 4f98f3285587df4d 2=ok 60 c3eedaa8575231f6 1=ok 165 a1a67b11d4c2a25f 0=ok 123 bbf1eb8a8f91b794 116=ok 115 aff1b15448a43c3c 117=ok 168 f99ff9958852b130 118=ok 80 f0ad1d75d30b892d 117=ok 168 f99ff9958852b130 300=none 299=none 10000=none 0=ok 123 bbf1eb8a8f91b794 
+random-1-3	sequence-mixed	0=ok 123 bbf1eb8a8f91b794 total=130 1=ok 165 a1a67b11d4c2a25f range=ok 288 4d6631718b01b8a4 2=ok 60 c3eedaa8575231f6 4=ok 273 a2d99feefada1e49 total=130 5=ok 66 ce105bb99aeb8f12 range=ok 288 4d6631718b01b8a4 6=ok 56 e5a4b95b038244e1 116=ok 115 aff1b15448a43c3c total=130 117=ok 168 f99ff9958852b130 range=ok 288 4d6631718b01b8a4 118=ok 80 f0ad1d75d30b892d 300=none total=130 301=none range=ok 288 4d6631718b01b8a4 302=none 
 random-1-3	records	0	1	ok 123 bbf1eb8a8f91b794
 random-1-3	records	0	2	ok 288 4d6631718b01b8a4
 random-1-3	records	0	117	ok 15304 214069b9f68eba08
@@ -365,6 +377,8 @@ random-2-1	record	116	ok 1 af63c74c8601c8dd
 random-2-1	record	117	ok 4 2892d9de1b42966c
 random-2-1	record	300	ok 2 08f79e07b592dd05
 random-2-1	record	10000	none
+random-2-1	sequence	0=ok 5 ca074f9df6486aaa 1=ok 5 39b3baed41e3f7dc 2=ok 9 0de806f4f8c1ea78 3=ok 12 297575d25bbea9c3 2=ok 9 0de806f4f8c1ea78 1=ok 5 39b3baed41e3f7dc 0=ok 5 ca074f9df6486aaa 116=ok 1 af63c74c8601c8dd 117=ok 4 2892d9de1b42966c 118=ok 14 a64e510a70ba126d 117=ok 4 2892d9de1b42966c 300=ok 2 08f79e07b592dd05 299=ok 30 371a7843c5c140e9 10000=none 0=ok 5 ca074f9df6486aaa 
+random-2-1	sequence-mixed	0=ok 5 ca074f9df6486aaa total=659 1=ok 5 39b3baed41e3f7dc range=ok 10 c773ebed5dacf979 2=ok 9 0de806f4f8c1ea78 4=ok 12 cd4a623859fe6e90 total=659 5=ok 5 170b02f93d417b17 range=ok 10 c773ebed5dacf979 6=ok 9 3d02e4851d614e7b 116=ok 1 af63c74c8601c8dd total=659 117=ok 4 2892d9de1b42966c range=ok 10 c773ebed5dacf979 118=ok 14 a64e510a70ba126d 300=ok 2 08f79e07b592dd05 total=659 301=ok 7 6801703c2b1e4214 range=ok 10 c773ebed5dacf979 302=ok 19 738ca75fc60659a5 
 random-2-1	records	0	1	ok 5 ca074f9df6486aaa
 random-2-1	records	0	2	ok 10 c773ebed5dacf979
 random-2-1	records	0	117	ok 879 81bbbadb71f44f26
@@ -405,6 +419,8 @@ random-2-2	record	116	none
 random-2-2	record	117	none
 random-2-2	record	300	none
 random-2-2	record	10000	none
+random-2-2	sequence	0=ok 266 039e31688c8df6b7 1=ok 271 abd59c2e117bb2a5 2=ok 46 4c1e889b181692e5 3=ok 98 fc8eaa1bf2654851 2=ok 46 4c1e889b181692e5 1=ok 271 abd59c2e117bb2a5 0=ok 266 039e31688c8df6b7 116=none 117=none 118=none 117=none 300=none 299=none 10000=none 0=ok 266 039e31688c8df6b7 
+random-2-2	sequence-mixed	0=ok 266 039e31688c8df6b7 total=38 1=ok 271 abd59c2e117bb2a5 range=ok 537 83f0c744cb54ff0b 2=ok 46 4c1e889b181692e5 4=ok 292 f5bea509140b8d6f total=38 5=ok 28 38fc149dd9354a0f range=ok 537 83f0c744cb54ff0b 6=ok 203 21b1d42a76cd4e21 116=none total=38 117=none range=ok 537 83f0c744cb54ff0b 118=none 300=none total=38 301=none range=ok 537 83f0c744cb54ff0b 302=none 
 random-2-2	records	0	1	ok 266 039e31688c8df6b7
 random-2-2	records	0	2	ok 537 83f0c744cb54ff0b
 random-2-2	records	0	117	ok 5960 f454503bbdd1860f
@@ -445,6 +461,8 @@ random-2-3	record	116	none
 random-2-3	record	117	none
 random-2-3	record	300	none
 random-2-3	record	10000	none
+random-2-3	sequence	0=ok 266 12479bc09f477e7c 1=ok 273 25af88bd68264fdb 2=ok 47 7d43ef7f0eadacf8 3=ok 98 0d2c784017abe2cf 2=ok 47 7d43ef7f0eadacf8 1=ok 273 25af88bd68264fdb 0=ok 266 12479bc09f477e7c 116=none 117=none 118=none 117=none 300=none 299=none 10000=none 0=ok 266 12479bc09f477e7c 
+random-2-3	sequence-mixed	0=ok 266 12479bc09f477e7c total=42 1=ok 273 25af88bd68264fdb range=ok 539 ce7953eb1516166c 2=ok 47 7d43ef7f0eadacf8 4=ok 294 a6a730811e11c716 total=42 5=ok 29 cad83c98d826cb09 range=ok 539 ce7953eb1516166c 6=ok 204 0331b5b4d3a1709d 116=none total=42 117=none range=ok 539 ce7953eb1516166c 118=none 300=none total=42 301=none range=ok 539 ce7953eb1516166c 302=none 
 random-2-3	records	0	1	ok 266 12479bc09f477e7c
 random-2-3	records	0	2	ok 539 ce7953eb1516166c
 random-2-3	records	0	117	ok 5998 a0c5eb9337b6d7d4
@@ -485,6 +503,8 @@ no-separator	record	116	none
 no-separator	record	117	none
 no-separator	record	300	none
 no-separator	record	10000	none
+no-separator	sequence	0=none 1=none 2=none 3=none 2=none 1=none 0=none 116=none 117=none 118=none 117=none 300=none 299=none 10000=none 0=none 
+no-separator	sequence-mixed	panic attempt to divide by zero
 no-separator	records	0	1	panic attempt to divide by zero
 no-separator	records	0	2	panic attempt to divide by zero
 no-separator	records	0	117	panic attempt to divide by zero
@@ -1025,6 +1045,8 @@ boundary	record	116	none
 boundary	record	117	none
 boundary	record	300	none
 boundary	record	10000	none
+boundary	sequence	0=ok 32768 b1046b049fc29ae0 1=ok 999 91916323179c7db6 2=ok 999 cab3fbbc793ce349 3=ok 999 b70f07f2b091e890 2=ok 999 cab3fbbc793ce349 1=ok 999 91916323179c7db6 0=ok 32768 b1046b049fc29ae0 116=none 117=none 118=none 117=none 300=none 299=none 10000=none 0=ok 32768 b1046b049fc29ae0 
+boundary	sequence-mixed	0=ok 32768 b1046b049fc29ae0 total=51 1=ok 999 91916323179c7db6 range=ok 33767 8f2e829457116a09 2=ok 999 cab3fbbc793ce349 4=ok 999 f098a8427893ef4b total=51 5=ok 999 0cafe313f8306b32 range=ok 33767 8f2e829457116a09 6=ok 999 cce45ecbb2b9bf05 116=none total=51 117=none range=ok 33767 8f2e829457116a09 118=none 300=none total=51 301=none range=ok 33767 8f2e829457116a09 302=none 
 boundary	records	0	1	ok 32768 b1046b049fc29ae0
 boundary	records	0	2	ok 33767 8f2e829457116a09
 boundary	records	0	117	ok 82718 66fc9aa3c8db4af5
@@ -1115,6 +1137,8 @@ giant	record	116	none
 giant	record	117	none
 giant	record	300	none
 giant	record	10000	none
+giant	sequence	0=ok 100001 0b4804bfdb83d57d 1=ok 51 7293eaafbf8f9f5b 2=ok 100001 66f52121470ea65d 3=ok 51 d6e81a6de5f653ed 2=ok 100001 66f52121470ea65d 1=ok 51 7293eaafbf8f9f5b 0=ok 100001 0b4804bfdb83d57d 116=none 117=none 118=none 117=none 300=none 299=none 10000=none 0=ok 100001 0b4804bfdb83d57d 
+giant	sequence-mixed	0=ok 100001 0b4804bfdb83d57d total=6 1=ok 51 7293eaafbf8f9f5b range=ok 100052 f5c33402836736d3 2=ok 100001 66f52121470ea65d 4=ok 100001 054f78979a7ba57d total=6 5=ok 51 05dd77b6c89257ff range=ok 100052 f5c33402836736d3 6=none 116=none total=6 117=none range=ok 100052 f5c33402836736d3 118=none 300=none total=6 301=none range=ok 100052 f5c33402836736d3 302=none 
 giant	records	0	1	ok 100001 0b4804bfdb83d57d
 giant	records	0	2	ok 100052 f5c33402836736d3
 giant	records	0	117	ok 300156 6689a2a63368b995

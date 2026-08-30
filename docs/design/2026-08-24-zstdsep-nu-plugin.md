@@ -5,7 +5,7 @@
 place — see "Formats".
 **Date:** 2026-08-24, with `save` added 2026-08-25
 
-Lazy access to `.seek.zst` files from nushell: `zstdsep open f | get 10` decompresses one frame,
+Lazy access to `.seek.zst` files from nushell: `zstdsep open f | get 10` decodes into one frame,
 not the file. Built on the facts below about what nushell delegates to plugins; each was verified
 against the protocol reference and nushell source, re-check when nushell moves.
 
@@ -127,8 +127,8 @@ record, not one array.
 - The plugin process is spawned once and persists; the engine stops it after 10 s idle by default
   (timer resets on every call) and restarts it on demand. Custom values live engine-side and
   survive both.
-- State table: handle id → `{seek table, sep_cnt, one decompressed-frame cache}`. The frame cache
-  turns `get ...(seq a b)` (N calls, same frame) into one decompress + N lookups.
+- State table: handle id → `{seek table, sep_cnt, the window the last lookup read through}`.
+  Carrying that window turns `get ...(seq a b)` (N calls, same frame) into one decode + N lookups.
 - A `FollowPathInt` that misses the table (post-GC restart) rebuilds it from the path and separator
   embedded in the custom value. `set_gc_disabled` is an optional optimization on top, never a
   correctness requirement.
@@ -139,11 +139,11 @@ record, not one array.
   decompresses frame 0 for `sep_cnt` on **every call** (`src/seekzstdsep_lib.rs`); per-point calls
   through it would defeat the seek. The handle holds decoder + frame list + `sep_cnt`;
   `cat_data` becomes a thin wrapper over it.
-  *Done: `RecordReader` in `src/reader.rs`. It also carries the one-frame cache, and `into_records`
-  / `into_bytes` are what `--no-partial` streams through.*
+  *Done: `RecordReader` in `src/reader.rs`. It also carries the window its last lookup read
+  through, and `into_records` / `into_bytes` are what `--no-partial` streams through.*
 - A multi-start batch API (sort starts by frame, decompress each frame once) serves the own
   subcommands and the CLI. It does not help `FollowPathInt`, which arrives one index per call; the
-  frame cache covers that side. *Not done; it belongs with the subcommands that need it.*
+  carried window covers that side. *Not done; it belongs with the subcommands that need it.*
 
 ## References
 

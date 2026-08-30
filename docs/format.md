@@ -21,9 +21,10 @@ adds no bytes of its own — any compliant seekable-zstd reader can read these f
 
 Each data frame is an independent zstd frame, so decompressing one requires no state from any other.
 Every one this crate writes ends with a content checksum — the low 32 bits of the XXH64 of the
-frame's decompressed bytes — so the frame a lookup decompresses is verified as it is read. `compress
---no-check` leaves it out, and an operation that replaces a frame writes the replacement with
-whatever the frame it replaced carried, so a file keeps whichever setting it was made with.
+frame's decompressed bytes — so only a read that decodes the whole frame can check it, which a
+record read does not (`docs/bugs.md`). `compress --no-check` leaves it out, and an operation that replaces a frame writes the
+replacement with whatever the frame it replaced carried, so a file keeps whichever setting it was
+made with.
 
 The seek table is a zstd *skippable* frame at the end of the file.
 
