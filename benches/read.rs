@@ -94,6 +94,28 @@ fn before_cnt_in_frame<'a>(
     Ok(finder.find_iter(&data).count())
 }
 
+/// `into_records` at the branch point: a frame decompressed into one buffer and kept, records cut
+/// out of it one at a time, the next frame decompressed over it. How many records that is, so the
+/// case matches the `after` one, which counts what it hands out.
+#[allow(clippy::unused_io_amount)]
+fn before_into_records(path: &PathBuf, finder: &Finder) -> anyhow::Result<usize> {
+    let mut d = decoder(path);
+    let frames = seek_table_decomp_frames(&d).expect("no frames");
+    let mut count = 0usize;
+    for (start, len) in frames {
+        d.seek(SeekFrom::Start(start))?;
+        let mut data = vec![0u8; len as usize];
+        d.read(&mut data[..])?;
+        let mut offset = 0usize;
+        while let Some(end) = finder.find(&data[offset..]).map(|p| p + SEPARATOR.len()) {
+            black_box(data[offset..offset + end].to_vec());
+            offset += end;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 /// `cat` at the branch point: open the file once, read the seek table, place the range over
 /// frames, decode the whole of that span into one buffer, cut the records out of it and hand back
 /// the `Vec`. `cat_data` was this, down to reading frame 0 and the range through the one decoder
@@ -265,6 +287,9 @@ fn read(c: &mut Criterion) {
         // The whole file, record by record.
         let mut group = c.benchmark_group("into_records");
         group.sample_size(20);
+        group.bench_function("before", |b| {
+            b.iter(|| black_box(before_into_records(&path, &finder).unwrap()))
+        });
         group.bench_function("after", |b| {
             b.iter(|| {
                 let reader =
@@ -292,7 +317,9 @@ fn read(c: &mut Criterion) {
                 b.iter(|| {
                     let mut reader =
                         RecordReader::open(path.clone(), SEPARATOR).expect("Failed to open reader");
-                    reader.records(black_box(from), black_box(cnt)).unwrap()
+                    reader
+                        .records_to(black_box(from), black_box(cnt), &mut std::io::sink())
+                        .unwrap()
                 })
             });
         }

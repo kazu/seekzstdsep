@@ -54,8 +54,8 @@ std::fs::File::open(&input).expect("fail open")
 A mistyped path is enough:
 
 ```
-$ seekzstdsep cat /tmp/does-not-exist.zst --from 0 --cnt 1
-thread 'main' panicked at src/seekzstdsep_lib.rs:735:52:
+$ seekzstdsep inspect /tmp/does-not-exist.zst
+thread 'main' panicked at src/seekzstdsep_lib.rs:1103:44:
 fail open: Os { code: 2, kind: NotFound, message: "No such file or directory" }
 $ echo $?
 101
@@ -82,7 +82,7 @@ Fixed by `?` at the site. It is not reached by any current test.
 
 ### A record count near `u64::MAX` overflows while the range is placed
 
-`frame_range` places the end of a range with `(from + c) % n` (`src/edit.rs:764`), which overflows
+`frame_range` places the end of a range with `(from + c) % n` (`src/edit.rs`), which overflows
 before the arm three lines below can refuse it with `from.saturating_add(c)`. A debug build panics;
 a release build wraps and lands on a refusal by accident.
 
@@ -98,7 +98,7 @@ first byte, so the damage is the panic itself.
 
 ### `inspect` panics on a frame that fails to decode
 
-`src/seekzstdsep_lib.rs:1123`
+`src/seekzstdsep_lib.rs`, in `inspect_with_opts`.
 
 `cnt_of_separetor_in_frame` is called inside a `map` closure and its error is taken with `expect`,
 so a frame that will not decompress aborts the process rather than being reported. Frames carry a
@@ -130,8 +130,8 @@ it, and comparing against the same index in the uncompressed source.
 
 `src/reader.rs`, in `RecordReader::records_request`, which every record range goes through.
 
-`total_sep_cnt = self.sep_cnt * self.frames.len()` (143) is the divisor for `frame_idx` (144) and
-`end_frame_idx` (154), and `from % self.sep_cnt` (151) divides by `sep_cnt` directly.
+`total_sep_cnt = self.sep_cnt * self.frames.len()` is the divisor for `frame_idx` and
+`end_frame_idx`, and `from % self.sep_cnt` divides by `sep_cnt` directly.
 
 Settled by running `cat` with a `--separator` that does not occur in the file, or on a file whose
 first frame holds no complete record. The nushell plugin refuses that separator before it gets
@@ -139,8 +139,8 @@ here (`nu_plugin_zstdsep/src/source.rs`); `RecordReader` does not.
 
 ### The frame is read with a single `read` call
 
-`src/seekzstdsep_lib.rs`, in `decompressed_range`, which `lines_between_by_separator_in_frame` and
-`cnt_of_separetor_in_frame` both take the frame's bytes from:
+`src/seekzstdsep_lib.rs`, in `decompressed_range_into`, which `RecordReader::record` and
+`FrameReader` take a frame's bytes from:
 
 ```rust
 let mut data = vec![0u8; len as usize];
@@ -164,13 +164,9 @@ So the code depends on how zeekstd is written rather than on what it promises, a
 goes wrong. Settled by a zeekstd release that returns short, which would want the loop rather than
 a fallback that copes with NUL.
 
-The two sites this was taken from also differed in what they did with a read error: one called
-`expect` and panicked, the other returned it. The shared body returns it, so
-`lines_between_by_separator_in_frame` no longer panics there.
-
 ### `old_cnt_of_separetor_in_frame_via_buf` underflows on short input
 
-`src/seekzstdsep_lib.rs:643`
+`src/seekzstdsep_lib.rs`, in `old_cnt_of_separetor_in_frame_via_buf`.
 
 ```rust
 let max_pos = data.len() - sep_len;
@@ -184,8 +180,8 @@ Settled by calling it with a buffer shorter than the separator.
 
 ### The record count and the reachable indices disagree on a foreign file
 
-`RecordReader::total_records` (`src/reader.rs:103`) counts the last frame directly, while
-`RecordReader::record` (`src/reader.rs:113`) divides the index by frame 0's count and refuses
+`RecordReader::total_records` counts the last frame directly, while
+`RecordReader::record` divides the index by frame 0's count and refuses
 anything past the last frame. The two agree only while no frame holds more records than frame 0.
 
 A file whose last frame holds more reports records that no index can reach: with two frames, 10
@@ -197,7 +193,7 @@ rest. Settled by a file from another writer, or by one built by hand.
 
 ### Adding `from` and `cnt` can overflow and the length then underflows
 
-`src/reader.rs:154`, in `RecordReader::records`. `from` and `cnt` are `usize` taken straight from
+`src/reader.rs`, in `RecordReader::records_request`. `from` and `cnt` are `usize` taken straight from
 the command line, so `from + cnt + 1` wraps in a release build. Clamping `end_frame_idx` to the
 last frame does not help here: a wrapped value can make it smaller than `frame_idx`, and then
 

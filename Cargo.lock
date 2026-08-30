@@ -4788,6 +4788,7 @@ dependencies = [
  "criterion",
  "memchr",
  "rand 0.9.4",
+ "rand_chacha",
  "reflink-copy",
  "serde",
  "serde_json",

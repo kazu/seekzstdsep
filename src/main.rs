@@ -130,12 +130,11 @@ fn main() -> anyhow::Result<()> {
     // body here can only be reached by spawning the binary.
     match cli.command {
         Commands::Cat(args) => {
-            let outs =
-                RecordReader::open(args.input.expect("not found"), args.separator.as_bytes())?
-                    .records(args.from, args.cnt)?;
-
+            let mut reader =
+                RecordReader::open(args.input.expect("not found"), args.separator.as_bytes())?;
             let mut stdout = io::stdout().lock(); // ロックを取得すると高速
-            stdout.write_all(&outs).expect("write fail"); // バイナリをそのまま書き出す
+            // 窓ごとに書き出すので、結果全体をメモリに持たない
+            reader.records_to(args.from, args.cnt, &mut stdout)?;
             stdout.flush().expect("failed to flush stdout");
         }
         Commands::Convert(args) | Commands::Compress(args) => {

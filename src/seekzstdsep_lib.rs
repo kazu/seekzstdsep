@@ -25,12 +25,15 @@ const LIMIT_SEP_BUF_MULTIPLIER: usize = 4;
 /// How much every reader in the crate takes from its source at a time.
 pub(crate) const READ_BUF_SIZE: usize = 32768; // 大きなバッファでI/O削減
 
-/// What a buffer that holds one decompressed frame starts at, before it grows to the frames
-/// actually read.
+/// How much of a decompressed frame is held at once.
 ///
-/// How large a frame is belongs to the file rather than to this crate, so this is only where the
-/// growing starts. Equal to [`READ_BUF_SIZE`] for now because nothing yet says it should differ,
-/// and separate from it because the two answer different questions.
+/// It is the whole of [`record::Reader`]'s window, which never grows: how large a frame is belongs
+/// to the file rather than to this crate, and what a read holds should not follow it. A caller that
+/// does need a frame whole — `edit::FrameReader` — starts here and grows to the frames it is asked
+/// for.
+///
+/// Equal to [`READ_BUF_SIZE`] for now because nothing yet says it should differ, and separate from
+/// it because the two answer different questions.
 pub(crate) const READ_FRAME_BUF_SIZE: usize = READ_BUF_SIZE;
 
 /// Shorthand for [`convert_to_seekable_zst_reader`] with `is_same_separator_cnt` set to `false`.
@@ -825,10 +828,9 @@ fn old_encode_frame_on_same_separator_cnt<W: Write>(
 /// Both are counts of separators, not offsets into the region: `start_sep_cnt` is how many to skip
 /// and `cnt_of_sep` how many to return, each record carrying its own separator. Fewer are returned
 /// when the region holds fewer.
-// FIXME: `data` is sized to frame_len and filled with a single read, so any unfilled tail is NUL.
-// MENTION: the buffer and both bounds could be a chain — take + read_to_end, then find_iter().nth()
-// with map_or for start and end — dropping is_none, and_then and unwrap. Would also settle the
-// FIXME above, which on its own changes nothing: see docs/bugs.md.
+///
+/// The region is decoded one fixed window at a time, so neither the region nor a record has to fit
+/// in memory: a record longer than the window is written on in pieces.
 pub fn records_between_by_separator_in_frame<'a>(
     decoder: &mut Decoder<'a, std::fs::File>,
     frame_start: u64,
@@ -838,32 +840,14 @@ pub fn records_between_by_separator_in_frame<'a>(
     finder: &Finder,
     separator: &[u8],
 ) -> anyhow::Result<Vec<u8>> {
-    // データのデコード
-    let data = decompressed_range(decoder, frame_start, frame_len)?;
-
-    let start = record::nth_start(&data, finder, separator.len(), start_sep_cnt as usize);
-
-    if start.is_none() {
-        return Err(anyhow::anyhow!("No separator found in frame"));
-    }
-
-    if cnt_of_sep == 0 {
-        return Ok(Vec::new());
-    }
-
-    let end_pos = start
-        .and_then(|s_pos| {
-            // s_pos 以降から探し始めることで、完全に無駄を省く
-            record::nth_end(
-                &data[s_pos..],
-                finder,
-                separator.len(),
-                cnt_of_sep as usize - 1,
-            )
-            .map(|end| s_pos + end)
-        })
-        .unwrap_or(data.len());
-    Ok(data[start.unwrap()..end_pos].to_vec())
+    let reader = record::region(decoder, frame_start, frame_len)?;
+    let mut out = Vec::new();
+    reader
+        .records(finder, separator.len())
+        .skip_records(start_sep_cnt)?
+        .take_records(cnt_of_sep)
+        .write_to(&mut out)?;
+    Ok(out)
 }
 
 /// Renamed to [`records_between_by_separator_in_frame`]: a separator is not a newline, so what
@@ -984,21 +968,23 @@ pub(crate) fn decompressed_range_into<S: zeekstd::Seekable>(
 }
 
 /// Counts separators in the decompressed region `[start, start + len)`.
+///
+/// The region is decoded one fixed window at a time and dropped as it is scanned, so a frame does
+/// not have to fit in memory to be counted, whatever it holds.
 pub fn cnt_of_separetor_in_frame<'a>(
     decoder: &mut Decoder<'a, std::fs::File>,
     start: u64,
     len: u64,
     finder: &Finder,
-    separator: &[u8], // start, len
+    separator: &[u8],
 ) -> anyhow::Result<usize> {
     if len == 0 {
         return Ok(0);
     }
 
-    // データをデコード
-    let data = decompressed_range(decoder, start, len)?;
-
-    cnt_of_separetor_in_frame_via_buf(&data, finder, separator)
+    record::region(decoder, start, len)?
+        .records(finder, separator.len())
+        .count_records()
 }
 
 /// Counts separators in an already-decoded buffer. `finder` must match `_separator`, which is unused.

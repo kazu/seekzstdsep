@@ -3,6 +3,10 @@
 Decisions to make and work to build. Neither defects (`docs/bugs.md`) nor costs
 (`docs/performances.md`). Ordered by what blocks what.
 
+## Next
+
+- [ ] [Indexed access still holds a whole frame](#indexed-access-still-holds-a-whole-frame)
+
 ## Editing an existing file
 
 Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `concat` and
@@ -22,6 +26,23 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 
 - [ ] [`inspect_with_opts` is not re-exported](#inspect_with_opts-is-not-re-exported)
 - [ ] [`out_dir` is written out at every call site](#out_dir-is-written-out-at-every-call-site)
+- [ ] [The read window and the default frame size are not tuned](#the-read-window-and-the-default-frame-size-are-not-tuned)
+
+### Indexed access still holds a whole frame
+
+A range read and `into_records` decode through one fixed window, so what they hold does not follow
+the frame size. `RecordReader::record(index)` does not: it decompresses the frame into a `Vec` and
+keeps that one frame cached, which is what `$h.10` and `get 10 11` go through in the nushell plugin.
+
+A compressed frame cannot be entered partway, so a lookup in arbitrary order pays either the memory
+or a decode from the frame's start. The window can serve most of it by being carried between calls —
+same frame and further ahead keeps the buffer, backward or another frame rebuilds it — and `get 10
+11` then costs one decode, holding a window instead of a frame.
+
+Left for its own work because the decoder's file position is shared: `records_to`, `total_records`
+and `into_bytes` all seek it, so any of them between two lookups silently makes a carried window
+point elsewhere. That fault is invisible on small fixtures — the window is 32 KiB — and this crate
+has already shipped one bug of exactly that shape.
 
 ### Concurrent append, and reading during an append
 
@@ -91,3 +112,19 @@ sets `out_path` without `out_dir` would find its staging file move from the syst
 directory to the output's own — where the quota may be smaller, where a directory watcher will see
 it, and where a network filesystem would be slower than a local `/tmp`. Nobody in this repository
 writes that combination, so the change is invisible here and a behaviour change there.
+
+### The read window and the default frame size are not tuned
+
+`READ_BUF_SIZE` — and `READ_FRAME_BUF_SIZE` with it — is 32 KiB
+(`src/seekzstdsep_lib.rs`). `rg` reads in 64 KiB, and `--frame-size` defaults to 65536, so the
+window is half of both. Neither number was chosen by measurement.
+
+Two questions, and they are not independent: whether the window should be 64 KiB to match, and
+whether the default frame size should move once it is. A window the size of a frame reads a whole
+frame in one go and never slides; a window half of it slides once per frame. Which is faster is
+not obvious — the larger window costs a larger allocation per reader, which every `RecordReader`
+pays at open.
+
+Settled by measuring, not by matching a number to another number. `benches/read.rs` has the `cat`
+and `into_records` cases to measure with; the window size would have to become a parameter, or the
+constant changed and the two builds run alternately.

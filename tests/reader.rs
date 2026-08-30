@@ -122,6 +122,37 @@ fn a_trailing_fragment_is_not_a_record() {
 }
 
 #[test]
+fn a_record_longer_than_the_read_window_comes_back_whole() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    // Longer than the window a region is decoded through, so it arrives in pieces.
+    let long = "x".repeat(100_000);
+    let records: Vec<Vec<u8>> = [
+        "first\n".to_string(),
+        format!("{long}\n"),
+        "last\n".to_string(),
+    ]
+    .iter()
+    .map(|r| r.as_bytes().to_vec())
+    .collect();
+    let out_path = compress_body(dir.path(), "long-record", &records.concat());
+
+    let mut reader =
+        RecordReader::open(out_path.clone(), b"\n").expect("Failed to open the reader");
+    let mut got = Vec::new();
+    reader
+        .records_to(0, 2, &mut got)
+        .expect("Failed to write records");
+    assert_eq!(got, [records[0].clone(), records[1].clone()].concat());
+
+    let reader = RecordReader::open(out_path, b"\n").expect("Failed to open the reader");
+    let iterated: Vec<Vec<u8>> = reader
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .expect("Failed to iterate records");
+    assert_eq!(iterated, records);
+}
+
+#[test]
 fn the_byte_stream_is_the_whole_file() {
     let dir = tempdir().expect("Failed to create temp dir");
     let reader = open_fixture(dir.path());
@@ -171,4 +202,28 @@ fn an_empty_separator_is_refused() {
         err.to_string().contains("separator must not be empty"),
         "the failure was not about the separator: {err}"
     );
+}
+
+/// `records_to` writes what `records` returns, over the whole corpus of positions and counts the
+/// recorded fixture covers, including the ones that run past the end.
+#[test]
+fn records_to_writes_what_records_returns() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let out_path = compress_fixture(temp_dir.path());
+
+    for from in [0usize, 1, 116, 117, 118, 233, 300, 599, 600, 1000] {
+        for cnt in [0usize, 1, 2, 117, 600, 10_000] {
+            let gathered = RecordReader::open(out_path.clone(), b"\n")
+                .expect("Failed to open reader")
+                .records(from, cnt)
+                .map_err(|e| e.to_string());
+            let mut written = Vec::new();
+            let streamed = RecordReader::open(out_path.clone(), b"\n")
+                .expect("Failed to open reader")
+                .records_to(from, cnt, &mut written)
+                .map(|()| written)
+                .map_err(|e| e.to_string());
+            assert_eq!(gathered, streamed, "from = {from}, cnt = {cnt}");
+        }
+    }
 }
