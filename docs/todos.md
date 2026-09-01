@@ -20,6 +20,9 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 
 ## Blocking nothing
 
+- [ ] [A record read has no way to verify its frame's checksum](#a-record-read-has-no-way-to-verify-its-frames-checksum)
+- [ ] [The frame is read with a single `read` call](#the-frame-is-read-with-a-single-read-call)
+- [ ] [`RecordReader` cannot be asked to check the uniform count](#recordreader-cannot-be-asked-to-check-the-uniform-count)
 - [ ] [`inspect_with_opts` is not re-exported](#inspect_with_opts-is-not-re-exported)
 - [ ] [`out_dir` is written out at every call site](#out_dir-is-written-out-at-every-call-site)
 - [ ] [The read window and the default frame size are not tuned](#the-read-window-and-the-default-frame-size-are-not-tuned)
@@ -66,6 +69,94 @@ Reader::records(&self, from, cnt)   // repeatedly, from several threads
 
 Undecided: whether `Reader` holds a file handle at all, or hands out per-thread ones. Decoding is
 stateful, so it cannot be shared behind `&self`.
+
+### A record read has no way to verify its frame's checksum
+
+A frame ends with a content checksum over its whole decompressed content, so only a decode that
+reaches the frame's end verifies it. zeekstd says the same of its decoder: "The frame checksum of
+the last decompressed frame will not be verified, if the limit isn't at the end of a frame." A
+record read stops at the last record asked for, so a flipped byte elsewhere in that frame comes
+back as data and nothing is reported. Corruption inside a block the read does decode is still
+caught — zstd reports `Data corruption detected` — so what is missed is the part of the frame the
+read skipped.
+
+That is what partial decompression means, not a defect. What reaches a frame's end today: `open` on
+frame 0, `total_records` on the last frame, `inspect --no-fast-mode` on every frame, and an edit on
+the frames it rewrites. What is missing is the choice — a caller that wants the whole frame checked
+has no way to ask for it.
+
+**The remedy is a flag, defaulting to off.** Checking means decoding the frame to its end, which
+puts the time back in proportion to the frame size — 16 MiB for three records where the window
+decodes 32 KiB — and that proportion is what the window commits exist to remove. `zstd -d` checks by
+default because it decompresses everything anyway; that reason does not carry here. Memory is not
+the cost: the rest of the frame can be decoded and dropped, on its own thread with its own decoder
+and file handle, since the check needs nothing the read produces. Both `--help` texts have to say
+which way the flag is set.
+
+`docs/cli.md` and `cat --help` already state the behaviour, and both send the reader to
+`docs/bugs.md` for it. Those two references go with this work: the behaviour is not a defect, and a
+user-facing text has no business pointing at a bug list — or at this file.
+
+### The frame is read with a single `read` call
+
+`decompressed_range_into` (`src/seekzstdsep_lib.rs`), which `edit::FrameReader` takes a frame's
+bytes from:
+
+```rust
+let mut data = vec![0u8; len as usize];
+let _n = decoder.read(&mut data[..])?;
+```
+
+`Read::read` may return fewer bytes than the buffer holds without that being an error, and zeekstd
+promises nothing more: `Decoder::decompress` is documented "call this repetetively to fill `buf`",
+and its example loops until a call returns 0. A short read would leave the tail of `data` as NUL,
+which an edit would copy into the file it writes while counting the frame's separators short — and
+the return value is discarded, so nothing would notice.
+
+It has never returned short. 1,212 single reads over fixtures of 600, 50,000 and 200,000 records,
+spanning one, three and ten frames at a time, all filled the buffer, and a later read of 24 MB
+across 364 frames filled it too. `Decoder::decompress` loops internally until `buf` is full or
+`offset_limit` is reached, and this crate sizes every buffer from the seek table, so the limit is
+never what stops it. Nothing goes wrong today; what is wrong is that the code rests on how zeekstd
+is written rather than on what it promises.
+
+Two halves, and only the first is worth doing now. Erroring on `n != len` removes the part that
+cannot be noticed. The loop is wanted only once zeekstd returns short, and a release that does is
+what would settle whether it ever will. The rustdoc on `decompressed_range_into` sends the reader
+to `docs/bugs.md` for this and has to change with it.
+
+### `RecordReader` cannot be asked to check the uniform count
+
+`RecordReader` locates a record by dividing its index by frame 0's separator count, so everything it
+answers rests on every frame holding that count. A file that does not is read at the wrong offsets
+and reports nothing. Both sides say so in their rustdoc: `convert_text_to_seekable_zst_reader` cuts
+frames by size alone and states that `RecordReader` cannot locate records in its output, and
+`RecordReader::records` states the requirement from the other end. `seekzstdsep compress` holds the
+count uniform and has no flag to stop it, so writing such a file takes a library caller.
+
+One consequence shows without any wrong data being handed back. `total_records` counts the last
+frame directly, while `record` divides by frame 0's count and refuses anything past the last frame,
+so a file whose last frame holds more than frame 0 makes the two disagree: with 10 records in the
+first frame and 15 in the last, `total_records` is 25 and `record(20)` is `None`, which the nushell
+plugin reports as "Row number too large (max: 24)". This crate's compressor cannot write that file —
+its last frame holds at most as many as the rest — so it takes another writer or one built by hand.
+The `FIXME` on `total_records` (`src/reader.rs`) points at `docs/bugs.md` for this and moves with the
+work.
+
+The edit side already has the check. `records_per_frame` (`src/edit.rs`) takes a `SeparatorCheck`:
+`FirstFrame` confirms frame 0 ends with the separator, and `TwoFrames` also counts the last frame
+that is not allowed to be short, refusing when the two disagree. `append_frames` goes further with
+`RangeCheck::EveryFrame`. `RecordReader::open` offers none of it, so `cat`, `record`,
+`total_records` and the nushell plugin's row access take frame 0's count on trust. `truncate` sits
+between the two: it validates the separator against frame 0, then computes the total from that count
+without reading a second frame.
+
+The work is to let `RecordReader::open` take the same `SeparatorCheck`, defaulting to what it does
+now. `TwoFrames` is one extra frame decoded per open — `docs/performances.md` already counts frame
+0's as a cost of opening — and it catches a file cut by size rather than by record count, which is
+what `convert_text_to_seekable_zst_reader` writes. It does not prove uniformity: a file uniform at
+both ends and broken in the middle passes. Proving it costs every frame, which is the price the
+format exists to avoid, and `inspect --no-fast-mode` is already the way to pay it.
 
 ### `inspect_with_opts` is not re-exported
 
