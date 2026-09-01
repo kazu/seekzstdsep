@@ -1,36 +1,39 @@
 # Known bugs
 
-Three lists. An entry only belongs in the first one if a command reproduces it. A fixed entry keeps
-its line with the box checked and loses the section under it: the list is what is known, and the
-investigation is only worth reading while the bug is open.
+Five lists, and an entry moves between them rather than being deleted. Which one it is in says how
+sure it is: reproduced by a command, read off the source, observed but undecided, real in code that
+nothing calls, or fixed. A fixed entry keeps its line with the box checked and loses the section
+under it — the list is what is known, and the investigation is only worth reading while the bug is
+open.
+
+Performance costs that are not defects live in `docs/performances.md`.
 
 ## Reproduced
 
-Each has a command below that produces the stated output on the benchmark fixture. Ordered by
-damage, worst first.
+Each has a command below that reproduces the stated output. Ordered by damage, worst first.
 
-- [ ] [A record read leaves its frame's checksum unchecked](#a-record-read-leaves-its-frames-checksum-unchecked)
-- [ ] [A file that cannot be opened panics instead of being reported](#a-file-that-cannot-be-opened-panics-instead-of-being-reported)
+- [ ] [A path the user typed panics instead of being reported](#a-path-the-user-typed-panics-instead-of-being-reported)
+- [ ] [A separator that does not occur in frame 0 divides by zero](#a-separator-that-does-not-occur-in-frame-0-divides-by-zero)
 - [ ] [`inspect` panics on a frame that fails to decode](#inspect-panics-on-a-frame-that-fails-to-decode)
-- [ ] [A record count near `u64::MAX` overflows while the range is placed](#a-record-count-near-u64max-overflows-while-the-range-is-placed)
+- [ ] [The requested count overflows while the range is placed](#the-requested-count-overflows-while-the-range-is-placed)
+- [ ] [`cat` returns the wrong number of records when the requested count overflows](#cat-returns-the-wrong-number-of-records-when-the-requested-count-overflows)
 
 ## Not reproduced
 
 Read off the source, not observed. Each says what would settle it.
 
-- [ ] [The frame is read with a single `read` call](#the-frame-is-read-with-a-single-read-call)
-- [ ] [Wrong records are returned without an error when the invariant does not hold](#wrong-records-are-returned-without-an-error-when-the-invariant-does-not-hold)
-- [ ] [A frame 0 with no separator divides by zero](#a-frame-0-with-no-separator-divides-by-zero)
-- [ ] [`old_cnt_of_separetor_in_frame_via_buf` underflows on short input](#old_cnt_of_separetor_in_frame_via_buf-underflows-on-short-input)
-- [ ] [The record count and the reachable indices disagree on a foreign file](#the-record-count-and-the-reachable-indices-disagree-on-a-foreign-file)
-- [ ] [Adding `from` and `cnt` can overflow and the length then underflows](#adding-from-and-cnt-can-overflow-and-the-length-then-underflows)
-
 ## Not confirmed to be a bug
 
 The behaviour is observed; whether it is wrong is undecided.
 
+## Not worth an entry of their own
 
-Performance costs that are not defects live in `docs/performances.md`.
+Real, in code that nothing calls. Kept so the next reader does not derive them again; each goes
+when its code does.
+
+- [ ] `old_cnt_of_separetor_in_frame_via_buf` underflows on short input — superseded, called from
+  nowhere, and the only one of the four superseded functions with no `#[deprecated]`. Deleting it
+  at 0.5.0 takes the underflow with it.
 
 ## Fixed
 
@@ -44,214 +47,115 @@ Performance costs that are not defects live in `docs/performances.md`.
 - [x] The encoder emits a trailing empty frame
 - [x] `seekzstdsep compress` runs the compressor twice
 
-### A record read leaves its frame's checksum unchecked
+### A path the user typed panics instead of being reported
 
-The checksum is the XXH64 of a frame's **whole** decompressed content and sits at its end, so only
-something that decodes all of it can check it. A record read stops at the last record asked for, so
-a flipped byte elsewhere in that frame comes back as data, silently. What does decode a frame
-whole: `open` frame 0, `total_records` the last frame, `inspect --no-fast-mode` every frame, and an
-edit the frames it rewrites.
+`compress` and `inspect` take a failed open, create or decode with `.expect()`, so the process dies
+with exit 101 where the rest of the CLI reports the error and exits 1.
 
-bash or zsh, with `dd`, `od` and `cmp`:
+```
+$ seekzstdsep inspect /tmp/does-not-exist.zst          # fail open: Os { code: 2, ... }
+$ seekzstdsep inspect plain.zst                        # cannot open decoder: Unknown frame descriptor
+$ seekzstdsep compress /tmp/does-not-exist.txt out.zst # failed to open input file: Os { code: 2, ... }
+```
+
+`src/cli.rs` (open input, create output, remove input under `--rm`), `src/seekzstdsep_lib.rs` in
+`inspect_with_opts` (open, decoder, seek table), `src/main.rs` (the result of `inspect_with_opts`).
+
+Every one of those sits in a function that already returns `anyhow::Result`, so the fix is `?` at
+each site. Leaving the one in `src/main.rs` moves the panic rather than removing it. `?` alone drops
+the path from the message; `.with_context` keeps it. No test reaches any of them.
+
+### A separator that does not occur in frame 0 divides by zero
+
+`RecordReader::from_file` counts frame 0's separators at open and keeps the result as the record
+count of every frame. Nothing refuses a count of 0, and `records_request` (`src/reader.rs`), which
+every record range goes through, divides by it.
 
 ```sh
-seq 1 15000000 > big.txt
-seekzstdsep compress big.txt big.seek.zst --frame-size 16777216
-cp big.seek.zst flipped.seek.zst
-# Frame 1 is compressed 711771..1432604 and holds records 2236041..4472081. Flip one byte near its
-# end, far past the records read below. `cmp` is the check that it was flipped: writing a fixed
-# value does nothing when the byte already held it.
-byte=$(dd if=flipped.seek.zst bs=1 skip=1430000 count=1 2>/dev/null | od -An -tu1 | tr -d ' \n')
-printf "$(printf '\\x%02x' $((byte ^ 255)))" | dd of=flipped.seek.zst bs=1 seek=1430000 count=1 conv=notrunc
-cmp big.seek.zst flipped.seek.zst    # => 異なります: バイト 1430001、行 3512
-seekzstdsep cat flipped.seek.zst --from 2236050 --cnt 2
-# => 2236051 / 2236052, exit 0. Nothing is reported.
+seekzstdsep cat clean.seek.zst --from 0 --cnt 1 --separator ZZZZ
+# => thread 'main' panicked at src/reader.rs:216:25: attempt to divide by zero
 ```
 
-The same in nushell, which needs no external command:
+Debug and release alike. Reached by a `--separator` the file was not built with, or by a file whose
+frame 0 holds no complete record; the default `\n` occurs in any text file, so it takes an explicit
+flag or a foreign file. `RecordReader::record` returns `None` on a count of 0, so the nushell
+plugin's row access is unaffected, and the plugin refuses such a separator earlier anyway
+(`nu_plugin_zstdsep/src/source.rs`).
 
-```nu
-seq 1 15000000 | str join "\n" | save --raw --force big.txt
-^seekzstdsep compress big.txt big.seek.zst --frame-size 16777216
-let b = (open --raw big.seek.zst | into binary)
-let byte = ($b | bytes at 1430000..<1430001)
-bytes build ($b | bytes at ..<1430000) (if $byte == 0x[ff] { 0x[00] } else { 0x[ff] }) ($b | bytes at 1430001..) | save --force flipped.seek.zst
-^seekzstdsep cat flipped.seek.zst --from 2236050 --cnt 2
-```
-
-Corruption inside a block the read **does** decode is still caught — zstd reports `Data corruption
-detected` — so what is lost is detection of the part of the frame the read skipped.
-
-Lost in two steps. `a48fb5d` put range reads on the window, which stopped `cat` checking; the
-commit that put lookups there did the same to `RecordReader::record`. `master` and `0.114/nu`
-already carry the first half.
-
-**The remedy is a flag, defaulting to off.** Checking means decoding the frame to its end, which
-puts the time back in proportion to the frame size — 16 MiB for three records where the window
-decodes 32 KiB — and that proportion is what the window commits exist to remove. `zstd -d` checks
-by default because it decompresses everything anyway; that reason does not carry here. Memory is
-not the cost: the rest of the frame can be decoded and dropped, on its own thread with its own
-decoder and file handle, since the check needs nothing the read produces. Both `--help` texts have
-to say which way the flag is set.
-
-### A file that cannot be opened panics instead of being reported
-
-`src/seekzstdsep_lib.rs` in `inspect_with_opts`,
-
-```rust
-std::fs::File::open(&input).expect("fail open")
-```
-
-A mistyped path is enough:
-
-```
-$ seekzstdsep inspect /tmp/does-not-exist.zst
-thread 'main' panicked at src/seekzstdsep_lib.rs:1103:44:
-fail open: Os { code: 2, kind: NotFound, message: "No such file or directory" }
-$ echo $?
-101
-```
-
-**Why this is wrong rather than a matter of taste: the function is public API.**
-`src/lib.rs` re-exports it and it is declared to return a `Result`. A caller that writes
-`match inspect(..)` cannot catch this — the process is gone before the `match` is reached.
-The signature promises a reported failure and the body does not deliver one. In a binary,
-`.expect()` on a path the user typed would be defensible; in a library entry point it takes the
-choice away from the caller.
-
-Rust's line is not "did it fail" but "is this a bug in the program or an expected failure". A
-violated invariant panics; I/O and user input return `Err`. A missing path is the second kind.
-
-The inconsistency is visible from the shell, since both are the same class of user error:
-
-```
-$ seekzstdsep inspect missing.zst                        ; echo $?   # 101, backtrace note
-$ seekzstdsep cat records.seek.zst --from 999999 --cnt 1 ; echo $?   # 1, "Error: record 999999 is past the end"
-```
-
-Fixed by `?` at the site. It is not reached by any current test.
-
-### A record count near `u64::MAX` overflows while the range is placed
-
-`frame_range` places the end of a range with `(from + c) % n` (`src/edit.rs`), which overflows
-before the arm three lines below can refuse it with `from.saturating_add(c)`. A debug build panics;
-a release build wraps and lands on a refusal by accident.
-
-```sh
-seekzstdsep copy-range events.jsonl.seek.zst out.seek.zst --from 8 --cnt 18446744073709551615
-seekzstdsep append a.seek.zst b.seek.zst --input-seekable --input-from 8 --input-cnt 18446744073709551615
-# => thread 'main' panicked at src/edit.rs:764: attempt to add with overflow
-```
-
-`--from` has to be a frame boundary or the earlier refusal fires first. Both subcommands reach the
-same expression; nothing is written either way, since the refusal and the panic both come before the
-first byte, so the damage is the panic itself.
+`edit.rs` refuses the same condition where it reads the count — `bail!("the separator does not occur
+in frame 0")` in `records_per_frame`. `RecordReader::from_file` is where the reader would do the
+same.
 
 ### `inspect` panics on a frame that fails to decode
 
-`src/seekzstdsep_lib.rs`, in `inspect_with_opts`.
+`src/seekzstdsep_lib.rs`, in `inspect_with_opts` — the fourth `.expect()` in that function, and the
+one the entry above does not cover.
 
-`cnt_of_separetor_in_frame` is called inside a `map` closure and its error is taken with `expect`,
-so a frame that will not decompress aborts the process rather than being reported. Frames carry a
-content checksum, so one flipped byte reaches it.
+`cnt_of_separetor_in_frame` is called inside a `map` closure, which cannot propagate, so its error
+is taken with `expect` and a frame that will not decompress aborts the process. Every frame this
+crate writes ends with a content checksum, so one flipped byte reaches it.
 
-```
-> ^seekzstdsep compress in.jsonl out.seek.zst --frame-size 16384
-> let b = (open --raw out.seek.zst | into binary)
-> let byte = ($b | bytes at 200..<201)
-> bytes build ($b | bytes at ..<200) (if $byte == 0x[ff] { 0x[00] } else { 0x[ff] }) ($b | bytes at 201..) | save --force out.seek.zst
-> ^seekzstdsep inspect out.seek.zst --no-fast-mode
-thread 'main' panicked at src/seekzstdsep_lib.rs:1123:18:
-failt to get count: Data corruption detected
-```
+In nushell:
 
-`cat --from 0 --cnt 1` on the same file prints `Error: Data corruption detected` and exits 1, which
-is what `inspect` should do. Fixing it means collecting the closure's results
-instead of mapping straight to `InspectResult`.
-
-### Wrong records are returned without an error when the invariant does not hold
-
-Stated in the rustdoc on `RecordReader::records`. The frame is located by dividing `from` by frame
-0's separator count, which is only valid if every frame holds the same count.
-
-Settled by compressing a file with `is_same_separator_cnt` false, reading a known record index from
-it, and comparing against the same index in the uncompressed source.
-
-### A frame 0 with no separator divides by zero
-
-`src/reader.rs`, in `RecordReader::records_request`, which every record range goes through.
-
-`total_sep_cnt = self.sep_cnt * self.frames.len()` is the divisor for `frame_idx` and
-`end_frame_idx`, and `from % self.sep_cnt` divides by `sep_cnt` directly.
-
-Settled by running `cat` with a `--separator` that does not occur in the file, or on a file whose
-first frame holds no complete record. The nushell plugin refuses that separator before it gets
-here (`nu_plugin_zstdsep/src/source.rs`); `RecordReader` does not.
-
-### The frame is read with a single `read` call
-
-`src/seekzstdsep_lib.rs`, in `decompressed_range_into`, which `FrameReader` takes a frame's bytes
-from:
-
-```rust
-let mut data = vec![0u8; len as usize];
-let _n = decoder.read(&mut data[..])?;
+```nu
+1..2000 | each {|i| $'{"i":($i)}' } | str join "\n" | $"($in)\n" | save --raw --force in.jsonl
+^seekzstdsep compress in.jsonl out.seek.zst --frame-size 16384
+let b = (open --raw out.seek.zst | into binary)
+bytes build ($b | bytes at ..<200) (if ($b | bytes at 200..<201) == 0x[ff] { 0x[00] } else { 0x[ff] }) ($b | bytes at 201..) | save --force out.seek.zst
+^seekzstdsep inspect out.seek.zst --no-fast-mode
+# => thread 'main' panicked at src/seekzstdsep_lib.rs:1119:18:
+#    failt to get count: Restored data doesn't match checksum
 ```
 
-`Read::read` may return fewer bytes than the buffer holds without that being an error. There is no
-loop and the return value is discarded, so a short read would leave the remainder of `data` as NUL:
-an edit would copy them into the file it writes and count the frame's separators short.
+`cat --from 0 --cnt 1` on that file prints `Error: Restored data doesn't match checksum` and exits
+1, which is what `inspect` should do.
 
-zeekstd does not promise a full buffer. `Decoder::decompress` is documented "call this repetetively
-to fill `buf`", and its example loops until a call returns 0.
+`?` is not the fix here. The closure has to return `Result<InspectResult>` and the `map` be
+collected as `Result<Vec<_>>`.
 
-It has never been observed to return short. 1,212 single reads over fixtures of 600, 50,000 and
-200,000 records, spanning one, three and ten frames at a time, all filled the buffer, and a later
-read of 24 MB across 364 frames filled it too. `Decoder::decompress` loops internally until `buf`
-is full or `offset_limit` is reached, and this crate sizes every buffer from the seek table, so the
-limit is never the one that stops it.
+### The requested count overflows while the range is placed
 
-So the code depends on how zeekstd is written rather than on what it promises, and nothing today
-goes wrong. Settled by a zeekstd release that returns short, which would want the loop rather than
-a fallback that copes with NUL.
+`frame_range` (`src/edit.rs`) places the end of a range with `(from + c) % n`, which overflows
+before the arm below it can refuse the same `c` with `from.saturating_add(c)`. A debug build panics;
+a release build wraps and lands on a refusal by accident, not always the one that says what the
+caller did wrong.
 
-### `old_cnt_of_separetor_in_frame_via_buf` underflows on short input
-
-`src/seekzstdsep_lib.rs`, in `old_cnt_of_separetor_in_frame_via_buf`.
-
-```rust
-let max_pos = data.len() - sep_len;
+```sh
+seekzstdsep compress in.jsonl clean.seek.zst --frame-size 65536   # 1333 records per frame
+seekzstdsep copy-range clean.seek.zst out.seek.zst --from 1333 --cnt 18446744073709551615
+# debug   => thread 'main' panicked at src/edit.rs:751:20: attempt to add with overflow
+# release => Error: refusing to copy ... which holds 200000 records
 ```
 
-Underflows when `data` is shorter than the separator. Arithmetically certain from the expression,
-but never executed. Carries a `FIXME`. The function is superseded by
-`cnt_of_separetor_in_frame_via_buf` and is on no current path, but it is `pub`.
+`--cnt 18446744073709550283` on the same file sums to 0 instead, which the first arm takes for a
+frame boundary; a release build then fails with `Error: frame index too large`.
 
-Settled by calling it with a buffer shorter than the separator.
+`--from` has to be a frame boundary or an earlier refusal fires first. `copy-range` and
+`append --input-seekable` are the two callers, and nothing is written either way, so the damage is
+the panic and the misleading refusal.
 
-### The record count and the reachable indices disagree on a foreign file
+### `cat` returns the wrong number of records when the requested count overflows
 
-`RecordReader::total_records` counts the last frame directly, while
-`RecordReader::record` divides the index by frame 0's count and refuses
-anything past the last frame. The two agree only while no frame holds more records than frame 0.
+`records_request` (`src/reader.rs`) places the end of a range with `from + cnt + 1`. `from` and
+`cnt` are `usize` taken straight from the command line, so the sum wraps. A debug build panics on
+the add; a release build carries the wrapped value into the length and answers with it.
 
-A file whose last frame holds more reports records that no index can reach: with two frames, 10
-records in the first and 15 in the last, `total_records` is 25 and `record(20)` is `None`. Through
-the nushell plugin the error then reads "Row number too large (max: 24)" for index 20.
-
-This crate's compressor cannot write such a file — the last frame holds at most as many as the
-rest. Settled by a file from another writer, or by one built by hand.
-
-### Adding `from` and `cnt` can overflow and the length then underflows
-
-`src/reader.rs`, in `RecordReader::records_request`. `from` and `cnt` are `usize` taken straight from
-the command line, so `from + cnt + 1` wraps in a release build. Clamping `end_frame_idx` to the
-last frame does not help here: a wrapped value can make it smaller than `frame_idx`, and then
-
-```rust
-self.frames[end_frame_idx].0 + self.frames[end_frame_idx].1 - start
+```sh
+seekzstdsep compress in.jsonl clean.seek.zst --frame-size 65536   # 200000 records, 1333 per frame
+seekzstdsep cat clean.seek.zst --from 1333 --cnt 18446744073709550282 | wc -l
+# => 0, exit 0, nothing on stderr, where 198667 records exist from index 1333
 ```
 
-underflows.
+The wrapped sum puts the end frame at 0, so which wrong answer comes back depends on where `from`
+lands: `--from 0` returns 1333 of the 200000 that exist, `--from 1333` returns 0 of 198667, and
+`--from 2666` returns 197334 of 197334, which is right. The count never exceeds `--cnt` —
+`take_records` caps it and `end_frame_idx` is clamped to the last frame — so the fault is always a
+short answer reported as a whole one, which a caller cannot tell from a file that holds no more.
 
-Settled by passing a `--cnt` near `usize::MAX` and seeing which of the two faults comes first.
+`--cnt 1000000` is fine; it takes a `--cnt` within a frame's worth of `u64::MAX`. That is what a
+caller writes to mean "to the end", which `cat` has no other way to say: `CatArgs::cnt` is a plain
+`usize`, while `edit.rs` gives `truncate`, `append_frames` and `copy_range` a `cnt: Option<u64>`
+where `None` is the end. `checked_add` fixes the fault; the type is why anyone reaches it.
+
+The same sum overflows in `edit.rs`, above.
+
