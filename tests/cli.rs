@@ -79,6 +79,34 @@ fn test_cat_subcommand_returns_the_whole_file() {
     assert_eq!(cat(&out_path, 0, FIXTURE_RECORDS), expected);
 }
 
+/// A separator the file was not built with ends no record in frame 0, and frame 0's count is what
+/// every record range is placed by. `cat` used to divide by that 0.
+#[test]
+fn test_cat_subcommand_refuses_a_separator_that_occurs_nowhere() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let out_path = compress_fixture(temp_dir.path());
+
+    let out = Command::new(BIN)
+        .args(["cat", out_path.to_str().unwrap()])
+        .args(["--from", "0", "--cnt", "1", "--separator", "ZZZZ"])
+        .output()
+        .expect("Failed to run cat");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        !out.status.success(),
+        "cat with a separator that occurs nowhere exited zero"
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "cat panicked instead of reporting the separator: {stderr}"
+    );
+    assert!(
+        stderr.contains("no record in frame 0"),
+        "the failure did not name the separator as the cause: {stderr}"
+    );
+}
+
 #[test]
 fn test_truncate_subcommand_shortens_the_file() {
     let temp_dir = tempdir().expect("Failed to create temp dir");

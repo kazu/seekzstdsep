@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use common::{RECORDS, RECORDS_PER_FRAME, compress_fixture, eval, nu};
 use nu_plugin_zstdsep::ZstdsepHandle;
-use nu_protocol::Value;
+use nu_protocol::{ShellError, Value};
 use tempfile::{TempDir, tempdir};
 
 /// A fixture and the nushell that reads it. The directory is returned because deleting it would
@@ -386,9 +386,14 @@ fn a_separator_that_ends_no_record_is_refused_at_open() {
     let err = eval(&mut nu, &format!("zstdsep open \"{path}\" --separator '|'"))
         .expect_err("a separator that occurs nowhere was accepted");
 
+    // The reader names the cause, and the plugin carries it as the label nushell prints under the
+    // command. The title says only which file could not be read.
+    let ShellError::LabeledError(err) = err else {
+        panic!("the plugin's error did not survive the protocol: {err:?}");
+    };
     assert!(
-        err.to_string().contains("no record in"),
-        "the failure did not name the separator as the cause: {err}"
+        err.labels.iter().any(|l| l.text.contains("no record in")),
+        "the failure did not name the separator as the cause: {err:?}"
     );
 }
 

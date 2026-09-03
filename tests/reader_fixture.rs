@@ -45,16 +45,20 @@ fn digest(bytes: &[u8]) -> u64 {
 }
 
 /// Runs `f`, turning a panic into an outcome so the fixture pins those too — one of the inputs
-/// below has no separator in frame 0, which `docs/bugs.md` records as a division by zero.
+/// below has no separator in frame 0, which the reader refuses at open, so every case that opens
+/// it panics on its own `expect`. The message is stripped as [`outcome`] strips one: it names the
+/// input, which lives in a fresh temporary directory on every run.
 fn guard(f: impl FnOnce() -> String) -> String {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(s) => s,
         Err(p) => format!(
             "panic {}",
-            p.downcast_ref::<String>()
-                .cloned()
-                .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_default()
+            strip_dir(
+                &p.downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default()
+            )
         ),
     }
 }

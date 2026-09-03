@@ -305,3 +305,21 @@ fn records_to_writes_what_records_returns() {
         }
     }
 }
+
+/// Frame 0's separator count is taken as the record count of every frame, and every record range
+/// is placed by dividing by it. A separator the file was not built with occurs in no frame, so the
+/// count comes out 0 and the division has nothing to divide by.
+#[test]
+fn a_separator_that_occurs_nowhere_is_refused() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let out_path = compress_fixture(dir.path());
+
+    let err = match RecordReader::open(out_path, b"ZZZZ") {
+        Err(e) => e,
+        Ok(_) => panic!("a separator that occurs in no record was accepted"),
+    };
+    assert!(
+        err.to_string().contains("no record in frame 0"),
+        "the failure did not name the separator as the cause: {err}"
+    );
+}

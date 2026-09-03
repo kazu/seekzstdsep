@@ -97,7 +97,8 @@ pub struct RecordReader {
     frames: Vec<(u64, u64)>,
     separator: Vec<u8>,
     finder: Finder<'static>,
-    /// Separators in frame 0, taken as the record count of every frame.
+    /// Separators in frame 0, taken as the record count of every frame. Never 0: every record
+    /// range divides by it, and [`Self::from_file`] refuses a separator that leaves it 0.
     sep_cnt: usize,
 }
 
@@ -106,8 +107,8 @@ impl RecordReader {
     ///
     /// # Errors
     ///
-    /// An empty `separator`, the file not opening, a seek table with no frames in it, or frame 0
-    /// not decompressing.
+    /// An empty `separator`, the file not opening, a seek table with no frames in it, frame 0 not
+    /// decompressing, or `separator` ending no record in frame 0.
     pub fn open(path: PathBuf, separator: &[u8]) -> anyhow::Result<Self> {
         let file =
             File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
@@ -137,6 +138,14 @@ impl RecordReader {
             &reader.finder,
             &reader.separator,
         )?;
+        if reader.sep_cnt == 0 {
+            anyhow::bail!(
+                "no record in frame 0 of {} ends with {:?}: a file does not record the separator \
+                 it was written with, so pass the one it was",
+                reader.path.display(),
+                String::from_utf8_lossy(separator),
+            );
+        }
         Ok(reader)
     }
 
@@ -186,9 +195,6 @@ impl RecordReader {
     /// record ended, and the next index in the same frame goes on from there. See
     /// [`Lookup::walk_to`] for what an index elsewhere costs.
     pub fn record(&mut self, index: usize) -> anyhow::Result<Option<Vec<u8>>> {
-        if self.sep_cnt == 0 {
-            return Ok(None);
-        }
         let frame = index / self.sep_cnt;
         if frame >= self.frames.len() {
             return Ok(None);
