@@ -12,7 +12,6 @@ Performance costs that are not defects live in `docs/performances.md`.
 
 Each has a command below that reproduces the stated output. Ordered by damage, worst first.
 
-- [ ] [A separator that does not occur in frame 0 divides by zero](#a-separator-that-does-not-occur-in-frame-0-divides-by-zero)
 - [ ] [`inspect` panics on a frame that fails to decode](#inspect-panics-on-a-frame-that-fails-to-decode)
 - [ ] [The requested count overflows while the range is placed](#the-requested-count-overflows-while-the-range-is-placed)
 - [ ] [`cat` returns the wrong number of records when the requested count overflows](#cat-returns-the-wrong-number-of-records-when-the-requested-count-overflows)
@@ -48,27 +47,7 @@ when its code does.
 - [x] A path the user typed panics instead of being reported
 - [x] `cat`, `truncate` and `append` do not say which file failed to open
 - [x] The compressor's retry panics instead of reporting a rewind that fails
-
-### A separator that does not occur in frame 0 divides by zero
-
-`RecordReader::from_file` counts frame 0's separators at open and keeps the result as the record
-count of every frame. Nothing refuses a count of 0, and `records_request` (`src/reader.rs`), which
-every record range goes through, divides by it.
-
-```sh
-seekzstdsep cat clean.seek.zst --from 0 --cnt 1 --separator ZZZZ
-# => thread 'main' panicked at src/reader.rs:216:25: attempt to divide by zero
-```
-
-Debug and release alike. Reached by a `--separator` the file was not built with, or by a file whose
-frame 0 holds no complete record; the default `\n` occurs in any text file, so it takes an explicit
-flag or a foreign file. `RecordReader::record` returns `None` on a count of 0, so the nushell
-plugin's row access is unaffected, and the plugin refuses such a separator earlier anyway
-(`nu_plugin_zstdsep/src/source.rs`).
-
-`edit.rs` refuses the same condition where it reads the count — `bail!("the separator does not occur
-in frame 0")` in `records_per_frame`. `RecordReader::from_file` is where the reader would do the
-same.
+- [x] A separator that does not occur in frame 0 divides by zero
 
 ### `inspect` panics on a frame that fails to decode
 

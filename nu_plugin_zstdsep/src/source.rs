@@ -89,35 +89,15 @@ impl Source {
     /// file and a separator that ends no record are both reported.
     ///
     /// A file does not record the separator it was written with, so the wrong one is an ordinary
-    /// mistake, and one that costs nothing to make: every record count comes out 0 and every index
-    /// is out of range. Refusing it here names the cause once, at the command the user typed. A
-    /// file that really holds no records is refused with it — the message is true of both.
+    /// mistake, and one that costs nothing to make: every record count would come out 0. The
+    /// reader refuses it, and the reason it gives is carried through as the message here.
     pub fn open(&self, span: Span) -> Result<RecordReader, ShellError> {
-        let reader =
-            RecordReader::open(self.path.clone(), self.separator.as_bytes()).map_err(|e| {
-                ShellError::Generic(GenericError::new(
-                    format!("cannot read {}", self.path.display()),
-                    e.to_string(),
-                    span,
-                ))
-            })?;
-        if reader.records_per_frame() == 0 {
-            return Err(ShellError::Generic(
-                GenericError::new(
-                    format!(
-                        "no record in {} ends with {:?}",
-                        self.path.display(),
-                        self.separator
-                    ),
-                    "the file holds no records that this separator can find".to_string(),
-                    span,
-                )
-                .with_help(
-                    "a file does not record its own separator; pass --separator with the one it \
-                     was written with",
-                ),
-            ));
-        }
-        Ok(reader)
+        RecordReader::open(self.path.clone(), self.separator.as_bytes()).map_err(|e| {
+            ShellError::Generic(GenericError::new(
+                format!("cannot read {}", self.path.display()),
+                e.to_string(),
+                span,
+            ))
+        })
     }
 }

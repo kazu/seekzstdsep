@@ -496,28 +496,28 @@ no-separator	range	0	0	7	0	err No separator found in frame
 no-separator	range	0	0	7	1	err No separator found in frame
 no-separator	range	0	0	7	25	err No separator found in frame
 no-separator	count	0	0	ok 0
-no-separator	meta	1	0	ok 0
-no-separator	record	0	none
-no-separator	record	1	none
-no-separator	record	116	none
-no-separator	record	117	none
-no-separator	record	300	none
-no-separator	record	10000	none
-no-separator	sequence	0=none 1=none 2=none 3=none 2=none 1=none 0=none 116=none 117=none 118=none 117=none 300=none 299=none 10000=none 0=none 
-no-separator	sequence-mixed	panic attempt to divide by zero
-no-separator	records	0	1	panic attempt to divide by zero
-no-separator	records	0	2	panic attempt to divide by zero
-no-separator	records	0	117	panic attempt to divide by zero
-no-separator	records	1	1	panic attempt to divide by zero
-no-separator	records	1	2	panic attempt to divide by zero
-no-separator	records	1	117	panic attempt to divide by zero
-no-separator	records	117	1	panic attempt to divide by zero
-no-separator	records	117	2	panic attempt to divide by zero
-no-separator	records	117	117	panic attempt to divide by zero
-no-separator	records	300	1	panic attempt to divide by zero
-no-separator	records	300	2	panic attempt to divide by zero
-no-separator	records	300	117	panic attempt to divide by zero
-no-separator	iter	ok 0 0 cbf29ce484222325
+no-separator	meta	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	record	0	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	record	1	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	record	116	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	record	117	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	record	300	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	record	10000	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	sequence	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	sequence-mixed	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	0	1	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	0	2	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	0	117	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	1	1	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	1	2	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	1	117	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	117	1	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	117	2	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	117	117	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	300	1	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	300	2	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	records	300	117	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
+no-separator	iter	panic no reader: no record in frame 0 of no-separator.seek.zst ends with "\n": a file does not record the separator it was written with, so pass the one it was
 boundary	range	0	0	0	0	ok 0 cbf29ce484222325
 boundary	range	0	0	0	1	ok 32768 b1046b049fc29ae0
 boundary	range	0	0	0	25	ok 32768 b1046b049fc29ae0
