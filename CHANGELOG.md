@@ -1,53 +1,57 @@
 # Changelog
 
-All notable changes to this project are documented in this file.
+Generated from the commit log by [git-cliff](https://git-cliff.org). Do not edit it by hand: the
+next release overwrites it. What belongs in a release note belongs in a commit message.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
-aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Only the crate's own tags (`v*`) mark a release here. The nushell plugin is versioned separately in
+`nu_plugin_zstdsep/`, and `nu_v.*` records which revision a nushell version takes.
 
-This project has not been published to crates.io and carries no git tags, so the version below has no
-release date. Entries for it were reconstructed from git history and are not exhaustive; anything
-before the crate was split into its own package (2026-02-05) is recorded only in git.
-
-## [Unreleased]
-
-### Added
-
-- `README.md`, included into the crate documentation via `#![doc = include_str!]` so its examples run
-  as doctests.
-- `README.ja.md`, a Japanese translation. Not included in the rendered crate documentation, but its
-  Rust examples run as doctests so it cannot drift from `README.md`.
-- `docs/format.md` — on-disk layout and the uniform-separator-count invariant that the record lookup
-  depends on.
-- `docs/design/2026-08-23-append-and-update.md` — analysis of adding append and in-place record
-  update.
-- `examples/` — compress, cat, and an inspect example that verifies the invariant.
-- Rustdoc for every public item, with `#![warn(missing_docs)]` enabled to keep it that way.
-- A rustdoc note on `old_cnt_of_separetor_in_frame_via_buf` marking it superseded by the
-  `memchr`-based `cnt_of_separetor_in_frame_via_buf`.
-- Package metadata: description, repository, keywords, categories, `rust-version`, and docs.rs
-  configuration.
-- MIT licensing (`LICENSE`).
-
-## [0.2.0]
-
-### Added
-
-- `cat` subcommand: read a range of records by index.
-- `inspect` subcommand: per-frame layout as text or JSON, with `--no-fast-mode` to count separators
-  in every frame instead of extrapolating from the first.
-- `--cnt-of-separator-per-frame` to pin records per frame instead of auto-detecting.
-- `--limit-multiplier` to bound how far past the frame target the separator search may run.
-- `--keep-cnt-of-separators-in-frame`, which maintains a uniform separator count across frames.
+## [0.4.0] - 2026-08-30
 
 ### Changed
 
-- Separator search and counting use `memchr::memmem::Finder`.
-- Compressed output is moved into place with `reflink_copy::reflink_or_copy`, falling back to a byte
-  copy when the filesystem has no reflink support.
+- edit: refactor append's input and tune frame reading
+- edit: add append --input-seekable
+- edit: truncate only at a frame boundary
+- seekzstdsep: rebuild the retry options with a struct update
+- seekzstdsep: choose the zstd compression level
+- seekzstdsep: leave one way to read a record range
+- seekzstdsep: cat 4% faster, at memory the frame size cannot move
+- seekzstdsep: hold the decoder inside the read window
+- seekzstdsep: zstdsep: read a record by index through the window
+- seekzstdsep: cut a release with one make target
 
-### Fixed
+### Documentation
 
-- Seek table corruption when the framing retry loop rewound the writer.
-- Data loss when a record was larger than the frame size target.
-- Separator counts not being collected per frame.
+- docs: drop compress --align
+- docs: badge the README with version, CI and nushell
+
+### CI
+
+- ci: gather every check under make ci
+- ci: cache cargo builds across runs
+
+## [0.3.0] - 2026-08-27
+
+### Changed
+
+- nu_plugin_zstdsep: build against nushell 0.115
+- nu_plugin_zstdsep: add a Japanese README
+- Update branches for Rust workflow triggers
+- edit: name the frame lookups the operations spell out
+- edit: copy a record range out into a second file
+
+### Documentation
+
+- docs: record which nushell a plugin revision supports
+- docs: lead the README with what the tool does
+- docs: cut the README to what it has to say
+- docs: name the prior art the README is closest to
+- docs: link the prior art the README names
+- docs: replace split and concat with three composable operations
+
+### CI
+
+- ci: run the plugin's tests too
+- ci: publish from the workflow instead of from a laptop
+
