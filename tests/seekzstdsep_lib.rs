@@ -716,3 +716,44 @@ fn test_renamed_wrapper_forwards_to_the_new_name() {
         "the old name stopped forwarding to records_between_by_separator_in_frame"
     );
 }
+
+/// Reads, but refuses to seek, so the compressor's retry cannot rewind it.
+struct NoRewind(std::io::Cursor<Vec<u8>>);
+
+impl std::io::Read for NoRewind {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        std::io::Read::read(&mut self.0, buf)
+    }
+}
+
+impl std::io::Seek for NoRewind {
+    fn seek(&mut self, _pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        Err(std::io::Error::other("refusing to seek"))
+    }
+}
+
+/// Records small enough for the first frame to derive a large separator count from, followed by
+/// one record far past the limit, which is what makes the compressor halve the count and retry.
+fn input_that_makes_the_compressor_retry() -> Vec<u8> {
+    let mut body = b"a\n".repeat(500);
+    body.extend(std::iter::repeat_n(b'b', 100_000));
+    body.push(b'\n');
+    body
+}
+
+#[test]
+fn test_a_retry_that_cannot_rewind_the_input_is_reported() {
+    let err = seekzstdsep::compress_to_seekable_zst(
+        NoRewind(std::io::Cursor::new(input_that_makes_the_compressor_retry())),
+        std::io::sink(),
+        4096,
+        true,
+        b"\n",
+        None,
+    )
+    .expect_err("compressing from a reader that cannot be rewound should fail");
+    assert!(
+        format!("{err:#}").contains("rewind"),
+        "the error does not say the rewind failed: {err:#}"
+    );
+}

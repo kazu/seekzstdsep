@@ -14,6 +14,7 @@ use std::{
 };
 
 use crate::record;
+use anyhow::Context;
 
 pub use zeekstd::CompressionLevel;
 use zeekstd::{Decoder, EncodeOptions, Encoder, FrameSizePolicy, SEEKABLE_MAX_FRAME_SIZE};
@@ -242,12 +243,14 @@ pub fn compress_to_seekable_zst_with_opts<R: ReadSeekable, W: Write>(
                     });
                     reader
                         .seek(std::io::SeekFrom::Start(0))
-                        .expect("fail to seek(start)"); // 読み込み位置をリセット
+                        .context("failed to rewind the input to compress it again")?; // 読み込み位置をリセット
 
                     writer
                         .seek(std::io::SeekFrom::Start(0))
-                        .expect("fail to seek(start)"); // 書き込み位置をリセット
-                    writer.set_len(0).expect("fail to set_len(0)");
+                        .context("failed to rewind the staging file to compress again")?; // 書き込み位置をリセット
+                    writer
+                        .set_len(0)
+                        .context("failed to empty the staging file to compress again")?;
                     continue;
                 } else {
                     return Err(e); // その他のエラーはそのまま返す
@@ -1080,12 +1083,14 @@ pub fn inspect_with_opts(
     separator: &[u8],
     opts: InspectOptions,
 ) -> anyhow::Result<Vec<InspectResult>> {
-    let file = std::fs::File::open(&input).expect("fail open");
-    let decoder = Decoder::new(file).expect("cannot open decoder");
+    let file = std::fs::File::open(&input)
+        .with_context(|| format!("failed to open {}", input.display()))?;
+    let decoder = Decoder::new(file)
+        .with_context(|| format!("failed to open {} as a seekable zst", input.display()))?;
     let decoder_cell = RefCell::new(decoder);
 
-    let frames =
-        seek_table_decomp_frames(&mut *decoder_cell.borrow_mut()).expect("cannot get frames");
+    let frames = seek_table_decomp_frames(&mut *decoder_cell.borrow_mut())
+        .ok_or_else(|| anyhow::anyhow!("no frames in {}", input.display()))?;
 
     let frame_len = frames.len();
     let mut cache_cnt_of_sep: usize = 0;

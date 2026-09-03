@@ -1,4 +1,5 @@
 //! seekzstdsep: generic seekable zst converter with separator support
+use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use std::fs::File;
 use std::path::PathBuf;
@@ -145,13 +146,24 @@ fn main() -> anyhow::Result<()> {
             run_compress(&args, io::stdin().lock(), io::stdout())?;
         }
         Commands::Truncate(args) => {
-            let mut file = File::options().read(true).write(true).open(&args.zstfile)?;
+            let mut file = File::options()
+                .read(true)
+                .write(true)
+                .open(&args.zstfile)
+                .with_context(|| format!("failed to open {}", args.zstfile.display()))?;
             truncate(&mut file, args.records, args.separator.as_bytes())?;
         }
         Commands::Append(args) => {
-            let mut file = File::options().read(true).write(true).open(&args.zstfile)?;
+            let mut file = File::options()
+                .read(true)
+                .write(true)
+                .open(&args.zstfile)
+                .with_context(|| format!("failed to open {}", args.zstfile.display()))?;
             let opened = match args.input {
-                Some(ref path) => Some(File::open(path)?),
+                Some(ref path) => Some(
+                    File::open(path)
+                        .with_context(|| format!("failed to open {}", path.display()))?,
+                ),
                 None => None,
             };
 
@@ -193,8 +205,7 @@ fn main() -> anyhow::Result<()> {
                 InspectOptions {
                     fast_mode: !args.no_fast_mode,
                 },
-            )
-            .expect("failed to inspect zst file");
+            )?;
 
             if args.format == "text" {
                 outs.iter().for_each(|f| println!("{:?}", f));
