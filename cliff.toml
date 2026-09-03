@@ -1,0 +1,56 @@
+# Generates CHANGELOG.md from the commit log. `make changelog` runs it, and `make release` runs it
+# before the release commit so the file is part of it. https://git-cliff.org/docs/configuration
+#
+# Commit messages here are kernel style — `area: imperative summary`, not conventional commits — so
+# the parsers below match on that shape instead.
+
+[changelog]
+header = """
+# Changelog
+
+Generated from the commit log by [git-cliff](https://git-cliff.org). Do not edit it by hand: the
+next release overwrites it. What belongs in a release note belongs in a commit message.
+
+Only the crate's own tags (`v*`) mark a release here. The nushell plugin is versioned separately in
+`nu_plugin_zstdsep/`, and `nu_v.*` records which revision a nushell version takes.\n
+"""
+body = """
+{% if version %}\
+    ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+    ## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+    ### {{ group | striptags | trim | upper_first }}
+    {% for commit in commits %}
+        - {{ commit.message | split(pat="\n") | first | trim }}\
+    {% endfor %}
+{% endfor %}\n
+"""
+trim = true
+render_always = true
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = false
+filter_commits = false
+sort_commits = "oldest"
+# Releases are the crate's tags. The plugin's (`nu_plugin_zstdsep-v*`) and the nushell markers
+# (`nu_v.*`) are not releases of this changelog's subject.
+tag_pattern = "^v[0-9]"
+# First match wins, so the narrow ones come first. The `<!-- n -->` prefix orders the sections and
+# is stripped when the template renders them, which lets a group be classified early and printed
+# late. A version bump carries no change of its own; the tag it is made for already records it.
+#
+# The whole message is matched, body included, so anything meant for the summary alone anchors with
+# `^[^\n]*`.
+commit_parsers = [
+    { message = "^[^:]*: [^:]*: release ", skip = true },
+    { message = "^[^:]*: [^:]*: take the development versions", skip = true },
+    { message = "^docs", group = "<!-- 3 -->Documentation" },
+    { message = "^ci", group = "<!-- 4 -->CI" },
+    { message = "^[^\n]*\\bfix(es|ed)?\\b", group = "<!-- 2 -->Fixed" },
+    { message = ".*", group = "<!-- 1 -->Changed" },
+]

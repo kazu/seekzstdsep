@@ -9,7 +9,7 @@ REMOTE ?= gh
 MASTER ?= master
 NU_OLD ?= 0.114/nu
 
-.PHONY: ci hook set-version tag push-release release
+.PHONY: ci hook changelog set-version tag push-release release
 
 ci:
 	cargo fmt --all --check
@@ -29,6 +29,15 @@ set-version:
 	sed -i 's|^seekzstdsep = { path = "\.\.", version = "[^"]*" }|seekzstdsep = { path = "..", version = "$(basename $(V))" }|' nu_plugin_zstdsep/Cargo.toml
 	cargo check --workspace
 	cd bench && cargo check
+
+# CHANGELOG.md is rendered from the commit log by git-cliff (`cargo install git-cliff`), never
+# edited by hand. With V the commits that have no tag yet are named for the release being cut,
+# which is why `release` runs this before the release commit: `commit -am` picks the file up.
+#
+# Only $(MASTER) carries the crate's `v*` tags, so only there does the log divide into releases.
+# $(NU_OLD) takes the file by cherry-pick, as the rest of the docs do.
+changelog:
+	@if [ -n "$(V)" ]; then git-cliff --tag "v$(V)" -o CHANGELOG.md; else git-cliff -o CHANGELOG.md; fi
 
 # Numbers come from Cargo.toml, never from an argument: `release.yml` refuses a tag that
 # disagrees with it.
@@ -65,6 +74,7 @@ release:
 	  { echo 'usage: make release V=<crate> P_NEW=<plugin on $(MASTER)> P_OLD=<plugin on $(NU_OLD)>' >&2; exit 1; }
 	git checkout $(MASTER)
 	$(MAKE) set-version V=$(V) P=$(P_NEW)
+	$(MAKE) changelog V=$(V)
 	$(MAKE) ci
 	git commit -am "seekzstdsep: zstdsep: release $(V) and $(P_NEW)"
 	$(MAKE) tag
