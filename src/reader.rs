@@ -13,6 +13,7 @@ use std::{
     path::PathBuf,
 };
 
+use anyhow::Context;
 use memchr::memmem::Finder;
 use zeekstd::Decoder;
 
@@ -108,15 +109,16 @@ impl RecordReader {
     /// An empty `separator`, the file not opening, a seek table with no frames in it, or frame 0
     /// not decompressing.
     pub fn open(path: PathBuf, separator: &[u8]) -> anyhow::Result<Self> {
-        let file = File::open(&path)?;
+        let file =
+            File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
         Self::from_file(path, file, separator)
     }
 
     /// [`Self::open`] on an already-open file. `path` is carried for error messages only.
     pub fn from_file(path: PathBuf, file: File, separator: &[u8]) -> anyhow::Result<Self> {
         record::check_separator(separator)?;
-        let decoder =
-            Decoder::new(file).map_err(|e| anyhow::anyhow!("Failed to create decoder: {}", e))?;
+        let decoder = Decoder::new(file)
+            .with_context(|| format!("failed to open {} as a seekable zst", path.display()))?;
         let frames = seek_table_decomp_frames(&decoder)
             .ok_or_else(|| anyhow::anyhow!("no frames in {}", path.display()))?;
         let mut reader = Self {

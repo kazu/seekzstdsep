@@ -180,7 +180,9 @@ pub fn run_compress(
     // 入力
     let mut input: Box<dyn ReadSeekable>;
     if let Some(ref path) = input_path {
-        input = Box::new(File::open(path).expect("failed to open input file"));
+        input = Box::new(
+            File::open(path).with_context(|| format!("failed to open {}", path.display()))?,
+        );
     } else {
         let mut spool = spooled_tempfile(1024 * 1024);
         io::copy(&mut stdin, &mut spool)?;
@@ -191,7 +193,9 @@ pub fn run_compress(
     // 出力
     let mut output: Box<dyn Write> = if let Some(ref path) = output_path {
         comp_opts.out_dir = path.parent().map(|p| p.to_path_buf());
-        Box::new(File::create(path).expect("failed to create output file"))
+        Box::new(
+            File::create(path).with_context(|| format!("failed to create {}", path.display()))?,
+        )
     } else {
         Box::new(stdout)
     };
@@ -220,7 +224,8 @@ pub fn run_compress(
     // --rm
     if args.rm {
         if let Some(ref path) = input_path {
-            std::fs::remove_file(path).expect("failed to remove input file");
+            std::fs::remove_file(path)
+                .with_context(|| format!("failed to remove {}", path.display()))?;
         } else {
             eprintln!("--rm requires input file");
             std::process::exit(1);

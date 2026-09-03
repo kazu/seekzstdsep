@@ -12,7 +12,6 @@ Performance costs that are not defects live in `docs/performances.md`.
 
 Each has a command below that reproduces the stated output. Ordered by damage, worst first.
 
-- [ ] [A path the user typed panics instead of being reported](#a-path-the-user-typed-panics-instead-of-being-reported)
 - [ ] [A separator that does not occur in frame 0 divides by zero](#a-separator-that-does-not-occur-in-frame-0-divides-by-zero)
 - [ ] [`inspect` panics on a frame that fails to decode](#inspect-panics-on-a-frame-that-fails-to-decode)
 - [ ] [The requested count overflows while the range is placed](#the-requested-count-overflows-while-the-range-is-placed)
@@ -46,24 +45,9 @@ when its code does.
 - [x] `compress` cuts a frame at 2 MiB whatever the record count is
 - [x] The encoder emits a trailing empty frame
 - [x] `seekzstdsep compress` runs the compressor twice
-
-### A path the user typed panics instead of being reported
-
-`compress` and `inspect` take a failed open, create or decode with `.expect()`, so the process dies
-with exit 101 where the rest of the CLI reports the error and exits 1.
-
-```
-$ seekzstdsep inspect /tmp/does-not-exist.zst          # fail open: Os { code: 2, ... }
-$ seekzstdsep inspect plain.zst                        # cannot open decoder: Unknown frame descriptor
-$ seekzstdsep compress /tmp/does-not-exist.txt out.zst # failed to open input file: Os { code: 2, ... }
-```
-
-`src/cli.rs` (open input, create output, remove input under `--rm`), `src/seekzstdsep_lib.rs` in
-`inspect_with_opts` (open, decoder, seek table), `src/main.rs` (the result of `inspect_with_opts`).
-
-Every one of those sits in a function that already returns `anyhow::Result`, so the fix is `?` at
-each site. Leaving the one in `src/main.rs` moves the panic rather than removing it. `?` alone drops
-the path from the message; `.with_context` keeps it. No test reaches any of them.
+- [x] A path the user typed panics instead of being reported
+- [x] `cat`, `truncate` and `append` do not say which file failed to open
+- [x] The compressor's retry panics instead of reporting a rewind that fails
 
 ### A separator that does not occur in frame 0 divides by zero
 
@@ -88,8 +72,7 @@ same.
 
 ### `inspect` panics on a frame that fails to decode
 
-`src/seekzstdsep_lib.rs`, in `inspect_with_opts` — the fourth `.expect()` in that function, and the
-one the entry above does not cover.
+`src/seekzstdsep_lib.rs`, in `inspect_with_opts` — the one `.expect()` left in that function.
 
 `cnt_of_separetor_in_frame` is called inside a `map` closure, which cannot propagate, so its error
 is taken with `expect` and a frame that will not decompress aborts the process. Every frame this
