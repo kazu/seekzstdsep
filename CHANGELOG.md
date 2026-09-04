@@ -6,6 +6,20 @@ next release overwrites it. What belongs in a release note belongs in a commit m
 Only the crate's own tags (`v*`) mark a release here. The nushell plugin is versioned separately in
 `nu_plugin_zstdsep/`, and `nu_v.*` records which revision a nushell version takes.
 
+## [0.4.1] - 2026-09-04
+
+### Fixed
+
+- seekzstdsep: fix the panic on a path that cannot be opened
+- seekzstdsep: reader: fix the panic on a separator that occurs nowhere
+- seekzstdsep: inspect: fix the panic on a frame that fails to decode
+- seekzstdsep: fix the frames a record range is placed in
+
+### Documentation
+
+- docs: re-check every known bug and file it by what it is
+- docs: generate CHANGELOG.md with git-cliff
+
 ## [0.4.0] - 2026-08-30
 
 ### Changed
@@ -35,6 +49,7 @@ Only the crate's own tags (`v*`) mark a release here. The nushell plugin is vers
 
 ### Changed
 
+- seekzstdsep: seek to any record range in a zstd file
 - nu_plugin_zstdsep: build against nushell 0.115
 - nu_plugin_zstdsep: add a Japanese README
 - Update branches for Rust workflow triggers
