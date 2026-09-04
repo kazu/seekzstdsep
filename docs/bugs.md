@@ -12,7 +12,6 @@ Performance costs that are not defects live in `docs/performances.md`.
 
 Each has a command below that reproduces the stated output. Ordered by damage, worst first.
 
-- [ ] [`inspect` panics on a frame that fails to decode](#inspect-panics-on-a-frame-that-fails-to-decode)
 - [ ] [The requested count overflows while the range is placed](#the-requested-count-overflows-while-the-range-is-placed)
 - [ ] [`cat` returns the wrong number of records when the requested count overflows](#cat-returns-the-wrong-number-of-records-when-the-requested-count-overflows)
 
@@ -48,32 +47,7 @@ when its code does.
 - [x] `cat`, `truncate` and `append` do not say which file failed to open
 - [x] The compressor's retry panics instead of reporting a rewind that fails
 - [x] A separator that does not occur in frame 0 divides by zero
-
-### `inspect` panics on a frame that fails to decode
-
-`src/seekzstdsep_lib.rs`, in `inspect_with_opts` — the one `.expect()` left in that function.
-
-`cnt_of_separetor_in_frame` is called inside a `map` closure, which cannot propagate, so its error
-is taken with `expect` and a frame that will not decompress aborts the process. Every frame this
-crate writes ends with a content checksum, so one flipped byte reaches it.
-
-In nushell:
-
-```nu
-1..2000 | each {|i| $'{"i":($i)}' } | str join "\n" | $"($in)\n" | save --raw --force in.jsonl
-^seekzstdsep compress in.jsonl out.seek.zst --frame-size 16384
-let b = (open --raw out.seek.zst | into binary)
-bytes build ($b | bytes at ..<200) (if ($b | bytes at 200..<201) == 0x[ff] { 0x[00] } else { 0x[ff] }) ($b | bytes at 201..) | save --force out.seek.zst
-^seekzstdsep inspect out.seek.zst --no-fast-mode
-# => thread 'main' panicked at src/seekzstdsep_lib.rs:1119:18:
-#    failt to get count: Restored data doesn't match checksum
-```
-
-`cat --from 0 --cnt 1` on that file prints `Error: Restored data doesn't match checksum` and exits
-1, which is what `inspect` should do.
-
-`?` is not the fix here. The closure has to return `Result<InspectResult>` and the `map` be
-collected as `Result<Vec<_>>`.
+- [x] `inspect` panics on a frame that fails to decode
 
 ### The requested count overflows while the range is placed
 

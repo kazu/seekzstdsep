@@ -1119,9 +1119,7 @@ pub fn inspect_with_opts(
                     *len,
                     &finder,
                     separator,
-                )
-                // FIXME: an undecodable frame aborts the process here. See `docs/bugs.md`.
-                .expect("failt to get count")
+                )?
             } else {
                 cache_cnt_of_sep
             };
@@ -1129,7 +1127,7 @@ pub fn inspect_with_opts(
                 cache_cnt_of_sep = cnt_of_sep;
             }
 
-            InspectResult {
+            Ok(InspectResult {
                 comp_start,
                 comp_end,
                 comp_size,
@@ -1138,8 +1136,8 @@ pub fn inspect_with_opts(
                 decomp_size,
                 sep: separator.to_vec(),
                 cnt_of_sep,
-            }
+            })
         })
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(results)
 }

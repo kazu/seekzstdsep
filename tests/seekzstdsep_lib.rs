@@ -587,6 +587,21 @@ fn test_a_flipped_byte_goes_unnoticed_without_a_checksum() {
 }
 
 #[test]
+fn test_inspect_reports_a_frame_that_fails_to_decode() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let body = incompressible_records(CORRUPT_RECORDS, CORRUPT_RECORD_LEN);
+    let out_path = compress_body(dir.path(), "random", &body);
+    corrupt_frame_zero(&out_path, true);
+
+    let err = inspect_with_opts(out_path, b"\n", InspectOptions { fast_mode: false })
+        .expect_err("a corrupted frame was inspected without complaint");
+    assert!(
+        err.to_string().to_lowercase().contains("checksum"),
+        "the failure was not the checksum: {err}"
+    );
+}
+
+#[test]
 fn test_compress_options_default_writes_a_checksum() {
     let opts = seekzstdsep::CompressOptions::default();
 
