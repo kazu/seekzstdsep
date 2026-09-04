@@ -158,6 +158,46 @@ fn an_index_past_the_last_record_is_none() {
     );
 }
 
+/// A `cnt` that overflows the sum placing the end of the range means the end of the file, which is
+/// what a count the file cannot fill means anywhere else.
+#[test]
+fn a_count_that_overflows_reads_to_the_end() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let mut reader = open_fixture(dir.path());
+    let expected = fixture_records();
+
+    for from in [
+        0,
+        FIXTURE_RECORDS_PER_FRAME,
+        2 * FIXTURE_RECORDS_PER_FRAME,
+        FIXTURE_RECORDS - 1,
+    ] {
+        let got = reader
+            .records(from, usize::MAX)
+            .expect("Failed to read records");
+        assert_eq!(
+            String::from_utf8_lossy(&got),
+            String::from_utf8_lossy(&expected[from..].concat()),
+            "records(from = {from}, cnt = usize::MAX) did not read to the end"
+        );
+    }
+}
+
+/// An index large enough to overflow the frame lookup is past the end like any other.
+#[test]
+fn an_index_that_overflows_the_frame_lookup_is_past_the_end() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let mut reader = open_fixture(dir.path());
+
+    let err = reader
+        .records(usize::MAX, 1)
+        .expect_err("a record past the end came back");
+    assert!(
+        err.to_string().contains("past the end"),
+        "the failure does not say the record is past the end: {err}"
+    );
+}
+
 #[test]
 fn iterating_returns_every_record_in_order() {
     let dir = tempdir().expect("Failed to create temp dir");

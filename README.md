@@ -101,7 +101,7 @@ their own. See `nu_plugin_zstdsep/README.md`.
 - `docs/library.md` — the rest of the API: reading, `truncate`, `append`, `copy_range`, options
 - `docs/benchmark.md` — what the benchmarks measure, and the traps they avoid
 - `docs/bench/` — the measurements themselves
-- `docs/bugs.md` — known issues, including the current `--cnt` semantics
+- `docs/bugs.md` — known issues
 
 ## License
 

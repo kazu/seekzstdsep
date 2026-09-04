@@ -26,6 +26,7 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 - [ ] [`inspect_with_opts` is not re-exported](#inspect_with_opts-is-not-re-exported)
 - [ ] [`out_dir` is written out at every call site](#out_dir-is-written-out-at-every-call-site)
 - [ ] [The read window and the default frame size are not tuned](#the-read-window-and-the-default-frame-size-are-not-tuned)
+- [ ] [`cat --cnt` cannot say "to the end"](#cat---cnt-cannot-say-to-the-end)
 
 ## Done
 
@@ -203,3 +204,15 @@ pays at open.
 Settled by measuring, not by matching a number to another number. `benches/read.rs` has the `cat`
 and `into_records` cases to measure with; the window size would have to become a parameter, or the
 constant changed and the two builds run alternately.
+
+### `cat --cnt` cannot say "to the end"
+
+`CatArgs::cnt` (`src/main.rs`) is a plain `usize`, while `edit.rs` gives `truncate`,
+`append_frames` and `copy_range` a `cnt: Option<u64>` where `None` is the end of the file. `cat`
+has no such value, so a caller who wants the rest of a file writes a number large enough to outrun
+it, which is what `docs/cli.md` tells them to do.
+
+Nothing is broken by it: the arithmetic that placed a range no longer wraps on such a count, and
+the read stops at the last record. What is left is that the same request is written two ways in
+one command line. `Option<u64>` on `CatArgs::cnt` makes them one, and is a change to the interface
+rather than a defect.

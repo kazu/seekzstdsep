@@ -221,7 +221,7 @@ impl RecordReader {
     /// `from` being past the last frame.
     fn records_request(&self, from: usize, cnt: usize) -> anyhow::Result<RecordsRequest> {
         let total_sep_cnt = self.sep_cnt * self.frames.len();
-        let frame_idx = self.frames.len() * from / total_sep_cnt;
+        let frame_idx = self.frames.len().saturating_mul(from) / total_sep_cnt;
         if frame_idx >= self.frames.len() {
             return Err(anyhow::anyhow!(
                 "record {from} is past the end of {}",
@@ -231,8 +231,9 @@ impl RecordReader {
         let idx_in_frame = from % self.sep_cnt;
         let start = self.frames[frame_idx].0;
 
+        let end = from.saturating_add(cnt).saturating_add(1);
         let end_frame_idx =
-            (self.frames.len() * (from + cnt + 1) / total_sep_cnt).min(self.frames.len() - 1);
+            (self.frames.len().saturating_mul(end) / total_sep_cnt).min(self.frames.len() - 1);
         let len = self.frames[end_frame_idx].0 + self.frames[end_frame_idx].1 - start;
         Ok(RecordsRequest {
             start,

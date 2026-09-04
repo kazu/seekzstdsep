@@ -36,7 +36,8 @@ something decodes all of it, which a record range does not; `docs/bugs.md` carri
 seekzstdsep cat events.jsonl.seek.zst --from 10000 --cnt 3
 ```
 
-`--from` is a 0-based record index. `docs/bugs.md` records the current `--cnt` semantics.
+`--from` is a 0-based record index. `--cnt` is a record count, and a count larger than what the file
+holds reads to the end and stops there — which is the only way to ask for the end of the file.
 
 ## Inspect the frame layout
 
