@@ -12,9 +12,6 @@ Performance costs that are not defects live in `docs/performances.md`.
 
 Each has a command below that reproduces the stated output. Ordered by damage, worst first.
 
-- [ ] [The requested count overflows while the range is placed](#the-requested-count-overflows-while-the-range-is-placed)
-- [ ] [`cat` returns the wrong number of records when the requested count overflows](#cat-returns-the-wrong-number-of-records-when-the-requested-count-overflows)
-
 ## Not reproduced
 
 Read off the source, not observed. Each says what would settle it.
@@ -48,50 +45,6 @@ when its code does.
 - [x] The compressor's retry panics instead of reporting a rewind that fails
 - [x] A separator that does not occur in frame 0 divides by zero
 - [x] `inspect` panics on a frame that fails to decode
-
-### The requested count overflows while the range is placed
-
-`frame_range` (`src/edit.rs`) places the end of a range with `(from + c) % n`, which overflows
-before the arm below it can refuse the same `c` with `from.saturating_add(c)`. A debug build panics;
-a release build wraps and lands on a refusal by accident, not always the one that says what the
-caller did wrong.
-
-```sh
-seekzstdsep compress in.jsonl clean.seek.zst --frame-size 65536   # 1333 records per frame
-seekzstdsep copy-range clean.seek.zst out.seek.zst --from 1333 --cnt 18446744073709551615
-# debug   => thread 'main' panicked at src/edit.rs:751:20: attempt to add with overflow
-# release => Error: refusing to copy ... which holds 200000 records
-```
-
-`--cnt 18446744073709550283` on the same file sums to 0 instead, which the first arm takes for a
-frame boundary; a release build then fails with `Error: frame index too large`.
-
-`--from` has to be a frame boundary or an earlier refusal fires first. `copy-range` and
-`append --input-seekable` are the two callers, and nothing is written either way, so the damage is
-the panic and the misleading refusal.
-
-### `cat` returns the wrong number of records when the requested count overflows
-
-`records_request` (`src/reader.rs`) places the end of a range with `from + cnt + 1`. `from` and
-`cnt` are `usize` taken straight from the command line, so the sum wraps. A debug build panics on
-the add; a release build carries the wrapped value into the length and answers with it.
-
-```sh
-seekzstdsep compress in.jsonl clean.seek.zst --frame-size 65536   # 200000 records, 1333 per frame
-seekzstdsep cat clean.seek.zst --from 1333 --cnt 18446744073709550282 | wc -l
-# => 0, exit 0, nothing on stderr, where 198667 records exist from index 1333
-```
-
-The wrapped sum puts the end frame at 0, so which wrong answer comes back depends on where `from`
-lands: `--from 0` returns 1333 of the 200000 that exist, `--from 1333` returns 0 of 198667, and
-`--from 2666` returns 197334 of 197334, which is right. The count never exceeds `--cnt` —
-`take_records` caps it and `end_frame_idx` is clamped to the last frame — so the fault is always a
-short answer reported as a whole one, which a caller cannot tell from a file that holds no more.
-
-`--cnt 1000000` is fine; it takes a `--cnt` within a frame's worth of `u64::MAX`. That is what a
-caller writes to mean "to the end", which `cat` has no other way to say: `CatArgs::cnt` is a plain
-`usize`, while `edit.rs` gives `truncate`, `append_frames` and `copy_range` a `cnt: Option<u64>`
-where `None` is the end. `checked_add` fixes the fault; the type is why anyone reaches it.
-
-The same sum overflows in `edit.rs`, above.
-
+- [x] The requested count overflows while the range is placed
+- [x] The requested index overflows while the frame is placed
+- [x] `cat` returns the wrong number of records when the requested count overflows

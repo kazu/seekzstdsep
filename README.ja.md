@@ -101,7 +101,7 @@ plugin へ回します。詳細は `nu_plugin_zstdsep/README.ja.md` にありま
 - `docs/library.md` — API の残り: 読み出し、`truncate`、`append`、`copy_range`、オプション
 - `docs/benchmark.md` — ベンチマークが何を測っているか、避けている罠は何か
 - `docs/bench/` — 測定結果そのもの
-- `docs/bugs.md` — 既知の問題。`--cnt` の現在の意味論を含みます
+- `docs/bugs.md` — 既知の問題
 
 ## ライセンス
 

@@ -747,14 +747,12 @@ fn frame_range(
     // Every frame but the last holds n records, so the seek table places the end by arithmetic.
     // The last one is the exception, and its count is what a decode is spent on where the range
     // reaches it.
-    match cnt {
-        Some(c) if (from + c) % n == 0 && (from + c) / n <= u64::from(last) => {
-            Ok((k, ((from + c) / n) as u32, None))
-        }
-        c => {
+    match cnt.and_then(|c| from.checked_add(c)) {
+        Some(end) if end % n == 0 && end / n <= u64::from(last) => Ok((k, (end / n) as u32, None)),
+        _ => {
             let tail = frame_records(reader, finder, last)?;
             let total = n * u64::from(last) + tail;
-            if let Some(c) = c
+            if let Some(c) = cnt
                 && from.saturating_add(c) != total
             {
                 bail!(

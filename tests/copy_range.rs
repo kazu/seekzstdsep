@@ -161,6 +161,25 @@ fn test_copy_range_refuses_a_start_past_the_last_record() {
     );
 }
 
+/// A `cnt` that wraps the sum with `from` is a count past the end like any other, and gets the
+/// refusal that says so. The second value below wraps to exactly a frame boundary, which the
+/// arithmetic placing the end would otherwise take for one.
+#[test]
+fn test_copy_range_refuses_a_count_that_wraps_the_sum() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let input = compress_fixture(temp_dir.path());
+    let from = FIXTURE_RECORDS_PER_FRAME as u64;
+
+    for cnt in [u64::MAX, u64::MAX - from + 1] {
+        let err = assert_refused(&input, from, Some(cnt), Alignment::NotRequired);
+        assert!(
+            err.to_string()
+                .contains("a range ends at the first record of a frame"),
+            "the refusal of {cnt} records does not say where a range ends: {err}"
+        );
+    }
+}
+
 #[test]
 fn test_copy_range_refuses_the_short_final_frame_by_default() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
