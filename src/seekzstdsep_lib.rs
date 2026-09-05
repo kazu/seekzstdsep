@@ -35,8 +35,9 @@ pub(crate) const READ_BUF_SIZE: usize = 32768; // 大きなバッファでI/O削
 ///
 /// It is where [`record::Reader`]'s window starts: how large a frame is belongs to the file rather
 /// than to this crate, and what a read holds should not follow it. The window grows past this only
-/// to reach the end of one record, which is the least it can hand out. A caller that does need a
-/// frame whole — `edit::FrameReader` — starts here and grows to the frames it is asked for.
+/// to reach the end of one record, which is the least it can hand out. The one caller that does
+/// need a frame whole — the tail `edit::append` re-cuts — allocates for that frame rather than
+/// growing this.
 ///
 /// Equal to [`READ_BUF_SIZE`] for now because nothing yet says it should differ, and separate from
 /// it because the two answer different questions.

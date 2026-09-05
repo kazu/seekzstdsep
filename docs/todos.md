@@ -20,7 +20,6 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 
 ## Blocking nothing
 
-- [ ] [Counting a frame's records holds the whole frame](#counting-a-frames-records-holds-the-whole-frame)
 - [ ] [A record read has no way to verify its frame's checksum](#a-record-read-has-no-way-to-verify-its-frames-checksum)
 - [ ] [The frame is read with a single `read` call](#the-frame-is-read-with-a-single-read-call)
 - [ ] [`RecordReader` cannot be asked to check the uniform count](#recordreader-cannot-be-asked-to-check-the-uniform-count)
@@ -32,6 +31,7 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 ## Done
 
 - [x] Indexed access still holds a whole frame
+- [x] Counting a frame's records holds the whole frame
 
 ### Concurrent append, and reading during an append
 
@@ -72,42 +72,6 @@ Reader::records(&self, from, cnt)   // repeatedly, from several threads
 Undecided: whether `Reader` holds a file handle at all, or hands out per-thread ones. Decoding is
 stateful, so it cannot be shared behind `&self`.
 
-### Counting a frame's records holds the whole frame
-
-`Indexed access still holds a whole frame` above is done for the read path: `RecordReader::record`
-reads through a 32 KiB window instead of decoding the frame into a `Vec`. The edit operations never
-got it.
-
-`edit::FrameReader::frame` decodes a frame's whole decompressed length into its buffer
-(`decompressed_range_into`, sized from `frame_size_decomp`) and hands back `&[u8]`. The buffer is
-reused across frames, so what a call holds is the largest frame it read. Every operation in
-`src/edit.rs` goes through it: `truncate`, `append` in both its forms, `copy-range`, and the public
-`count_frames`.
-
-Five of the six callers only walk what they are given — `validate_separator`, `records_per_frame`,
-`frame_counts` and `frame_records` count records, and `records_per_frame` also asks whether the
-frame ends with a whole one. None of them keeps a byte. Holding the frame is not what they need; it
-is what `record::count(&[u8], find)` makes the caller do. The streaming form already exists:
-`count_records_in_frame` walks the same 32 KiB window the read path uses.
-
-One caller does need the bytes. `append_records` takes the last data frame with `take_frame`, joins
-it with the records being appended and cuts the result again, since the frame a file ends with holds
-fewer records than the rest and appending after it would leave a short frame in the interior. That
-one stays. `append_frames`'s `take_frame` is not it — the bytes are only walked there, and ownership
-is taken so the reader can be dropped before the file is written to.
-
-What blocks the substitution is a signature. `count_records_in_frame` takes
-`Decoder<'a, std::fs::File>`, which owns the file, while `FrameReader` holds `Decoder<'a, &'a File>`.
-The `record::region` underneath is already generic over `S: zeekstd::Seekable`, so widening the
-public signature is what unblocks it — a widening no existing caller notices.
-
-`records_per_frame` wants two answers from one frame, the record count and whether the frame ends
-with a whole record. One walk gives both: the count is the walk's, and a frame ends whole when the
-walk leaves nothing behind, which `record::Reader::remainder` reports.
-
-`widest_frame` and `FrameReader::with_capacity` exist only to size the whole-frame buffer up front,
-and go with it.
-
 ### A record read has no way to verify its frame's checksum
 
 A frame ends with a content checksum over its whole decompressed content, so only a decode that
@@ -137,8 +101,8 @@ user-facing text has no business pointing at a bug list — or at this file.
 
 ### The frame is read with a single `read` call
 
-`decompressed_range_into` (`src/seekzstdsep_lib.rs`), which `edit::FrameReader` takes a frame's
-bytes from:
+`decompressed_range_into` (`src/seekzstdsep_lib.rs`), which `edit::FrameReader::read_frame` takes a
+frame's bytes from:
 
 ```rust
 let mut data = vec![0u8; len as usize];
@@ -148,8 +112,8 @@ let _n = decoder.read(&mut data[..])?;
 `Read::read` may return fewer bytes than the buffer holds without that being an error, and zeekstd
 promises nothing more: `Decoder::decompress` is documented "call this repetetively to fill `buf`",
 and its example loops until a call returns 0. A short read would leave the tail of `data` as NUL,
-which an edit would copy into the file it writes while counting the frame's separators short — and
-the return value is discarded, so nothing would notice.
+which `append` would copy into the file it writes as the records it re-cuts — and the return value
+is discarded, so nothing would notice.
 
 It has never returned short. 1,212 single reads over fixtures of 600, 50,000 and 200,000 records,
 spanning one, three and ten frames at a time, all filled the buffer, and a later read of 24 MB
