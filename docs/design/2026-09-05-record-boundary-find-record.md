@@ -185,3 +185,45 @@ moves where `new_` cuts, so any fixture whose records land within a separator le
 - Renaming `separator` where it now means a record boundary: `RecordReader::separator`,
   `max_of_separator`, `keep_cnt_of_separators_in_frame`, `cnt_of_separetor_in_frame`,
   `is_same_separator_cnt`.
+
+## What was implemented differently
+
+Six places where the code departs from what is written above. The reasons are here rather than in
+the commit, since it is this document a reader would otherwise take as the description.
+
+**The flags are `--finder` and `--finder-arg`**, not `--format` and `--format-param`. `inspect`
+already had `-f, --format` for the format of its report, and a `--format` that meant the record
+format would have taken it. `--finder` also matches what the crate calls the thing.
+
+**`from_spec` returns a `Boundary`**, not the `Box<dyn Fn…>` above:
+
+```rust
+pub enum Boundary { Separator(Vec<u8>), Finder(BoxFinder) }
+```
+
+`sep` yields the separator's bytes, so the command line stays on the separator entry points for it.
+Three things need those bytes rather than a finder — `append --insert-separator` writes them,
+`RecordReader::separator` hands them back, and the refusal of a frame 0 that holds no record names
+them — and a boxed finder has none of them. Formats are still named in `from_spec` alone.
+
+**`RecordReader` holds the separator's own search beside the boxed finder**, rather than only the
+box. The box alone costs an indirect call per record, and the walk can hoist neither it nor the
+needle's length out of its loop: measured against 0.4.1, `records_to` was 1.1% and `record` 0.65%
+more instructions. `with_find!` resolves between the two before the walk starts, which leaves the
+separator calling `memchr` with the length in a register. The public type still gains no parameter.
+
+**`first_end` is gone** rather than taking a finder. Generalised, its body is `find(data)` and
+nothing else, so the two callers — `Stream::next_end` and `Window::walk`, which hold their own
+offsets — call the finder directly. `ends` is the one walk that remains, and `count` and
+`ends_whole` are derived from it.
+
+**`next_owned` changed**, though `Run` and everything written against it is listed as unchanged. It
+accumulated a record across runs with `try_fold`, which only a run of `count: 0` could make it do;
+removing those runs means a record arrives in one, and `next_owned` takes it in one piece. That is
+what makes `into_records` 9.2% cheaper in instructions than 0.4.1.
+
+**The empty separator is refused earlier** than `old_convert_to_seekable_zst_reader_with_opts`
+refuses it. `new_` is the separator's layer over the record-taking compressor, so its refusal comes
+before the buffer of `frame_size * limit_multiplier` is asked for, where the old one reaches that
+multiplication first. The two therefore part on a `frame_size` that the multiplication does not
+survive, and only there; `tests/compress_equivalence.rs` pins that one case and agrees on the rest.

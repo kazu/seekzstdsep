@@ -10,6 +10,7 @@ Ordered by how much each one costs, worst first.
 - [ ] [The frame checksum costs 4 bytes per frame](#the-frame-checksum-costs-4-bytes-per-frame) — 0.06% of the file, collected only where a whole frame is decoded
 - [x] [Reading several frames rebuilt the decoder for each](#reading-several-frames-rebuilt-the-decoder-for-each) — 4 to 18% of the time spent reading two frames or more
 - [x] [A lookup by index held a whole frame](#a-lookup-by-index-held-a-whole-frame) — peak RSS followed the frame size: 36.8 MiB at 32 MiB frames
+- [x] [The record boundary was reached through a box](#the-record-boundary-was-reached-through-a-box) — one indirect call per record: 1.1% of a range read
 
 Numbers come from `docs/bench/`; the harness is in `bench/`.
 
@@ -147,3 +148,33 @@ records at `--frame-size 65536` — 2,161 frames — the output is 15,320,474 by
 
 It is not a defect and is listed here so the cost is on the record. What it buys is stated in
 `docs/format.md`, and only a whole-frame decode collects it (`docs/bugs.md`).
+
+## The record boundary was reached through a box
+
+Where a record ends became a finder, and `RecordReader` holds one so that the public type gains no
+parameter. Held only as a `Box<dyn Fn(&[u8]) -> Option<usize>>` it cost an indirect call per record,
+and the walk could hoist neither the choice nor the needle's length out of its loop. Holding the
+separator's own search beside the box instead, and resolving between the two before the walk starts
+(`with_find!` in `src/reader.rs`), leaves the separator calling `memchr` with the length in a
+register, as it did before a record had a finder at all.
+
+Instruction counts under callgrind, not the clock. The difference is around 1%, and on this machine
+the unchanged `compress/old` case swings 7% between criterion runs — the clock cannot carry it.
+`Ir` for a fixed number of iterations of each operation, 0.4.1 against the branch, the fixture's
+compressed bytes checked identical first so both sides do the same work.
+
+| | boxed | resolved before the walk |
+| --- | ---: | ---: |
+| `RecordReader::record` | +0.65% | −0.05% |
+| `records_to`, which is what `cat` runs | +1.12% | +0.015% |
+| `into_records` | −9.4% | −9.2% |
+
+`into_records` is faster for a different reason, and both columns have it: the read window grows to
+hold one record, so a record never spans two runs and `next_owned` takes it in one piece instead of
+building it up across them.
+
+`callgrind_annotate` is what located this. Every other symbol matched to the instruction —
+`memchr`'s `find_raw_avx2` at 39,261,269 on both sides, `__memcpy_avx_unaligned_erms` within 65 —
+and only `Records::next` moved, 11,706,554 against 16,078,824. That is 4,000 lookups over about
+1.4M records, so the cost was around three instructions per record: a discriminant loaded, a branch,
+and the needle's length read again.
