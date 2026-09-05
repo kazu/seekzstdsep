@@ -6,6 +6,19 @@ next release overwrites it. What belongs in a release note belongs in a commit m
 Only the crate's own tags (`v*`) mark a release here. The nushell plugin is versioned separately in
 `nu_plugin_zstdsep/`, and `nu_v.*` records which revision a nushell version takes.
 
+## [0.5.0] - 2026-09-05
+
+### Changed
+
+- seekzstdsep: bench: measure what the compressor holds
+- seekzstdsep: take the record boundary as a finder
+- seekzstdsep: edit: stop holding a whole frame to count its records
+
+### Documentation
+
+- docs: record that counting a frame's records holds the whole frame
+- docs: record how the finder differs from its design, and what a box cost
+
 ## [0.4.1] - 2026-09-04
 
 ### Fixed
