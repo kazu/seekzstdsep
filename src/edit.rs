@@ -20,6 +20,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
 };
 
+use crate::find;
 use crate::record;
 use crate::seekzstdsep_lib::{
     READ_BUF_SIZE, READ_FRAME_BUF_SIZE, decompressed_range_into, frame_encoder,
@@ -75,12 +76,27 @@ pub enum SeparatorCheck {
 /// Refuses a `record_len` of 0, one past the records `f` holds, or one that does not land on a
 /// frame boundary, along with the refusals every operation in [this module](crate::edit) shares.
 pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Result<()> {
-    let (finder, table) = open_target(f, separator)?;
+    record::check_separator(separator)?;
+    let finder = Finder::new(separator);
+    truncate_records(f, record_len, find::by_separator(&finder))
+}
+
+/// [`truncate`] with the record boundary as a finder.
+///
+/// # Errors
+///
+/// Whatever [`truncate`] refuses, bar the empty separator.
+pub fn truncate_records<F: Fn(&[u8]) -> Option<usize>>(
+    f: &mut File,
+    record_len: u64,
+    find: F,
+) -> anyhow::Result<()> {
+    let table = open_target(f)?;
     let frames = table.num_frames();
 
     let mut reader = FrameReader::new(&*f, &table)?;
-    let n = validate_separator(&mut reader, &finder)?;
-    let last = frame_records(&mut reader, &finder, frames - 1)?;
+    let n = validate_separator(&mut reader, &find)?;
+    let last = frame_records(&mut reader, &find, frames - 1)?;
     let total = n * u64::from(frames - 1) + last;
 
     if record_len == 0 {
@@ -208,17 +224,63 @@ pub fn append<R: Read>(
 /// another fragment.
 pub fn append_records(
     f: &mut File,
-    mut data: impl Read,
+    data: impl Read,
     separator: &[u8],
     on_missing: OnMissingSeparator,
     level: i32,
 ) -> anyhow::Result<()> {
-    let (finder, table) = open_target(f, separator)?;
+    record::check_separator(separator)?;
+    let finder = Finder::new(separator);
+    append_records_inner(
+        f,
+        data,
+        find::by_separator(&finder),
+        Some(separator),
+        on_missing,
+        level,
+    )
+}
+
+/// [`append_records`] with the record boundary as a finder.
+///
+/// `on_missing` takes [`OnMissingSeparator::Refuse`] alone: writing a separator at the join needs
+/// a separator to write, and a finder is not one.
+///
+/// # Errors
+///
+/// Whatever [`append_records`] refuses, along with [`OnMissingSeparator::Insert`].
+pub fn append_records_with<F: Fn(&[u8]) -> Option<usize>>(
+    f: &mut File,
+    data: impl Read,
+    find: F,
+    on_missing: OnMissingSeparator,
+    level: i32,
+) -> anyhow::Result<()> {
+    if on_missing == OnMissingSeparator::Insert {
+        bail!(
+            "refusing to insert a separator at the join: the file was opened by a record finder \
+             rather than by a separator, so there is nothing to insert"
+        );
+    }
+    append_records_inner(f, data, find, None, on_missing, level)
+}
+
+/// The append both entry points make. `separator` is what [`OnMissingSeparator::Insert`] writes,
+/// and is `None` where the caller gave a finder instead.
+fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
+    f: &mut File,
+    mut data: impl Read,
+    find: F,
+    separator: Option<&[u8]>,
+    on_missing: OnMissingSeparator,
+    level: i32,
+) -> anyhow::Result<()> {
+    let table = open_target(f)?;
 
     // Before the subtraction below: a seek table can hold no entries at all, and validation is
     // what refuses that.
     let mut reader = FrameReader::new(&*f, &table)?;
-    let n = validate_separator(&mut reader, &finder)? as usize;
+    let n = validate_separator(&mut reader, &find)? as usize;
     // Replace the frame the last record is in; the set_len below drops the empty frames with it.
     let last = last_data_frame(&table)?;
 
@@ -255,15 +317,15 @@ pub fn append_records(
     let checksum = frame_has_checksum(f, &table, last)?;
     let mut tail = reader.take_frame(last)?;
     drop(reader);
-    if !record::ends_whole(&tail, &finder, separator.len()) {
+    if !record::ends_whole(&tail, &find) {
         match on_missing {
             OnMissingSeparator::Refuse => bail!(
                 "refusing to append to a file that does not end with a whole record: the first \
                  appended record would merge with the fragment it ends in"
             ),
             OnMissingSeparator::Insert => {
-                tail.extend_from_slice(separator);
-                if !record::ends_whole(&tail, &finder, separator.len()) {
+                tail.extend_from_slice(separator.expect("Insert is refused without a separator"));
+                if !record::ends_whole(&tail, &find) {
                     bail!(
                         "refusing to append: writing a separator leaves the fragment the file \
                          ends in a fragment, which is what a separator overlapping itself does"
@@ -276,12 +338,7 @@ pub fn append_records(
 
     // The records already in the file go in front of the ones being appended, so the join is cut
     // like any other record boundary.
-    let mut cutter = Cutter::new(
-        std::io::Cursor::new(tail).chain(data),
-        &finder,
-        separator.len(),
-        n,
-    );
+    let mut cutter = Cutter::new(std::io::Cursor::new(tail).chain(data), &find, n);
     // The first frame holds the records the file already has, and they exist nowhere else between
     // the set_len below and the write that follows it. Compress it first, so that window is a
     // write rather than a compression.
@@ -352,9 +409,27 @@ pub fn append_frames(
     separator: &[u8],
     check: RangeCheck,
 ) -> anyhow::Result<()> {
-    let (finder, table) = open_target(f, separator)?;
+    record::check_separator(separator)?;
+    let finder = Finder::new(separator);
+    append_frames_with(f, input, from, cnt, find::by_separator(&finder), check)
+}
+
+/// [`append_frames`] with the record boundary as a finder.
+///
+/// # Errors
+///
+/// Whatever [`append_frames`] refuses, bar the empty separator.
+pub fn append_frames_with<F: Fn(&[u8]) -> Option<usize>>(
+    f: &mut File,
+    input: &File,
+    from: u64,
+    cnt: Option<u64>,
+    find: F,
+    check: RangeCheck,
+) -> anyhow::Result<()> {
+    let table = open_target(f)?;
     let mut reader = FrameReader::new(&*f, &table)?;
-    let n = validate_separator(&mut reader, &finder)?;
+    let n = validate_separator(&mut reader, &find)?;
     let last = last_data_frame(&table)?;
 
     // The frames being copied go after this one, so it is the one that has to be full: a short
@@ -362,13 +437,13 @@ pub fn append_frames(
     // the check that the file ends with a whole record costs nothing beyond it.
     let end = reader.take_frame(last)?;
     drop(reader);
-    if !record::ends_whole(&end, &finder, separator.len()) {
+    if !record::ends_whole(&end, &find) {
         bail!(
             "refusing to append to a file that does not end with a whole record: the first \
              appended record would merge with the fragment it ends in"
         );
     }
-    let held = record::count(&end, &finder) as u64;
+    let held = record::count(&end, &find) as u64;
     if held != n {
         bail!(
             "refusing to append frames after frame {last}, which holds {held} records rather than \
@@ -379,10 +454,10 @@ pub fn append_frames(
     // Frame 0 is where the input's records per frame is read from, and it has to be the count the
     // file being appended to holds. Whether the frames actually taken hold it too is what `check`
     // decides: reading it off frame 0 rests on the input having been written with a uniform count.
-    let (in_finder, in_table) = finder_and_seek_table(input, separator)
+    let in_table = seek_table_of(input)
         .context("refusing to append the frames of a file that is not a seekable zst")?;
     let mut in_reader = FrameReader::new(input, &in_table)?;
-    let in_n = records_per_frame(&mut in_reader, &in_finder, SeparatorCheck::FirstFrame)?;
+    let in_n = records_per_frame(&mut in_reader, &find, SeparatorCheck::FirstFrame)?;
     if in_n != n {
         bail!(
             "refusing to append a file holding {in_n} records per frame to one holding {n}: the \
@@ -393,12 +468,12 @@ pub fn append_frames(
     // The last frame of the input is allowed to be short, so what frame_range reports about it is
     // not asked for here: it becomes the last frame of the result, which is where a short frame is
     // permitted.
-    let (k, j, _) = frame_range(&mut in_reader, &in_finder, n, from, cnt)?;
+    let (k, j, _) = frame_range(&mut in_reader, &find, n, from, cnt)?;
     if k == j {
         return Ok(());
     }
     if check == RangeCheck::EveryFrame {
-        check_range_uniform(&mut in_reader, &in_finder, n, k, j)?;
+        check_range_uniform(&mut in_reader, &find, n, k, j)?;
     }
     let start = in_table.frame_start_comp(k)?;
     let stop = in_table.frame_end_comp(j - 1)?;
@@ -432,18 +507,45 @@ pub fn append_frames(
 /// does. Along with the refusals every operation in [this module](crate::edit) shares.
 pub fn copy_range(
     input: &File,
-    mut output: impl Write,
+    output: impl Write,
     from: u64,
     cnt: Option<u64>,
     separator: &[u8],
     align: Alignment,
     check: SeparatorCheck,
 ) -> anyhow::Result<()> {
-    let (finder, table) = finder_and_seek_table(input, separator)?;
-    let mut reader = FrameReader::new(input, &table)?;
-    let n = records_per_frame(&mut reader, &finder, check)?;
+    record::check_separator(separator)?;
+    let finder = Finder::new(separator);
+    copy_range_with(
+        input,
+        output,
+        from,
+        cnt,
+        find::by_separator(&finder),
+        align,
+        check,
+    )
+}
 
-    let (k, j, tail) = frame_range(&mut reader, &finder, n, from, cnt)?;
+/// [`copy_range`] with the record boundary as a finder.
+///
+/// # Errors
+///
+/// Whatever [`copy_range`] refuses, bar the empty separator.
+pub fn copy_range_with<F: Fn(&[u8]) -> Option<usize>>(
+    input: &File,
+    mut output: impl Write,
+    from: u64,
+    cnt: Option<u64>,
+    find: F,
+    align: Alignment,
+    check: SeparatorCheck,
+) -> anyhow::Result<()> {
+    let table = seek_table_of(input)?;
+    let mut reader = FrameReader::new(input, &table)?;
+    let n = records_per_frame(&mut reader, &find, check)?;
+
+    let (k, j, tail) = frame_range(&mut reader, &find, n, from, cnt)?;
     if cnt == Some(0) {
         bail!("refusing to copy 0 records: a file of no frames cannot be read back");
     }
@@ -474,16 +576,16 @@ pub fn copy_range(
 /// A record ends with the separator, so a group ends immediately after its last one. What is left
 /// when the stream runs out is the remainder, which is shorter than a group and belongs in the
 /// frame the file ends with.
-struct Cutter<'a, R> {
-    stream: record::Stream<'a, R>,
+struct Cutter<R, F> {
+    stream: record::Stream<R, F>,
     records: usize,
     found: usize,
 }
 
-impl<'a, R: Read> Cutter<'a, R> {
-    fn new(reader: R, finder: &'a Finder<'a>, separator_len: usize, records: usize) -> Self {
+impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Cutter<R, F> {
+    fn new(reader: R, find: F, records: usize) -> Self {
         Self {
-            stream: record::Stream::with_capacity(reader, finder, separator_len, READ_BUF_SIZE),
+            stream: record::Stream::with_capacity(reader, find, READ_BUF_SIZE),
             records,
             found: 0,
         }
@@ -513,26 +615,22 @@ impl<'a, R: Read> Cutter<'a, R> {
     }
 }
 
-/// The separator search and the seek table, which is what every operation reads before it writes.
+/// The seek table, which is what every operation reads before it writes.
 ///
 /// The table is kept rather than read again: [`cut_at`] destroys the copy on disk.
 ///
 /// # Errors
 ///
-/// An empty `separator`, and a file whose seek table cannot be read.
-fn open_target<'a>(f: &mut File, separator: &'a [u8]) -> anyhow::Result<(Finder<'a>, SeekTable)> {
-    finder_and_seek_table(f, separator)
+/// A file whose seek table cannot be read.
+fn open_target(f: &mut File) -> anyhow::Result<SeekTable> {
+    seek_table_of(f)
 }
 
 /// [`open_target`] for an operation that only reads `f`, which takes no exclusive borrow to state
 /// that it rewrites nothing.
-fn finder_and_seek_table<'a>(
-    f: &File,
-    separator: &'a [u8],
-) -> anyhow::Result<(Finder<'a>, SeekTable)> {
-    record::check_separator(separator)?;
+fn seek_table_of(f: &File) -> anyhow::Result<SeekTable> {
     let mut src = f;
-    Ok((Finder::new(separator), SeekTable::from_seekable(&mut src)?))
+    Ok(SeekTable::from_seekable(&mut src)?)
 }
 
 /// Shortens `f` to `cut` and positions it there, which is where the replacement frames go.
@@ -550,7 +648,10 @@ fn cut_at(f: &mut File, cut: u64) -> anyhow::Result<()> {
 /// Compares the first frame against the last one that is not allowed to be short, so a count that
 /// drifts anywhere between them is caught. Only those two are decoded: a frame in the middle that
 /// differs from both is not detected, and finding it would mean decompressing the whole file.
-fn validate_separator(reader: &mut FrameReader, finder: &Finder) -> anyhow::Result<u64> {
+fn validate_separator(
+    reader: &mut FrameReader,
+    find: &impl Fn(&[u8]) -> Option<usize>,
+) -> anyhow::Result<u64> {
     let frames = reader.table.num_frames();
     if frames < 3 {
         bail!(
@@ -559,12 +660,12 @@ fn validate_separator(reader: &mut FrameReader, finder: &Finder) -> anyhow::Resu
         );
     }
 
-    let first = record::count(reader.frame(0)?, finder);
+    let first = record::count(reader.frame(0)?, find);
     if first == 0 {
         bail!("the separator does not occur in frame 0");
     }
     let last_full = frames - 2;
-    let second = record::count(reader.frame(last_full)?, finder);
+    let second = record::count(reader.frame(last_full)?, find);
     if first != second {
         bail!(
             "frame 0 holds {first} separators and frame {last_full} holds {second}: either the \
@@ -621,7 +722,7 @@ fn frame_checksum_at(mut f: &File, table: &SeekTable, index: u32) -> anyhow::Res
 /// which catches a count that drifts between the two at the price of a second frame decoded.
 fn records_per_frame(
     reader: &mut FrameReader,
-    finder: &Finder,
+    find: &impl Fn(&[u8]) -> Option<usize>,
     check: SeparatorCheck,
 ) -> anyhow::Result<u64> {
     let last = last_data_frame(reader.table)?;
@@ -635,8 +736,8 @@ fn records_per_frame(
     // Both answers are taken from the one borrow, so that reading a second frame below does not
     // need this one copied out to survive it.
     let first = reader.frame(0)?;
-    let n = record::count(first, finder) as u64;
-    let ends_whole = record::ends_whole(first, finder, finder.needle().len());
+    let n = record::count(first, find) as u64;
+    let ends_whole = record::ends_whole(first, find);
 
     // Before the check below, which would refuse a separator that occurs nowhere for the less
     // specific of the two reasons.
@@ -658,7 +759,7 @@ fn records_per_frame(
                  one that has to hold a full count"
             );
         }
-        let second = frame_records(reader, finder, full)?;
+        let second = frame_records(reader, find, full)?;
         if n != second {
             bail!(
                 "frame 0 holds {n} records and frame {full} holds {second}: either the separator \
@@ -684,13 +785,13 @@ fn records_per_frame(
 /// refusal costs the same as an acceptance; the refusal still comes before anything is written.
 fn check_range_uniform(
     reader: &mut FrameReader,
-    finder: &Finder,
+    find: &impl Fn(&[u8]) -> Option<usize>,
     n: u64,
     k: u32,
     j: u32,
 ) -> anyhow::Result<()> {
     let last = last_data_frame(reader.table)?;
-    for (offset, held) in frame_counts(reader, finder, k..j)?.into_iter().enumerate() {
+    for (offset, held) in frame_counts(reader, find, k..j)?.into_iter().enumerate() {
         let i = k + offset as u32;
         if held == n {
             continue;
@@ -723,7 +824,7 @@ fn check_range_uniform(
 /// the range anywhere but at the first record of a frame or the end of the file.
 fn frame_range(
     reader: &mut FrameReader,
-    finder: &Finder,
+    find: &impl Fn(&[u8]) -> Option<usize>,
     n: u64,
     from: u64,
     cnt: Option<u64>,
@@ -750,7 +851,7 @@ fn frame_range(
     match cnt.and_then(|c| from.checked_add(c)) {
         Some(end) if end % n == 0 && end / n <= u64::from(last) => Ok((k, (end / n) as u32, None)),
         _ => {
-            let tail = frame_records(reader, finder, last)?;
+            let tail = frame_records(reader, find, last)?;
             let total = n * u64::from(last) + tail;
             if let Some(c) = cnt
                 && from.saturating_add(c) != total
@@ -794,22 +895,23 @@ pub fn count_frames(
 ) -> anyhow::Result<Vec<u64>> {
     record::check_separator(separator)?;
     let widest = widest_frame(table, range.clone())?;
+    let finder = Finder::new(separator);
     frame_counts(
         &mut FrameReader::with_capacity(f, table, widest)?,
-        &Finder::new(separator),
+        &find::by_separator(&finder),
         range,
     )
 }
 
-/// [`count_frames`] for a caller that already has the separator search and has checked it.
+/// [`count_frames`] for a caller that already has the record boundary and has checked it.
 fn frame_counts(
     reader: &mut FrameReader,
-    finder: &Finder,
+    find: &impl Fn(&[u8]) -> Option<usize>,
     range: std::ops::Range<u32>,
 ) -> anyhow::Result<Vec<u64>> {
     let mut counts = Vec::with_capacity(range.len());
     for i in range {
-        counts.push(record::count(reader.frame(i)?, finder) as u64);
+        counts.push(record::count(reader.frame(i)?, find) as u64);
     }
     Ok(counts)
 }
@@ -888,8 +990,12 @@ fn widest_frame(table: &SeekTable, range: std::ops::Range<u32>) -> anyhow::Resul
 ///
 /// The seek table cannot answer this: it records sizes, not record counts. Only the last frame
 /// needs asking, since every other one holds the count validation established.
-fn frame_records(reader: &mut FrameReader, finder: &Finder, index: u32) -> anyhow::Result<u64> {
-    Ok(record::count(reader.frame(index)?, finder) as u64)
+fn frame_records(
+    reader: &mut FrameReader,
+    find: &impl Fn(&[u8]) -> Option<usize>,
+    index: u32,
+) -> anyhow::Result<u64> {
+    Ok(record::count(reader.frame(index)?, find) as u64)
 }
 
 /// Compresses `data` as a single frame, returning its bytes and the sizes its seek table entry

@@ -17,9 +17,10 @@ use anyhow::Context;
 use memchr::memmem::Finder;
 use zeekstd::Decoder;
 
+use crate::find::BoxFinder;
 use crate::record;
 use crate::seekzstdsep_lib::{
-    cnt_of_separetor_in_frame, records_between_by_separator_in_frame, seek_table_decomp_frames,
+    count_records_in_frame, read_records_in_frame, seek_table_decomp_frames,
 };
 
 /// The decoder, and the window records are read through.
@@ -95,15 +96,58 @@ pub struct RecordReader {
     path: PathBuf,
     lookup: Lookup,
     frames: Vec<(u64, u64)>,
-    separator: Vec<u8>,
-    finder: Finder<'static>,
-    /// Separators in frame 0, taken as the record count of every frame. Never 0: every record
-    /// range divides by it, and [`Self::from_file`] refuses a separator that leaves it 0.
+    boundary: Boundary,
+    /// Records in frame 0, taken as the record count of every frame. Never 0: every record range
+    /// divides by it, and [`Self::from_file`] refuses a boundary that leaves it 0.
     sep_cnt: usize,
 }
 
+/// Where the reader finds records, held so that the public type gains no parameter.
+///
+/// A separator keeps its own search rather than arriving boxed, and [`with_find`] is how a read
+/// reaches either one.
+enum Boundary {
+    Separator {
+        finder: Finder<'static>,
+        separator: Vec<u8>,
+    },
+    Finder(BoxFinder),
+}
+
+impl Boundary {
+    /// The separator it was built from, and an empty slice for a finder.
+    fn separator(&self) -> &[u8] {
+        match self {
+            Self::Separator { separator, .. } => separator,
+            Self::Finder(_) => &[],
+        }
+    }
+}
+
+/// Runs the body with `find` bound to the reader's record boundary.
+///
+/// The body is compiled once per arm, which is the point: a walk that reaches the boundary through
+/// one shared type carries the choice into its loop, where it costs a branch and a reload of the
+/// needle on every record — `benches/read.rs` and `Records::next` under callgrind are where that
+/// shows. Resolving it here leaves the separator's walk calling `memchr` with the length in a
+/// register, as it did before a record had a finder at all.
+macro_rules! with_find {
+    ($boundary:expr, |$find:ident| $body:expr) => {
+        match $boundary {
+            Boundary::Separator { finder, .. } => {
+                let $find = crate::find::by_separator(finder);
+                $body
+            }
+            Boundary::Finder(boxed) => {
+                let $find = &**boxed;
+                $body
+            }
+        }
+    };
+}
+
 impl RecordReader {
-    /// Opens `path` and reads its seek table and frame 0's separator count.
+    /// Opens `path` and reads its seek table and frame 0's record count.
     ///
     /// # Errors
     ///
@@ -115,9 +159,42 @@ impl RecordReader {
         Self::from_file(path, file, separator)
     }
 
+    /// [`Self::open`] with the record boundary as a finder.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::open`] refuses, bar the empty separator.
+    pub fn open_with(path: PathBuf, find: BoxFinder) -> anyhow::Result<Self> {
+        let file =
+            File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
+        Self::from_file_with(path, file, find)
+    }
+
     /// [`Self::open`] on an already-open file. `path` is carried for error messages only.
     pub fn from_file(path: PathBuf, file: File, separator: &[u8]) -> anyhow::Result<Self> {
         record::check_separator(separator)?;
+        Self::build(
+            path,
+            file,
+            Boundary::Separator {
+                finder: Finder::new(separator).into_owned(),
+                separator: separator.to_vec(),
+            },
+        )
+    }
+
+    /// [`Self::from_file`] with the record boundary as a finder.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::from_file`] refuses, bar the empty separator.
+    pub fn from_file_with(path: PathBuf, file: File, find: BoxFinder) -> anyhow::Result<Self> {
+        Self::build(path, file, Boundary::Finder(find))
+    }
+
+    /// The reader both entry points build. A refusal names the separator where there is one, since
+    /// passing the wrong one is what leaves frame 0 holding no record.
+    fn build(path: PathBuf, file: File, boundary: Boundary) -> anyhow::Result<Self> {
         let decoder = Decoder::new(file)
             .with_context(|| format!("failed to open {} as a seekable zst", path.display()))?;
         let frames = seek_table_decomp_frames(&decoder)
@@ -126,24 +203,25 @@ impl RecordReader {
             path,
             lookup: Lookup::new(decoder),
             frames,
-            separator: separator.to_vec(),
-            finder: Finder::new(separator).into_owned(),
+            boundary,
             sep_cnt: 0,
         };
         let (start, len) = reader.frames[0];
-        reader.sep_cnt = cnt_of_separetor_in_frame(
+        reader.sep_cnt = with_find!(&reader.boundary, |find| count_records_in_frame(
             reader.lookup.load_decoder(),
             start,
             len,
-            &reader.finder,
-            &reader.separator,
-        )?;
+            find
+        )?);
         if reader.sep_cnt == 0 {
+            if reader.boundary.separator().is_empty() {
+                anyhow::bail!("no record ends in frame 0 of {}", reader.path.display());
+            }
             anyhow::bail!(
                 "no record in frame 0 of {} ends with {:?}: a file does not record the separator \
                  it was written with, so pass the one it was",
                 reader.path.display(),
-                String::from_utf8_lossy(separator),
+                String::from_utf8_lossy(reader.boundary.separator()),
             );
         }
         Ok(reader)
@@ -154,9 +232,10 @@ impl RecordReader {
         &self.path
     }
 
-    /// The separator records are counted by.
+    /// The separator records are counted by, and an empty slice when the reader was opened with a
+    /// finder instead.
     pub fn separator(&self) -> &[u8] {
-        &self.separator
+        self.boundary.separator()
     }
 
     /// How many frames the file holds.
@@ -176,13 +255,12 @@ impl RecordReader {
     pub fn total_records(&mut self) -> anyhow::Result<usize> {
         let last = self.frames.len() - 1;
         let (start, len) = self.frames[last];
-        let in_last = cnt_of_separetor_in_frame(
+        let in_last = with_find!(&self.boundary, |find| count_records_in_frame(
             self.lookup.load_decoder(),
             start,
             len,
-            &self.finder,
-            &self.separator,
-        )?;
+            find
+        )?);
         Ok(self.sep_cnt * last + in_last)
     }
 
@@ -202,15 +280,13 @@ impl RecordReader {
         let in_frame = (index % self.sep_cnt) as u64;
         let region = self.frames[frame];
         let skip = self.lookup.walk_to(frame, region, in_frame)?;
-        let (records, skipped) = self
-            .lookup
-            .window
-            .records(&self.finder, self.separator.len())
-            .skip_up_to(skip)?;
-        if skipped < skip {
-            return Ok(None);
-        }
-        records.next_owned()
+        with_find!(&self.boundary, |find| {
+            let (records, skipped) = self.lookup.window.records(find).skip_up_to(skip)?;
+            if skipped < skip {
+                return Ok(None);
+            }
+            records.next_owned()
+        })
     }
 
     /// What a read of `cnt` records from `from` has to ask
@@ -254,15 +330,14 @@ impl RecordReader {
     /// `from` being past the last frame, or a frame not decompressing.
     pub fn records(&mut self, from: usize, cnt: usize) -> anyhow::Result<Vec<u8>> {
         let req = self.records_request(from, cnt)?;
-        records_between_by_separator_in_frame(
+        with_find!(&self.boundary, |find| read_records_in_frame(
             self.lookup.load_decoder(),
             req.start,
             req.len,
             req.skip,
             cnt as u64,
-            &self.finder,
-            &self.separator,
-        )
+            find,
+        ))
     }
 
     /// [`Self::records`] into `dst`: the same `cnt` records from `from`, written as they are
@@ -280,11 +355,11 @@ impl RecordReader {
     ) -> anyhow::Result<()> {
         let req = self.records_request(from, cnt)?;
         let reader = record::region(self.lookup.load_decoder(), req.start, req.len)?;
-        reader
-            .records(&self.finder, self.separator.len())
+        with_find!(&self.boundary, |find| reader
+            .records(find)
             .skip_records(req.skip)?
             .take_records(cnt as u64)
-            .write_to(dst)
+            .write_to(dst))
     }
 
     /// Every whole record in the file, in order, decoding a window at a time.
@@ -297,8 +372,7 @@ impl RecordReader {
             frames: self.frames,
             frame: 0,
             armed: false,
-            finder: self.finder,
-            separator_len: self.separator.len(),
+            boundary: self.boundary,
             reader: self.lookup.window,
         }
     }
@@ -324,8 +398,7 @@ pub struct RecordIter {
     frame: usize,
     /// Whether the reader's source is positioned at `frame`'s bytes.
     armed: bool,
-    finder: Finder<'static>,
-    separator_len: usize,
+    boundary: Boundary,
     /// The record reader, holding the decoder limited to the armed frame.
     reader: record::Reader<Take<Decoder<'static, File>>>,
 }
@@ -346,10 +419,10 @@ impl Iterator for RecordIter {
                 }
                 self.armed = true;
             }
-            match self
+            match with_find!(&self.boundary, |find| self
                 .reader
-                .records(&self.finder, self.separator_len)
-                .next_owned()
+                .records(find)
+                .next_owned())
             {
                 Ok(Some(item)) => return Some(Ok(item)),
                 Err(e) => {

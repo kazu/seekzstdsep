@@ -194,3 +194,46 @@ The `SeparatorCheck` decides how much of the file the separator is checked again
 separator that does not end it — a frame ends immediately after the separator it was cut with.
 `SeparatorCheck::TwoFrames` counts a second frame as well and refuses when the two differ, which
 catches a count that drifts later in the file at the price of that frame decompressed.
+
+## Records that do not end with a separator
+
+Where a record ends is a function, and `seekzstdsep::find` holds the ones the crate ships:
+`by_separator`, `by_le32_prefix` (FlatBuffers `FinishSizePrefixed`), `by_fixed` and `by_msgpack`.
+Anything of the shape `Fn(&[u8]) -> Option<usize>` will do — the length of the record that starts at
+`data[0]`, or `None` when `data` does not hold a whole one.
+
+Every entry point above has a twin that takes one in place of the separator:
+`compress_records_to_seekable_zst_with_opts`, `convert_records_to_seekable_zst_reader_with_opts`,
+`RecordReader::open_with` and `from_file_with`, `count_records_in_frame`, `read_records_in_frame`,
+`count_records_in_buf`, `inspect_records_with_opts`, `truncate_records`, `append_records_with`,
+`append_frames_with` and `copy_range_with`. The separator forms are those, called with
+`find::by_separator`.
+
+```rust,no_run
+use seekzstdsep::find;
+use seekzstdsep::{CompressOptions, RecordReader, compress_records_to_seekable_zst_with_opts};
+use std::path::PathBuf;
+
+let out = PathBuf::from("events.bin.seek.zst");
+compress_records_to_seekable_zst_with_opts(
+    std::fs::File::open("events.bin").unwrap(),
+    std::io::sink(),
+    64 * 1024,
+    true,
+    find::by_le32_prefix,
+    None,
+    Some(CompressOptions {
+        out_path: Some(out.clone()),
+        ..Default::default()
+    }),
+)
+.unwrap();
+
+let mut reader = RecordReader::open_with(out, Box::new(find::by_le32_prefix)).unwrap();
+let first = reader.record(0).unwrap();
+```
+
+`RecordReader` holds the finder boxed, so the type carries no parameter and a lookup costs one
+indirect call per record; the separator form pays the same. `RecordReader::separator` comes back
+empty when the reader was opened with a finder, and `OnMissingSeparator::Insert` is refused by
+`append_records_with` — writing a separator at the join needs a separator to write.

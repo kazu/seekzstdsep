@@ -3,6 +3,35 @@
 Every subcommand and what its flags mean. `seekzstdsep -h` lists the subcommands and
 `seekzstdsep <subcommand> -h` lists one subcommand's options; this file is the long form.
 
+## Where a record ends
+
+Every subcommand has to know where one record stops and the next begins, and says so the same way:
+
+| Option | Meaning |
+| --- | --- |
+| `--finder <F>` | `sep`, `fixed`, `flatbuffers` or `msgpack` (default `sep`) |
+| `--finder-arg <P>` | What the finder is configured with |
+| `-s, --separator <S>` | `--finder sep --finder-arg <S>`, and refused alongside `--finder-arg` |
+
+| `--finder` | `--finder-arg` | A record is |
+| --- | --- | --- |
+| `sep` | the bytes a record ends with (default `"\n"`) | everything up to and including the next one |
+| `fixed` | the length, in bytes | that many bytes |
+| `flatbuffers` | refused | a `u32` little-endian length not counting itself, then that many bytes, which is what `FinishSizePrefixed` writes |
+| `msgpack` | refused | one MessagePack value |
+
+`--finder-arg`'s bytes are taken as they are given, with no escape processing. In nushell `"aaa\n"`
+is already a newline; in zsh it is `$'aaa\n'`.
+
+```sh
+seekzstdsep compress events.bin events.bin.seek.zst --finder flatbuffers
+seekzstdsep cat events.bin.seek.zst --finder flatbuffers --from 10000 --cnt 3
+seekzstdsep compress fixed.bin --finder fixed --finder-arg 512
+```
+
+**The file does not record which format it was written with**, as it does not record the separator.
+Reading it back with a different one addresses different records, and generally reports no error.
+
 ## Compress
 
 ```sh
@@ -14,7 +43,7 @@ stdin and the result goes to stdout. Useful options:
 
 | Option | Meaning |
 | --- | --- |
-| `-s, --separator <S>` | Record separator (default `"\n"`) |
+| `--finder`, `--finder-arg`, `-s, --separator` | Where a record ends, as above |
 | `--frame-size <N>` | Target frame size in bytes (default 65536) |
 | `-c, --cnt-of-separator-per-frame <N>` | Pin records per frame instead of auto-detecting |
 | `-l, --limit-multiplier <N>` | How far past `--frame-size` to search for a separator (default 4) |
@@ -22,9 +51,9 @@ stdin and the result goes to stdout. Useful options:
 | `--no-check` | Leave the per-frame content checksum out (it is written by default) |
 | `--level <N>` | Zstandard compression level (default: zstd's default, 3) |
 
-`--frame-size` is a target, not a hard bound — a frame ends at the next separator past it, so byte
-sizes vary while the record count per frame stays fixed. Leaving the defaults alone is fine for most
-input; `docs/format.md` explains when it is not.
+`--frame-size` is a target, not a hard bound — a frame ends at the first record boundary at or past
+it, the boundary itself included, so byte sizes vary while the record count per frame stays fixed.
+Leaving the defaults alone is fine for most input; `docs/format.md` explains when it is not.
 
 Each frame ends with a content checksum. It costs 4 bytes per frame, which `docs/performances.md`
 measures against a real file, and `--no-check` drops it. A frame is checked against it only when
@@ -46,10 +75,14 @@ seekzstdsep inspect events.jsonl.seek.zst
 seekzstdsep inspect events.jsonl.seek.zst --format json
 ```
 
-Prints per-frame compressed and decompressed extents plus the separator count, which is the quickest
-way to confirm the uniform-count invariant actually holds for a given file. By default the separator
+Prints per-frame compressed and decompressed extents plus the record count, which is the quickest
+way to confirm the uniform-count invariant actually holds for a given file. By default the record
 count is measured on the first and last few frames and assumed for the rest; pass `-n,
 --no-fast-mode` to count every frame.
+
+`-f, --format` is the report's format, `text` or `json`. Which finder the file is read with is
+`--finder`, so a report of a `flatbuffers` file as JSON is `--finder flatbuffers --format json`.
+`sep` comes back empty for any finder but `sep`.
 
 ## Truncate
 
