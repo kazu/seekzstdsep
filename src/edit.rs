@@ -17,14 +17,12 @@
 //! comparison as well.
 use std::{
     fs::File,
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom, Take, Write},
 };
 
 use crate::find;
 use crate::record;
-use crate::seekzstdsep_lib::{
-    READ_BUF_SIZE, READ_FRAME_BUF_SIZE, decompressed_range_into, frame_encoder,
-};
+use crate::seekzstdsep_lib::{READ_BUF_SIZE, decompressed_range_into, frame_encoder};
 use anyhow::{Context, bail};
 use memchr::memmem::Finder;
 use zeekstd::{DecodeOptions, SeekTable};
@@ -315,7 +313,7 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
     }
 
     let checksum = frame_has_checksum(f, &table, last)?;
-    let mut tail = reader.take_frame(last)?;
+    let mut tail = reader.read_frame(last)?;
     drop(reader);
     if !record::ends_whole(&tail, &find) {
         match on_missing {
@@ -433,17 +431,16 @@ pub fn append_frames_with<F: Fn(&[u8]) -> Option<usize>>(
     let last = last_data_frame(&table)?;
 
     // The frames being copied go after this one, so it is the one that has to be full: a short
-    // frame here would end up in the interior of the result. It is decoded whatever happens, so
+    // frame here would end up in the interior of the result. It is walked whatever happens, so
     // the check that the file ends with a whole record costs nothing beyond it.
-    let end = reader.take_frame(last)?;
+    let (held, ends_whole) = walk_frame(&mut reader, &find, last)?;
     drop(reader);
-    if !record::ends_whole(&end, &find) {
+    if !ends_whole {
         bail!(
             "refusing to append to a file that does not end with a whole record: the first \
              appended record would merge with the fragment it ends in"
         );
     }
-    let held = record::count(&end, &find) as u64;
     if held != n {
         bail!(
             "refusing to append frames after frame {last}, which holds {held} records rather than \
@@ -660,12 +657,12 @@ fn validate_separator(
         );
     }
 
-    let first = record::count(reader.frame(0)?, find);
+    let first = frame_records(reader, find, 0)?;
     if first == 0 {
         bail!("the separator does not occur in frame 0");
     }
     let last_full = frames - 2;
-    let second = record::count(reader.frame(last_full)?, find);
+    let second = frame_records(reader, find, last_full)?;
     if first != second {
         bail!(
             "frame 0 holds {first} separators and frame {last_full} holds {second}: either the \
@@ -673,7 +670,7 @@ fn validate_separator(
         );
     }
 
-    Ok(first as u64)
+    Ok(first)
 }
 
 /// The four bytes every zstd frame starts with.
@@ -733,11 +730,7 @@ fn records_per_frame(
         );
     }
 
-    // Both answers are taken from the one borrow, so that reading a second frame below does not
-    // need this one copied out to survive it.
-    let first = reader.frame(0)?;
-    let n = record::count(first, find) as u64;
-    let ends_whole = record::ends_whole(first, find);
+    let (n, ends_whole) = walk_frame(reader, find, 0)?;
 
     // Before the check below, which would refuse a separator that occurs nowhere for the less
     // specific of the two reasons.
@@ -894,10 +887,9 @@ pub fn count_frames(
     range: std::ops::Range<u32>,
 ) -> anyhow::Result<Vec<u64>> {
     record::check_separator(separator)?;
-    let widest = widest_frame(table, range.clone())?;
     let finder = Finder::new(separator);
     frame_counts(
-        &mut FrameReader::with_capacity(f, table, widest)?,
+        &mut FrameReader::new(f, table)?,
         &find::by_separator(&finder),
         range,
     )
@@ -911,91 +903,89 @@ fn frame_counts(
 ) -> anyhow::Result<Vec<u64>> {
     let mut counts = Vec::with_capacity(range.len());
     for i in range {
-        counts.push(record::count(reader.frame(i)?, find) as u64);
+        counts.push(frame_records(reader, find, i)?);
     }
     Ok(counts)
 }
 
 /// A decoder held open across the frames of one file, with the seek table it was built from and the
-/// buffer the frames are read into.
+/// window the frames are walked through.
 ///
 /// Building a decoder clones the seek table, so building one per frame rebuilds the whole table for
-/// each of them. Holding the decoder makes that once, and holding the buffer makes the allocation
-/// once — one reader, one buffer, however many frames go through it. `benches/edit.rs` is what
+/// each of them. Holding the decoder makes that once, and holding the window makes its allocation
+/// once — one reader, one window, however many frames go through it. `benches/edit.rs` is what
 /// holds this to being worth having.
+///
+/// A frame is walked rather than held: [`walk_frame`] points the window at one and drops what it
+/// reads as it scans, so a frame does not have to fit in memory to be counted. The one operation
+/// that goes on to add to what it read takes the frame whole through [`FrameReader::read_frame`],
+/// and pays for it there.
 ///
 /// A reader is per-thread whether or not it is written that way: the decoder carries the position it
 /// last read to, and two of them over one `File` would share the operating system's, so neither the
-/// decoder nor the file behind it can be shared. Holding the buffer therefore shares nothing that
+/// decoder nor the file behind it can be shared. Holding the window therefore shares nothing that
 /// was not already private to one thread.
 struct FrameReader<'a> {
-    decoder: zeekstd::Decoder<'a, &'a File>,
+    window: record::Reader<Take<zeekstd::Decoder<'a, &'a File>>>,
     table: &'a SeekTable,
-    buf: Vec<u8>,
 }
 
 impl<'a> FrameReader<'a> {
-    /// A reader whose buffer starts at [`READ_FRAME_BUF_SIZE`] and grows to the frames it is asked
-    /// for.
-    ///
-    /// A caller that knows how large the frames it wants are says so with
-    /// [`FrameReader::with_capacity`] instead; the five that use this one know only that they want
-    /// a few frames of whatever the file holds.
     fn new(f: &'a File, table: &'a SeekTable) -> anyhow::Result<Self> {
-        Self::with_capacity(f, table, READ_FRAME_BUF_SIZE)
-    }
-
-    /// [`FrameReader::new`] with the buffer sized up front, for a caller that knows the largest
-    /// frame it will read and would rather not grow into it.
-    fn with_capacity(f: &'a File, table: &'a SeekTable, capacity: usize) -> anyhow::Result<Self> {
+        let decoder = DecodeOptions::new(f)
+            .seek_table(table.clone())
+            .into_decoder()?;
         Ok(Self {
-            decoder: DecodeOptions::new(f)
-                .seek_table(table.clone())
-                .into_decoder()?,
+            window: record::Reader::new(decoder.take(0)),
             table,
-            buf: Vec::with_capacity(capacity),
         })
     }
 
-    /// Decompresses frame `index`, replacing whatever the buffer held.
-    fn frame(&mut self, index: u32) -> anyhow::Result<&[u8]> {
-        decompressed_range_into(
-            &mut self.decoder,
-            self.table.frame_start_decomp(index)?,
-            self.table.frame_size_decomp(index)?,
-            &mut self.buf,
-        )?;
-        Ok(&self.buf)
-    }
-
-    /// [`FrameReader::frame`] handed over rather than lent, for the one caller that goes on to add
-    /// to what it read. The buffer moves out and the reader starts the next frame from nothing,
-    /// which costs it an allocation and the caller no copy.
-    fn take_frame(&mut self, index: u32) -> anyhow::Result<Vec<u8>> {
-        self.frame(index)?;
-        Ok(std::mem::take(&mut self.buf))
+    /// Decompresses frame `index` into a buffer of its own, for the one caller that goes on to add
+    /// to what it read.
+    ///
+    /// Seeks the decoder itself, which leaves the window pointed at nothing in particular. Every
+    /// walk points it again, so nothing has to be put back here.
+    fn read_frame(&mut self, index: u32) -> anyhow::Result<Vec<u8>> {
+        let start = self.table.frame_start_decomp(index)?;
+        let len = self.table.frame_size_decomp(index)?;
+        let mut buf = Vec::new();
+        decompressed_range_into(self.window.source_mut().get_mut(), start, len, &mut buf)?;
+        Ok(buf)
     }
 }
 
-/// The largest frame of `range`, which is what a reader over it has to hold at once.
-fn widest_frame(table: &SeekTable, range: std::ops::Range<u32>) -> anyhow::Result<usize> {
-    let mut widest = 0;
-    for i in range {
-        widest = widest.max(table.frame_size_decomp(i)? as usize);
-    }
-    Ok(widest)
-}
-
-/// The number of records frame `index` holds, which costs one frame decoded.
+/// The number of records frame `index` holds and whether it ends with a whole one rather than with
+/// a fragment, which costs the frame decoded but not held.
 ///
-/// The seek table cannot answer this: it records sizes, not record counts. Only the last frame
+/// One walk gives both: the count is the walk's, and a frame ends whole when the walk leaves
+/// nothing behind. An empty frame ends with neither, which is what [`record::ends_whole`] reports
+/// of empty bytes.
+///
+/// The seek table cannot answer the count: it records sizes, not record counts. Only the last frame
 /// needs asking, since every other one holds the count validation established.
+fn walk_frame(
+    reader: &mut FrameReader,
+    find: &impl Fn(&[u8]) -> Option<usize>,
+    index: u32,
+) -> anyhow::Result<(u64, bool)> {
+    let start = reader.table.frame_start_decomp(index)?;
+    let len = reader.table.frame_size_decomp(index)?;
+    if len == 0 {
+        return Ok((0, false));
+    }
+    reader.window.seek_to(start, len)?;
+    let count = reader.window.records(find).count_records()? as u64;
+    Ok((count, reader.window.remainder().is_empty()))
+}
+
+/// [`walk_frame`] for a caller that only wants the count.
 fn frame_records(
     reader: &mut FrameReader,
     find: &impl Fn(&[u8]) -> Option<usize>,
     index: u32,
 ) -> anyhow::Result<u64> {
-    Ok(record::count(reader.frame(index)?, find) as u64)
+    Ok(walk_frame(reader, find, index)?.0)
 }
 
 /// Compresses `data` as a single frame, returning its bytes and the sizes its seek table entry

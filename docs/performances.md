@@ -19,8 +19,8 @@ Numbers come from `docs/bench/`; the harness is in `bench/`.
 Building a `Decoder` clones the whole seek table, and `src/edit.rs` used to build one per frame it
 read. Every operation there reads at least two — separator validation compares frame 0 against frame
 `F-2` — so the table was rebuilt once per frame, and a fresh buffer allocated with it. `FrameReader`
-holds the decoder open across the frames of one file and holds the buffer with it, so both happen
-once however many frames go through it.
+holds the decoder open across the frames of one file and holds the record window they are walked
+through with it, so both happen once however many frames go through it.
 
 `benches/edit.rs` measures it as `count_frames`: read `K` frames of a 400-frame file and count the
 records in each. Same machine, same build directory, before and after taken against one saved
