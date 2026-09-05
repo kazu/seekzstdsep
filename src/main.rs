@@ -4,10 +4,13 @@ use clap::{Args, Parser, Subcommand};
 use std::fs::File;
 use std::path::PathBuf;
 
-use seekzstdsep::cli::{ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
+use seekzstdsep::cli::{BoundaryArgs, ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
+use seekzstdsep::find::Boundary;
 use seekzstdsep::{
     AppendInput, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck, RecordReader,
-    append, seekzstdsep_lib::inspect_with_opts, truncate,
+    append, append_frames_with, append_records_with,
+    seekzstdsep_lib::{inspect_records_with_opts, inspect_with_opts},
+    truncate, truncate_records,
 };
 use std::io::{self, Read, Write};
 
@@ -27,16 +30,17 @@ struct CatArgs {
     from: usize,
     #[arg(short, long, required = true, default_value_t = 1)]
     cnt: usize,
-    #[arg(short, long, default_value = "\n")]
-    separator: String,
+    #[command(flatten)]
+    boundary: BoundaryArgs,
 }
 
 #[derive(Args, Debug)]
 struct InspectArgs {
     #[arg(value_name = "FILE", required = true)]
     zstfile: PathBuf,
-    #[arg(short, long, default_value = "\n")]
-    separator: String,
+    #[command(flatten)]
+    boundary: BoundaryArgs,
+    /// Report format: text or json
     #[arg(short, long, default_value = "text")]
     format: String,
     #[arg(short, long, default_value_t = false)]
@@ -51,8 +55,8 @@ struct TruncateArgs {
     /// records per frame, so the cut lands on a frame boundary
     #[arg(short, long, required = true)]
     records: u64,
-    #[arg(short, long, default_value = "\n")]
-    separator: String,
+    #[command(flatten)]
+    boundary: BoundaryArgs,
 }
 
 #[derive(Args, Debug)]
@@ -62,8 +66,8 @@ struct AppendArgs {
     /// Records to append (default: stdin)
     #[arg(value_name = "INPUT", required = false)]
     input: Option<PathBuf>,
-    #[arg(short, long, default_value = "\n")]
-    separator: String,
+    #[command(flatten)]
+    boundary: BoundaryArgs,
     /// Write a separator at the join when FILE ends in a fragment rather than in a record
     #[arg(long, conflicts_with = "input_seekable")]
     insert_separator: bool,
@@ -122,6 +126,14 @@ fn setup_logger(level: Level) {
         .init();
 }
 
+/// The records to append: the file that was named, or standard input.
+fn records_input(opened: Option<File>) -> Box<dyn Read> {
+    match opened {
+        Some(f) => Box::new(f),
+        None => Box::new(io::stdin().lock()),
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let default_level = if cfg!(debug_assertions) {
         Level::TRACE
@@ -135,8 +147,11 @@ fn main() -> anyhow::Result<()> {
     // body here can only be reached by spawning the binary.
     match cli.command {
         Commands::Cat(args) => {
-            let mut reader =
-                RecordReader::open(args.input.expect("not found"), args.separator.as_bytes())?;
+            let path = args.input.expect("not found");
+            let mut reader = match args.boundary.boundary()? {
+                Boundary::Separator(sep) => RecordReader::open(path, &sep)?,
+                Boundary::Finder(find) => RecordReader::open_with(path, find)?,
+            };
             let mut stdout = io::stdout().lock(); // ロックを取得すると高速
             // 窓ごとに書き出すので、結果全体をメモリに持たない
             reader.records_to(args.from, args.cnt, &mut stdout)?;
@@ -151,7 +166,10 @@ fn main() -> anyhow::Result<()> {
                 .write(true)
                 .open(&args.zstfile)
                 .with_context(|| format!("failed to open {}", args.zstfile.display()))?;
-            truncate(&mut file, args.records, args.separator.as_bytes())?;
+            match args.boundary.boundary()? {
+                Boundary::Separator(sep) => truncate(&mut file, args.records, &sep)?,
+                Boundary::Finder(find) => truncate_records(&mut file, args.records, &*find)?,
+            }
         }
         Commands::Append(args) => {
             let mut file = File::options()
@@ -167,45 +185,69 @@ fn main() -> anyhow::Result<()> {
                 None => None,
             };
 
-            let input: AppendInput<Box<dyn Read>> = if args.input_seekable {
-                AppendInput::Frames {
-                    input: opened.as_ref().expect("--input-seekable requires INPUT"),
-                    from: args.input_from.unwrap_or(0),
-                    cnt: args.input_cnt,
-                    check: if args.check_input_frames {
-                        RangeCheck::EveryFrame
-                    } else {
-                        RangeCheck::FirstFrame
-                    },
-                }
+            if args.insert_separator && !args.boundary.is_separator() {
+                anyhow::bail!(
+                    "--insert-separator writes a separator at the join, so it needs --finder sep"
+                );
+            }
+            let check = if args.check_input_frames {
+                RangeCheck::EveryFrame
             } else {
-                let data: Box<dyn Read> = match opened {
-                    Some(f) => Box::new(f),
-                    None => Box::new(io::stdin().lock()),
-                };
-                AppendInput::Records {
-                    data,
-                    on_missing: if args.insert_separator {
-                        OnMissingSeparator::Insert
-                    } else {
-                        OnMissingSeparator::Refuse
-                    },
-                    level: args.level.unwrap_or(CompressionLevel::default()),
-                }
+                RangeCheck::FirstFrame
             };
-            append(&mut file, input, args.separator.as_bytes())?;
+            let on_missing = if args.insert_separator {
+                OnMissingSeparator::Insert
+            } else {
+                OnMissingSeparator::Refuse
+            };
+            let level = args.level.unwrap_or(CompressionLevel::default());
+            let from = args.input_from.unwrap_or(0);
+            match args.boundary.boundary()? {
+                Boundary::Separator(sep) => {
+                    let input: AppendInput<Box<dyn Read>> = if args.input_seekable {
+                        AppendInput::Frames {
+                            input: opened.as_ref().expect("--input-seekable requires INPUT"),
+                            from,
+                            cnt: args.input_cnt,
+                            check,
+                        }
+                    } else {
+                        AppendInput::Records {
+                            data: records_input(opened),
+                            on_missing,
+                            level,
+                        }
+                    };
+                    append(&mut file, input, &sep)?;
+                }
+                Boundary::Finder(find) if args.input_seekable => append_frames_with(
+                    &mut file,
+                    opened.as_ref().expect("--input-seekable requires INPUT"),
+                    from,
+                    args.input_cnt,
+                    &*find,
+                    check,
+                )?,
+                Boundary::Finder(find) => append_records_with(
+                    &mut file,
+                    records_input(opened),
+                    &*find,
+                    on_missing,
+                    level,
+                )?,
+            }
         }
         Commands::CopyRange(args) => {
             run_copy_range(&args, io::stdout().lock())?;
         }
         Commands::Inspect(args) => {
-            let outs = inspect_with_opts(
-                args.zstfile,
-                args.separator.as_bytes(),
-                InspectOptions {
-                    fast_mode: !args.no_fast_mode,
-                },
-            )?;
+            let opts = InspectOptions {
+                fast_mode: !args.no_fast_mode,
+            };
+            let outs = match args.boundary.boundary()? {
+                Boundary::Separator(sep) => inspect_with_opts(args.zstfile, &sep, opts)?,
+                Boundary::Finder(find) => inspect_records_with_opts(args.zstfile, &*find, opts)?,
+            };
 
             if args.format == "text" {
                 outs.iter().for_each(|f| println!("{:?}", f));

@@ -1,8 +1,12 @@
 //! Separator-aware seekable Zstandard compression.
 //!
-//! Frames are cut at separator boundaries. With `is_same_separator_cnt` set, every frame holds the
-//! same number of separators, which is what lets [`crate::RecordReader`] locate a record by division instead
-//! of scanning. See `docs/format.md` for the format and the invariant.
+//! Frames are cut at record boundaries, which [`crate::find`] is what decides. With
+//! `is_same_separator_cnt` set, every frame holds the same number of records, which is what lets
+//! [`crate::RecordReader`] locate a record by division instead of scanning. See `docs/format.md`
+//! for the format and the invariant.
+//!
+//! Every entry point taking a separator is the one beside it taking a finder, called with
+//! [`crate::find::by_separator`].
 //!
 //! [`convert_to_seekable_zst_reader`] streams from any `Read` to any `Write`.
 //! [`compress_to_seekable_zst_with_opts`] needs `Read + Seek` and writes to
@@ -13,6 +17,7 @@ use std::{
     path::PathBuf,
 };
 
+use crate::find;
 use crate::record;
 use anyhow::Context;
 
@@ -28,10 +33,10 @@ pub(crate) const READ_BUF_SIZE: usize = 32768; // 大きなバッファでI/O削
 
 /// How much of a decompressed frame is held at once.
 ///
-/// It is the whole of [`record::Reader`]'s window, which never grows: how large a frame is belongs
-/// to the file rather than to this crate, and what a read holds should not follow it. A caller that
-/// does need a frame whole — `edit::FrameReader` — starts here and grows to the frames it is asked
-/// for.
+/// It is where [`record::Reader`]'s window starts: how large a frame is belongs to the file rather
+/// than to this crate, and what a read holds should not follow it. The window grows past this only
+/// to reach the end of one record, which is the least it can hand out. A caller that does need a
+/// frame whole — `edit::FrameReader` — starts here and grows to the frames it is asked for.
 ///
 /// Equal to [`READ_BUF_SIZE`] for now because nothing yet says it should differ, and separate from
 /// it because the two answer different questions.
@@ -167,13 +172,82 @@ pub fn compress_to_seekable_zst<R: ReadSeekable, W: Write>(
 /// avoiding a second copy of the data. `owriter` receives it when reflink fails, and when there is
 /// no `out_path` to clone onto.
 pub fn compress_to_seekable_zst_with_opts<R: ReadSeekable, W: Write>(
-    mut reader: R,
-    mut owriter: W,
+    reader: R,
+    owriter: W,
     oframe_size: usize,
     is_same_separator_cnt: bool,
     separator: &[u8],
     limit_multiplier: Option<usize>,
     opt_args: Option<CompressOptions>,
+) -> anyhow::Result<()> {
+    compress_with_retry(
+        reader,
+        owriter,
+        oframe_size,
+        opt_args,
+        |reader, writer, frame_size, opts| {
+            convert_to_seekable_zst_reader_with_opts(
+                reader,
+                writer,
+                frame_size,
+                is_same_separator_cnt,
+                separator,
+                limit_multiplier,
+                opts,
+            )
+        },
+    )
+}
+
+/// [`compress_to_seekable_zst_with_opts`] cutting records where `find` says they end.
+///
+/// # Errors
+///
+/// Whatever the conversion reports once halving the records per frame no longer helps.
+pub fn compress_records_to_seekable_zst_with_opts<R: ReadSeekable, W: Write, F>(
+    reader: R,
+    owriter: W,
+    oframe_size: usize,
+    is_same_record_cnt: bool,
+    find: F,
+    limit_multiplier: Option<usize>,
+    opt_args: Option<CompressOptions>,
+) -> anyhow::Result<()>
+where
+    F: Fn(&[u8]) -> Option<usize>,
+{
+    compress_with_retry(
+        reader,
+        owriter,
+        oframe_size,
+        opt_args,
+        |reader, writer, frame_size, opts| {
+            convert_records_to_seekable_zst_reader_with_opts(
+                reader,
+                writer,
+                frame_size,
+                is_same_record_cnt,
+                &find,
+                limit_multiplier,
+                opts,
+            )
+        },
+    )
+}
+
+/// The staging file, the reflink and the retry: everything the two entry points above do that is
+/// not the conversion itself, which arrives as `convert`.
+fn compress_with_retry<R: ReadSeekable, W: Write>(
+    mut reader: R,
+    mut owriter: W,
+    oframe_size: usize,
+    opt_args: Option<CompressOptions>,
+    mut convert: impl FnMut(
+        &mut R,
+        &mut std::fs::File,
+        usize,
+        Option<CompressOptions>,
+    ) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     let mut opts = opt_args.clone();
     let p_opts = &mut opts.clone();
@@ -191,15 +265,7 @@ pub fn compress_to_seekable_zst_with_opts<R: ReadSeekable, W: Write>(
     let mut frame_size = oframe_size;
 
     loop {
-        match convert_to_seekable_zst_reader_with_opts(
-            &mut reader,
-            &mut writer,
-            frame_size,
-            is_same_separator_cnt,
-            separator,
-            limit_multiplier,
-            opts.clone(),
-        ) {
+        match convert(&mut reader, &mut writer, frame_size, opts.clone()) {
             Ok(data) => {
                 writer.seek(SeekFrom::Start(0))?;
                 // copy(&mut writer, &mut owriter)?;
@@ -470,16 +536,61 @@ pub fn old_convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
     Ok(())
 }
 
-/// The compressor, with the buffering and the separator scan taken out of it.
+/// The compressor, with the buffering and the record scan taken out of it.
+///
+/// [`convert_records_to_seekable_zst_reader_with_opts`] with the separator's finder. The empty
+/// separator is refused here rather than where [`old_convert_to_seekable_zst_reader_with_opts`]
+/// refuses it, which is after the buffer for `frame_size * limit_multiplier` is asked for.
 pub fn new_convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
     reader: R,
-    mut writer: W,
+    writer: W,
     frame_size: usize,
     is_same_separator_cnt: bool,
     separator: &[u8],
     limit_multiplier: Option<usize>,
     opt_args: Option<CompressOptions>,
 ) -> anyhow::Result<()> {
+    if separator.is_empty() {
+        return Err(anyhow::anyhow!("Separator must not be empty"));
+    }
+    let finder = Finder::new(separator);
+    convert_records_to_seekable_zst_reader_with_opts(
+        reader,
+        writer,
+        frame_size,
+        is_same_separator_cnt,
+        find::by_separator(&finder),
+        limit_multiplier,
+        opt_args,
+    )
+}
+
+/// The compressor, cutting frames where `find` says a record ends.
+///
+/// `frame_size` is a target, not a bound: a frame ends at the first record boundary at or after
+/// it, the boundary itself included. With `is_same_record_cnt`, only the first frame is cut that
+/// way, and the record count it happened to contain becomes the count every later frame must
+/// match. Byte sizes therefore drift while the record count stays fixed.
+///
+/// `limit_multiplier` (default 4) bounds unprocessed data. The check runs after each read of the
+/// 32768-byte internal buffer, so `frame_size * limit_multiplier` below 32768 fails on any input
+/// larger than that limit.
+///
+/// # Errors
+///
+/// A read or a write failing, and unprocessed data passing the limit.
+pub fn convert_records_to_seekable_zst_reader_with_opts<R: Read, W: Write, F>(
+    reader: R,
+    mut writer: W,
+    frame_size: usize,
+    is_same_record_cnt: bool,
+    find: F,
+    limit_multiplier: Option<usize>,
+    opt_args: Option<CompressOptions>,
+) -> anyhow::Result<()>
+where
+    F: Fn(&[u8]) -> Option<usize>,
+{
     let limit_multiplier = if limit_multiplier.is_none() {
         LIMIT_SEP_BUF_MULTIPLIER
     } else {
@@ -493,8 +604,8 @@ pub fn new_convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
             .map_or(CompressionLevel::default(), |o| o.level),
     )?;
     let buf = Vec::with_capacity(frame_size * limit_multiplier); // 全データを連続配置
-    let mut frame_end = 0; // 現在のフレームの終端位置（セパレータ除く）
-    let mut max_of_separator: i64 = -1; // 同一セパレータの最大数（is_same_separator_cntがtrueの場合）
+    let mut frame_end = 0; // 現在のフレームの終端位置（レコードの境界を含む）
+    let mut max_of_separator: i64 = -1; // 同一レコード数の最大数（is_same_record_cntがtrueの場合）
     let mut cnt_of_seprator: usize = 0;
     let mut written_frame = 0;
 
@@ -506,11 +617,7 @@ pub fn new_convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
             .unwrap_or(-1);
     }
 
-    if separator.is_empty() {
-        return Err(anyhow::anyhow!("Separator must not be empty"));
-    }
-    let finder = Finder::new(separator);
-    let mut stream = record::Stream::from_buffer(reader, &finder, separator.len(), buf);
+    let mut stream = record::Stream::from_buffer(reader, find, buf);
 
     loop {
         if !stream.fill()? {
@@ -519,7 +626,7 @@ pub fn new_convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
 
         // 未処理データが過度に増大するのを防ぐ
         let limit = frame_size.saturating_mul(limit_multiplier);
-        if is_same_separator_cnt && stream.unscanned() > limit {
+        if is_same_record_cnt && stream.unscanned() > limit {
             return Err(anyhow::anyhow!(CompressErrorData {
                 current_line_num_per_frame: max_of_separator,
             }));
@@ -535,28 +642,19 @@ pub fn new_convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
         }
 
         let _buf_start = stream.last_end();
-        // セパレータを探してフレームを構築
+        // レコードの終端を探してフレームを構築
         while let Some(absolute_pos_after) = stream.next_end() {
-            let chunk_end = absolute_pos_after - separator.len(); // チャンクの終端（セパレータ除く）
-
-            if is_same_separator_cnt {
+            if is_same_record_cnt {
                 cnt_of_seprator += 1;
             }
 
             // フレームにチャンクを追加（データは既に連続配置されている）
-            if frame_end == 0 {
-                // 最初のチャンク
-                frame_end = chunk_end;
-            } else {
-                // 2つ目以降のチャンク（セパレータを含めてframe_endを更新）
-                frame_end = chunk_end;
-            }
+            frame_end = absolute_pos_after;
 
-            let result = if is_same_separator_cnt {
+            let result = if is_same_record_cnt {
                 encode_frame_on_same_separator_cnt(
                     &mut frame_end,
                     frame_size,
-                    separator,
                     &mut encoder,
                     &mut stream,
                     &mut cnt_of_seprator,
@@ -567,7 +665,6 @@ pub fn new_convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
                 encode_frame_not_same_separator_cnt(
                     &mut frame_end,
                     frame_size,
-                    separator,
                     &mut encoder,
                     &mut stream,
                     &mut cnt_of_seprator,
@@ -578,10 +675,10 @@ pub fn new_convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
                 return Err(result.err().unwrap());
             }
         }
-        if is_same_separator_cnt && max_of_separator == -1 {
+        if is_same_record_cnt && max_of_separator == -1 {
             continue;
         }
-        if is_same_separator_cnt && cnt_of_seprator as i64 != max_of_separator {
+        if is_same_record_cnt && cnt_of_seprator as i64 != max_of_separator {
             continue;
         }
 
@@ -631,13 +728,12 @@ enum FrameEncodeResult {
     Encoded, // 圧縮されたフレームのサイズ
 }
 
-// !is_same_separator_cnt
-fn encode_frame_not_same_separator_cnt<R: Read, W: Write>(
+// !is_same_record_cnt
+fn encode_frame_not_same_separator_cnt<R: Read, F: Fn(&[u8]) -> Option<usize>, W: Write>(
     frame_end: &mut usize,
     frame_size: usize,
-    separator: &[u8],
     encoder: &mut Encoder<'_, &mut W>,
-    stream: &mut record::Stream<'_, R>,
+    stream: &mut record::Stream<R, F>,
     cnt_of_seprator: &mut usize,
     written_frame: &mut usize,
 ) -> anyhow::Result<FrameEncodeResult> {
@@ -645,12 +741,12 @@ fn encode_frame_not_same_separator_cnt<R: Read, W: Write>(
         return Ok(FrameEncodeResult::Skipped);
     }
 
-    if *frame_end > separator.len() {
+    if *frame_end > 0 {
         // 直前のフレームはここで閉じる。最後のフレームだけは finish() に閉じさせる。
         if *written_frame > 0 {
             encoder.end_frame()?;
         }
-        let n = encoder.compress(&stream.buffered()[..(*frame_end) + separator.len()])?;
+        let n = encoder.compress(&stream.buffered()[..*frame_end])?;
 
         tracing::trace!(
             cnt_of_seprator = cnt_of_seprator,
@@ -703,12 +799,11 @@ fn old_encode_frame_not_same_separator_cnt<W: Write>(
     return Ok(FrameEncodeResult::Encoded);
 }
 
-fn encode_frame_on_same_separator_cnt<R: Read, W: Write>(
+fn encode_frame_on_same_separator_cnt<R: Read, F: Fn(&[u8]) -> Option<usize>, W: Write>(
     frame_end: &mut usize,
     frame_size: usize,
-    separator: &[u8],
     encoder: &mut Encoder<&mut W>,
-    stream: &mut record::Stream<'_, R>,
+    stream: &mut record::Stream<R, F>,
     cnt_of_seprator: &mut usize,
     written_frame: &mut usize,
     max_of_separator: &mut i64,
@@ -719,7 +814,6 @@ fn encode_frame_on_same_separator_cnt<R: Read, W: Write>(
         let result = encode_frame_not_same_separator_cnt(
             frame_end,
             frame_size,
-            separator,
             encoder,
             stream,
             cnt_of_seprator,
@@ -747,7 +841,7 @@ fn encode_frame_on_same_separator_cnt<R: Read, W: Write>(
     if *written_frame > 0 {
         encoder.end_frame()?;
     }
-    let n = encoder.compress(&stream.buffered()[..(*frame_end) + separator.len()])?;
+    let n = encoder.compress(&stream.buffered()[..*frame_end])?;
 
     tracing::trace!(
         cnt_of_seprator = cnt_of_seprator,
@@ -841,14 +935,41 @@ pub fn records_between_by_separator_in_frame<'a>(
     start_sep_cnt: u64,
     cnt_of_sep: u64,
     finder: &Finder,
-    separator: &[u8],
+    _separator: &[u8],
 ) -> anyhow::Result<Vec<u8>> {
-    let reader = record::region(decoder, frame_start, frame_len)?;
+    read_records_in_frame(
+        decoder,
+        frame_start,
+        frame_len,
+        start_sep_cnt,
+        cnt_of_sep,
+        find::by_separator(finder),
+    )
+}
+
+/// [`records_between_by_separator_in_frame`] with the record boundary as a finder: `cnt` records
+/// of the region starting at decompressed offset `start`, beginning after `skip` of them.
+///
+/// # Errors
+///
+/// The region holding fewer than `skip` records, and a read failing.
+pub fn read_records_in_frame<'a, F>(
+    decoder: &mut Decoder<'a, std::fs::File>,
+    start: u64,
+    len: u64,
+    skip: u64,
+    cnt: u64,
+    find: F,
+) -> anyhow::Result<Vec<u8>>
+where
+    F: Fn(&[u8]) -> Option<usize>,
+{
+    let reader = record::region(decoder, start, len)?;
     let mut out = Vec::new();
     reader
-        .records(finder, separator.len())
-        .skip_records(start_sep_cnt)?
-        .take_records(cnt_of_sep)
+        .records(find)
+        .skip_records(skip)?
+        .take_records(cnt)
         .write_to(&mut out)?;
     Ok(out)
 }
@@ -910,7 +1031,7 @@ pub fn lines_betwee_by_separator_in_frame<'a>(
 
     // 終端の separator が見つからなかったとき末尾 1 バイトを落とすのが、この関数の従来の挙動。
     // 見つかったかどうかは、返ってきた separator の数が要求に届いたかで分かる。
-    if (record::count(&out, finder) as u64) < cnt_of_sep {
+    if (record::count(&out, find::by_separator(finder)) as u64) < cnt_of_sep {
         out.pop();
     }
     Ok(out)
@@ -966,14 +1087,34 @@ pub fn cnt_of_separetor_in_frame<'a>(
     start: u64,
     len: u64,
     finder: &Finder,
-    separator: &[u8],
+    _separator: &[u8],
 ) -> anyhow::Result<usize> {
+    count_records_in_frame(decoder, start, len, find::by_separator(finder))
+}
+
+/// [`cnt_of_separetor_in_frame`] with the record boundary as a finder.
+///
+/// The region is decoded one window at a time and dropped as it is scanned, so a frame does not
+/// have to fit in memory to be counted, whatever it holds.
+///
+/// # Errors
+///
+/// A read failing.
+pub fn count_records_in_frame<'a, F>(
+    decoder: &mut Decoder<'a, std::fs::File>,
+    start: u64,
+    len: u64,
+    find: F,
+) -> anyhow::Result<usize>
+where
+    F: Fn(&[u8]) -> Option<usize>,
+{
     if len == 0 {
         return Ok(0);
     }
 
     record::region(decoder, start, len)?
-        .records(finder, separator.len())
+        .records(find)
         .count_records()
 }
 
@@ -983,7 +1124,20 @@ pub fn cnt_of_separetor_in_frame_via_buf(
     finder: &Finder,
     _separator: &[u8], // start, len
 ) -> anyhow::Result<usize> {
-    Ok(record::count(data, finder))
+    count_records_in_buf(data, find::by_separator(finder))
+}
+
+/// [`cnt_of_separetor_in_frame_via_buf`] with the record boundary as a finder: how many whole
+/// records `data` holds.
+///
+/// # Errors
+///
+/// None. The result carries one so that it reads like the frame version beside it.
+pub fn count_records_in_buf<F>(data: &[u8], find: F) -> anyhow::Result<usize>
+where
+    F: Fn(&[u8]) -> Option<usize>,
+{
+    Ok(record::count(data, find))
 }
 
 /// Superseded by [`cnt_of_separetor_in_frame_via_buf`].
@@ -1083,6 +1237,40 @@ pub fn inspect_with_opts(
     separator: &[u8],
     opts: InspectOptions,
 ) -> anyhow::Result<Vec<InspectResult>> {
+    let finder = Finder::new(separator);
+    inspect_frames(input, find::by_separator(&finder), opts, separator.to_vec())
+}
+
+/// [`inspect_with_opts`] with the record boundary as a finder.
+///
+/// [`InspectResult::sep`] comes back empty: a finder is not a separator, and the file records
+/// neither.
+///
+/// # Errors
+///
+/// Whatever [`inspect_with_opts`] refuses.
+pub fn inspect_records_with_opts<F>(
+    input: PathBuf,
+    find: F,
+    opts: InspectOptions,
+) -> anyhow::Result<Vec<InspectResult>>
+where
+    F: Fn(&[u8]) -> Option<usize>,
+{
+    inspect_frames(input, find, opts, Vec::new())
+}
+
+/// The frame walk both inspect entry points make, `sep` being what they report having measured
+/// with.
+fn inspect_frames<F>(
+    input: PathBuf,
+    find: F,
+    opts: InspectOptions,
+    sep: Vec<u8>,
+) -> anyhow::Result<Vec<InspectResult>>
+where
+    F: Fn(&[u8]) -> Option<usize>,
+{
     let file = std::fs::File::open(&input)
         .with_context(|| format!("failed to open {}", input.display()))?;
     let decoder = Decoder::new(file)
@@ -1094,7 +1282,6 @@ pub fn inspect_with_opts(
 
     let frame_len = frames.len();
     let mut cache_cnt_of_sep: usize = 0;
-    let finder = Finder::new(separator);
     let results = frames
         .iter()
         .enumerate()
@@ -1113,13 +1300,7 @@ pub fn inspect_with_opts(
             };
             let (comp_start, comp_end, comp_size, decomp_end, decomp_size) = table_info;
             let cnt_of_sep = if !opts.fast_mode || i == 0 || i > frame_len - 3 {
-                cnt_of_separetor_in_frame(
-                    &mut *decoder_cell.borrow_mut(),
-                    *start,
-                    *len,
-                    &finder,
-                    separator,
-                )?
+                count_records_in_frame(&mut *decoder_cell.borrow_mut(), *start, *len, &find)?
             } else {
                 cache_cnt_of_sep
             };
@@ -1134,7 +1315,7 @@ pub fn inspect_with_opts(
                 decomp_start: *start,
                 decomp_end,
                 decomp_size,
-                sep: separator.to_vec(),
+                sep: sep.clone(),
                 cnt_of_sep,
             })
         })

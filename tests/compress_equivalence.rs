@@ -5,6 +5,13 @@
 //! one is measured against here: same bytes out, or the same error, for every input and every
 //! combination of arguments below.
 //!
+//! **The frame target moved by one separator.** The extracted one ends a frame at the first record
+//! end at or after `frame_size`, the boundary included, because a record has no content end under
+//! a general finder. The old one measured the end of the content, so it ends a frame at the first
+//! record end at or after `frame_size + separator.len()`. [`assert_agree`] therefore compares them
+//! at targets that differ by that much wherever they part at the same one, which is what makes the
+//! difference a statement rather than an exception.
+//!
 //! **Below 2 MiB of records per frame.** The two no longer only differ in structure: the extracted
 //! one asks for a frame size policy and the old one does not, so the old one splits a frame whose
 //! records exceed zeekstd's default 2 MiB and the extracted one does not. That is the fix
@@ -96,15 +103,39 @@ fn run_new(input: &[u8], args: &Args) -> Outcome {
     })
 }
 
+/// Whether the two ran to the same place.
+fn agree(old: &Outcome, new: &Outcome) -> bool {
+    match (old, new) {
+        (Ok(a), Ok(b)) => a == b,
+        (Err(a), Err(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Fails the caller unless the two agree, naming the input and the arguments that separated them.
+///
+/// The frame target is where they are allowed to differ, and by exactly one separator: the
+/// extracted one ends a frame at the first record end at or after `frame_size`, the old one at
+/// the first at or after `frame_size + separator.len()`, since it measured the end of the
+/// record's content. So a disagreement has to go away once the target is shifted by that much,
+/// and anything left over is the extracted one being wrong.
 fn assert_agree(label: &str, input: &[u8], args: &Args) {
     let old = run_old(input, args);
-    let new = run_new(input, args);
+    if agree(&old, &run_new(input, args)) {
+        return;
+    }
+
+    let shifted = Args {
+        frame_size: args.frame_size + args.separator.len(),
+        ..args.clone()
+    };
+    let new = run_new(input, &shifted);
     match (&old, &new) {
         (Ok(a), Ok(b)) => assert_eq!(
             a,
             b,
-            "{label}: {} bytes in, {args:?}, produced different output: {} against {} bytes",
+            "{label}: {} bytes in, {args:?}, produced different output under a frame target \
+             shifted by the separator: {} against {} bytes",
             input.len(),
             a.len(),
             b.len()
@@ -252,8 +283,8 @@ fn test_the_extracted_compressor_agrees_over_random_input() {
 #[test]
 fn test_the_extracted_compressor_agrees_on_an_empty_separator() {
     // Refused by both, but the refusal is not the only thing that has to match: what runs before
-    // it does too. A frame size whose product with the multiplier does not fit says so.
-    for frame_size in [64usize, 65536, usize::MAX / 2] {
+    // it does too.
+    for frame_size in [64usize, 65536] {
         let args = Args {
             frame_size,
             is_same_separator_cnt: true,
@@ -263,6 +294,30 @@ fn test_the_extracted_compressor_agrees_on_an_empty_separator() {
         };
         assert_agree("empty separator", b"a\nb\n", &args);
     }
+}
+
+#[test]
+fn test_the_extracted_compressor_refuses_an_empty_separator_before_it_sizes_the_buffer() {
+    // Where the two part. The extracted compressor is the separator's own layer over the record
+    // one, so it has nowhere to put the refusal but in front of everything; the old one reaches
+    // `Vec::with_capacity(frame_size * limit_multiplier)` first, and that multiplication is what
+    // a frame size this large does not survive.
+    let args = Args {
+        frame_size: usize::MAX / 2,
+        is_same_separator_cnt: true,
+        separator: Vec::new(),
+        limit_multiplier: Some(4),
+        opts: None,
+    };
+    assert!(
+        run_old(b"a\nb\n", &args).is_err(),
+        "the old compressor got past a frame size that does not fit"
+    );
+    assert_eq!(
+        run_new(b"a\nb\n", &args),
+        Err("Separator must not be empty".to_string()),
+        "the extracted compressor reached the frame size instead of refusing the separator"
+    );
 }
 
 #[test]

@@ -9,11 +9,57 @@ use anyhow::Context;
 use clap::Parser;
 use tempfile::spooled_tempfile;
 
-use crate::edit::{Alignment, SeparatorCheck, copy_range};
+use crate::edit::{Alignment, SeparatorCheck, copy_range, copy_range_with};
+use crate::find::{self, Boundary};
 use crate::seekzstdsep_lib::{
-    CompressOptions, CompressionLevel, ReadSeekable, compress_to_seekable_zst_with_opts,
+    CompressOptions, CompressionLevel, ReadSeekable, compress_records_to_seekable_zst_with_opts,
+    compress_to_seekable_zst_with_opts, convert_records_to_seekable_zst_reader_with_opts,
     convert_to_seekable_zst_reader_with_opts,
 };
+
+/// Where a record ends, as the command line names it.
+///
+/// Flattened into every subcommand that has to know, so that the three flags are spelled once.
+#[derive(clap::Args, Debug, Clone)]
+pub struct BoundaryArgs {
+    /// Record format: sep, fixed, flatbuffers or msgpack
+    #[arg(long, default_value = "sep")]
+    finder: String,
+    /// What the finder is configured with: the bytes a record ends with for `sep`, the record
+    /// length for `fixed`. Taken as given, with no escape processing
+    #[arg(long, conflicts_with = "separator")]
+    finder_arg: Option<String>,
+    /// Separator string, which is `--finder sep --finder-arg <SEPARATOR>` (default: "\\n")
+    #[arg(short, long)]
+    separator: Option<String>,
+}
+
+impl BoundaryArgs {
+    /// What the flags name.
+    ///
+    /// # Errors
+    ///
+    /// A `--separator` given alongside a finder that is not `sep`, along with whatever
+    /// [`find::from_spec`] refuses.
+    pub fn boundary(&self) -> anyhow::Result<Boundary> {
+        if self.separator.is_some() && self.finder != "sep" {
+            anyhow::bail!(
+                "--separator is --finder sep --finder-arg, so it cannot be given with --finder {}",
+                self.finder
+            );
+        }
+        find::from_spec(
+            &self.finder,
+            self.finder_arg.as_deref().or(self.separator.as_deref()),
+        )
+    }
+
+    /// Whether the boundary is a separator, which is what `append --insert-separator` needs it to
+    /// be.
+    pub fn is_separator(&self) -> bool {
+        self.finder == "sep"
+    }
+}
 
 /// Arguments of the `copy-range` subcommand.
 #[derive(Parser, Debug)]
@@ -31,9 +77,8 @@ pub struct CopyRangeArgs {
     /// first record of a frame, or the end of the file.
     #[arg(short, long)]
     cnt: Option<u64>,
-    /// Separator string (default: "\\n")
-    #[arg(short, long, default_value = "\n")]
-    separator: String,
+    #[command(flatten)]
+    boundary: BoundaryArgs,
     /// Copy a final frame that holds a different number of records than the rest, leaving a result
     /// that cannot be joined onto another file
     #[arg(long)]
@@ -93,23 +138,30 @@ pub fn run_copy_range(args: &CopyRangeArgs, stdout: impl Write) -> anyhow::Resul
         })
     };
 
-    copy_range(
-        &input,
-        &mut output,
-        args.from,
-        args.cnt,
-        args.separator.as_bytes(),
-        if args.no_align {
-            Alignment::NotRequired
-        } else {
-            Alignment::Required
-        },
-        if args.check_uniform {
-            SeparatorCheck::TwoFrames
-        } else {
-            SeparatorCheck::FirstFrame
-        },
-    )
+    let align = if args.no_align {
+        Alignment::NotRequired
+    } else {
+        Alignment::Required
+    };
+    let check = if args.check_uniform {
+        SeparatorCheck::TwoFrames
+    } else {
+        SeparatorCheck::FirstFrame
+    };
+    match args.boundary.boundary()? {
+        Boundary::Separator(sep) => {
+            copy_range(&input, &mut output, args.from, args.cnt, &sep, align, check)
+        }
+        Boundary::Finder(find) => copy_range_with(
+            &input,
+            &mut output,
+            args.from,
+            args.cnt,
+            &*find,
+            align,
+            check,
+        ),
+    }
 }
 
 /// Arguments of the `compress` and `convert` subcommands.
@@ -121,9 +173,8 @@ pub struct ConvertArgs {
     /// Output file (default: INPUT.seek.zst, or stdout when INPUT is omitted too)
     #[arg(value_name = "OUTPUT", required = false)]
     output: Option<PathBuf>,
-    /// Separator string (default: "\\n")
-    #[arg(short, long, default_value = "\n")]
-    separator: String,
+    #[command(flatten)]
+    boundary: BoundaryArgs,
     /// Max frame size in bytes (default: 65536)
     #[arg(long, default_value_t = 65536)]
     frame_size: usize,
@@ -176,7 +227,7 @@ pub fn run_compress(
         ..Default::default()
     };
 
-    let separator = args.separator.as_bytes();
+    let boundary = args.boundary.boundary()?;
     // 入力
     let mut input: Box<dyn ReadSeekable>;
     if let Some(ref path) = input_path {
@@ -199,27 +250,49 @@ pub fn run_compress(
     } else {
         Box::new(stdout)
     };
-    if args.cnt_of_separator_per_frame.is_some() {
+    // A count per frame given on the command line is the framing, so there is nothing for the
+    // retry to derive and the conversion runs once.
+    let converts = args.cnt_of_separator_per_frame.is_some();
+    if converts {
         comp_opts.max_of_separator = args.cnt_of_separator_per_frame;
-        convert_to_seekable_zst_reader_with_opts(
+    }
+    match (boundary, converts) {
+        (Boundary::Separator(sep), true) => convert_to_seekable_zst_reader_with_opts(
             &mut input,
             &mut output,
             args.frame_size,
             args.keep_cnt_of_separators_in_frame,
-            separator,
+            &sep,
             args.limit_multiplier,
             Some(comp_opts),
-        )?;
-    } else {
-        compress_to_seekable_zst_with_opts(
+        )?,
+        (Boundary::Separator(sep), false) => compress_to_seekable_zst_with_opts(
             &mut input,
             &mut output,
             args.frame_size,
             args.keep_cnt_of_separators_in_frame,
-            separator,
+            &sep,
             args.limit_multiplier,
             Some(comp_opts),
-        )?;
+        )?,
+        (Boundary::Finder(find), true) => convert_records_to_seekable_zst_reader_with_opts(
+            &mut input,
+            &mut output,
+            args.frame_size,
+            args.keep_cnt_of_separators_in_frame,
+            &*find,
+            args.limit_multiplier,
+            Some(comp_opts),
+        )?,
+        (Boundary::Finder(find), false) => compress_records_to_seekable_zst_with_opts(
+            &mut input,
+            &mut output,
+            args.frame_size,
+            args.keep_cnt_of_separators_in_frame,
+            &*find,
+            args.limit_multiplier,
+            Some(comp_opts),
+        )?,
     }
     // --rm
     if args.rm {

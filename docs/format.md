@@ -57,13 +57,13 @@ needed.
 
 ### How frames get cut
 
-`convert_to_seekable_zst_reader_with_opts` in `src/seekzstdsep_lib.rs` reads into a growing buffer
-and scans for separators with a `memchr::memmem::Finder`. Two different policies decide where a
-frame ends:
+`convert_records_to_seekable_zst_reader_with_opts` in `src/seekzstdsep_lib.rs` reads into a growing
+buffer and asks a record finder (`src/find.rs`) where each record ends; for a separator that finder
+is a `memchr::memmem::Finder`. Two different policies decide where a frame ends:
 
-- **First frame:** ends at the first separator at or after `frame_size` bytes. So `frame_size` is a
-  *target*, not a bound — frames overshoot to the next record boundary. The number of separators
-  that landed in this frame becomes `max_of_separator`.
+- **First frame:** ends at the first record end at or after `frame_size` bytes, the record boundary
+  itself included. So `frame_size` is a *target*, not a bound — frames overshoot to the next record
+  boundary. The number of records that landed in this frame becomes `max_of_separator`.
 - **Every later frame:** ends after exactly `max_of_separator` separators, regardless of byte size.
 
 The consequence is that **byte sizes drift while record counts stay fixed** — the opposite of what
@@ -102,7 +102,7 @@ The `frames.len()` factor cancels, so `frame_idx` is just `from / sep_cnt`. It i
 because every frame holds `sep_cnt` separators. If frames held varying counts, this would silently
 return the wrong records — there is no index to fall back on and no way to detect the drift.
 
-**2. `inspect --format` fast mode.** It counts separators in frame 0 and the last few frames, and
+**2. `inspect` fast mode.** It counts separators in frame 0 and the last few frames, and
 assumes that count for everything in between. `--no-fast-mode` counts every frame and is the way to
 verify the invariant actually holds for a given file.
 
@@ -138,6 +138,10 @@ invariant doing its job.
   no record of its own framing parameters — including which separator it was built with. Any feature
   that modifies an existing file (append, update, compaction) needs this value first, so persisting
   it is the prerequisite for all of them.
+- **The record format is not persisted either.** A record ends where a finder says it does
+  (`src/find.rs`), and which finder wrote the file is not recorded any more than the separator is.
+  Reading a file back under a different format addresses different records and generally reports no
+  error.
 - **`frame_size * limit_multiplier` has a hard floor of 32768**, the size of the internal read
   buffer. The unprocessed-data check runs immediately after each read, so a single read trips it
   when the product is smaller. With the default multiplier of 4 that puts the floor at
