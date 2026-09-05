@@ -50,3 +50,7 @@ harness = false
 [[bench]]
 name = "edit"
 harness = false
+
+[[bench]]
+name = "memory"
+harness = false
