@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use nu_protocol::{CustomValue, ShellError, Span, Value, shell_error::generic::GenericError};
 use serde::{Deserialize, Serialize};
 
-use crate::source::{Format, Source};
+use crate::source::{FinderSpec, Format, Source};
 
 /// What `describe` and the engine's own error messages call this value. A builtin list command on
 /// a handle fails engine-side with a message that prints this name, so it has to identify itself.
@@ -18,8 +18,8 @@ pub struct ZstdsepHandle {
     pub id: u64,
     /// The file, as an absolute path.
     pub path: PathBuf,
-    /// The separator its records end with.
-    pub separator: String,
+    /// Where its records end.
+    pub finder: FinderSpec,
     /// The `from <name>` its records are parsed by, or `None` for raw strings.
     pub format: Option<String>,
 }
@@ -30,18 +30,18 @@ impl ZstdsepHandle {
         Self {
             id,
             path: source.path.clone(),
-            separator: source.separator.clone(),
+            finder: source.finder.clone(),
             format: source.format.name().map(str::to_string),
         }
     }
 
-    /// Whether this handle was made for `path` read with `separator`.
+    /// Whether this handle was made for `path` read with `finder`.
     ///
     /// What identifies a file to the plugin. The format is left out: it decides how a record is
     /// turned into a value, not which bytes are read, so two handles that differ only there can
     /// share one open file.
-    pub fn refers_to(&self, path: &Path, separator: &str) -> bool {
-        self.path == path && self.separator == separator
+    pub fn refers_to(&self, path: &Path, finder: &FinderSpec) -> bool {
+        self.path == path && &self.finder == finder
     }
 
     /// The file this refers to. Carried in the value rather than in the state table, so a cell
@@ -49,7 +49,7 @@ impl ZstdsepHandle {
     pub fn source(&self) -> Source {
         Source {
             path: self.path.clone(),
-            separator: self.separator.clone(),
+            finder: self.finder.clone(),
             format: match &self.format {
                 None => Format::Raw,
                 Some(name) => Format::named(name),

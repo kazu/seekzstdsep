@@ -48,6 +48,25 @@ it holds.
 `records` is extrapolated from frame 0 for the interior frames. `--no-fast-mode` counts every one,
 which is the only way to find a frame that breaks the uniform count that indexing rests on.
 
+### Where a record ends
+
+The three commands take the CLI's `--finder` and `--finder-arg`, so a file `seekzstdsep compress`
+wrote with a finder other than `sep` is read with the same one:
+
+```text
+> let h = zstdsep open fixed.bin.seek.zst --finder fixed --finder-arg 512
+> zstdsep inspect events.msgpack.seek.zst --finder msgpack
+> $rows | each {|row| $row | to msgpack } | zstdsep save --raw --finder msgpack rows.msgpack.seek.zst
+> (zstdsep open rows.msgpack.seek.zst --finder msgpack).1 | from msgpack
+> zstdsep open rows.msgpack.seek.zst --finder msgpack --raw --no-partial | each { from msgpack }
+```
+
+`--separator` is `--finder sep --finder-arg`, and is refused beside any other finder. A record
+found by `fixed`, `flatbuffers` or `msgpack` has no separator, so `save` writes nothing after it.
+Finding a record and decoding one are separate: a record comes back as bytes, and decoding it is
+the caller's `from` command. `--format msgpack` hands the whole file to `from msgpack`, which
+reads one value and stops, so decode record by record as above. nushell has no `from flatbuffers`.
+
 ### `zstdsep open <path>`
 
 Returns a **handle**, not the data.
@@ -57,12 +76,12 @@ Returns a **handle**, not the data.
 > $h.10              # its frame decoded up to the record, one record parsed
 > $h.10.user.name    # the engine follows the rest of the path itself
 > $h | get 10 11 12  # three calls, one frame, decoded once
-> $h                 # the summary: path, separator, format, frames, records_per_frame, records
+> $h                 # the summary: path, finder, finder_arg, format, frames, records_per_frame, records
 > $h.records         # a field of that summary
 ```
 
-Flags: `--separator` (default a newline — the file does not record its own), `--format`, `--raw`,
-`--no-partial`.
+Flags: `--finder` and `--finder-arg` (where a record ends, see above), `--separator` (default a
+newline — the file does not record its own), `--format`, `--raw`, `--no-partial`.
 
 ### `zstdsep save <path>`
 
@@ -79,8 +98,8 @@ Text is written unchanged; anything structured is serialised by the format the i
 names, which `--format` overrides and `--raw` refuses. A record the input does not end with a
 separator gets one, so the file never ends mid-record.
 
-Flags: `--append`/`-a`, `--force`/`-f` (an existing file is kept otherwise), `--separator`/`-s`,
-`--format`, `--raw`/`-r`, `--insert-separator`, and the compressor's own `--frame-size`,
+Flags: `--append`/`-a`, `--force`/`-f` (an existing file is kept otherwise), `--finder`,
+`--finder-arg`, `--separator`/`-s`, `--format`, `--raw`/`-r`, `--insert-separator`, and the compressor's own `--frame-size`,
 `--records-per-frame`, `--limit-multiplier`, `--no-check`.
 
 `--append` is the library's `seekzstdsep append`, and inherits its two refusals: a file of fewer

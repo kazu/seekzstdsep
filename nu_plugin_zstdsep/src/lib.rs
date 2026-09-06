@@ -33,6 +33,7 @@ use nu_protocol::{
 use seekzstdsep::RecordReader;
 
 pub use handle::ZstdsepHandle;
+pub use source::FinderSpec;
 
 /// An open file, and which handle it belongs to.
 ///
@@ -40,7 +41,7 @@ pub use handle::ZstdsepHandle;
 struct OpenFile {
     reader: RecordReader,
     path: PathBuf,
-    separator: String,
+    finder: source::FinderSpec,
 }
 
 /// The open files, keyed by the id their handles carry.
@@ -86,7 +87,7 @@ impl ZstdsepPlugin {
             OpenFile {
                 reader,
                 path: source.path.clone(),
-                separator: source.separator.clone(),
+                finder: source.finder.clone(),
             },
         );
         Ok(id)
@@ -110,7 +111,7 @@ impl ZstdsepPlugin {
         let open = match state.readers.entry(handle.id) {
             Entry::Occupied(entry) => {
                 let entry = entry.into_mut();
-                if !handle.refers_to(&entry.path, &entry.separator) {
+                if !handle.refers_to(&entry.path, &entry.finder) {
                     *entry = open_for(handle, span)?;
                 }
                 entry
@@ -129,7 +130,11 @@ impl ZstdsepPlugin {
         self.with_reader(handle, span, |reader| {
             Ok(record! {
                 "path" => Value::string(handle.path.to_string_lossy(), span),
-                "separator" => Value::string(handle.separator.clone(), span),
+                "finder" => Value::string(handle.finder.finder.clone(), span),
+                "finder_arg" => match &handle.finder.arg {
+                    Some(arg) => Value::string(arg.clone(), span),
+                    None => Value::nothing(span),
+                },
                 "format" => match &handle.format {
                     Some(name) => Value::string(name.clone(), span),
                     None => Value::nothing(span),
@@ -156,7 +161,7 @@ fn open_for(handle: &ZstdsepHandle, span: nu_protocol::Span) -> Result<OpenFile,
     Ok(OpenFile {
         reader: handle.source().open(span)?,
         path: handle.path.clone(),
-        separator: handle.separator.clone(),
+        finder: handle.finder.clone(),
     })
 }
 

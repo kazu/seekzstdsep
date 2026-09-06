@@ -48,6 +48,26 @@ plugin use zstdsep
 数えます。インデックスが乗っている「レコード数が均一」という条件を壊しているフレームを見つける方法は、
 これだけです。
 
+### レコードの終わり
+
+3 つのコマンドは CLI の `--finder` と `--finder-arg` を取ります。`seekzstdsep compress` が `sep` 以外の
+finder で書いたファイルは、同じ finder で読みます:
+
+```text
+> let h = zstdsep open fixed.bin.seek.zst --finder fixed --finder-arg 512
+> zstdsep inspect events.msgpack.seek.zst --finder msgpack
+> $rows | each {|row| $row | to msgpack } | zstdsep save --raw --finder msgpack rows.msgpack.seek.zst
+> (zstdsep open rows.msgpack.seek.zst --finder msgpack).1 | from msgpack
+> zstdsep open rows.msgpack.seek.zst --finder msgpack --raw --no-partial | each { from msgpack }
+```
+
+`--separator` は `--finder sep --finder-arg` のことで、他の finder と一緒には指定できません。
+`fixed`、`flatbuffers`、`msgpack` が見つけるレコードにセパレータは無いので、`save` はレコードの後に
+何も書きません。レコードを見つけることとデコードすることは別です。レコードはバイト列として返り、
+デコードは呼び出し側の `from` コマンドがやります。`--format msgpack` はファイル全体を `from msgpack` に
+渡し、それは値を 1 つ読んで止まるので、上のようにレコードごとにデコードしてください。nushell に
+`from flatbuffers` はありません。
+
 ### `zstdsep open <path>`
 
 データではなく**ハンドル**を返します。
@@ -57,12 +77,12 @@ plugin use zstdsep
 > $h.10              # そのフレームをレコードまでデコードし、レコード 1 つをパースする
 > $h.10.user.name    # 残りのパスはエンジンが自分で辿る
 > $h | get 10 11 12  # 呼び出しは 3 回、フレームは 1 つ、デコードは 1 回
-> $h                 # サマリ: path, separator, format, frames, records_per_frame, records
+> $h                 # サマリ: path, finder, finder_arg, format, frames, records_per_frame, records
 > $h.records         # そのサマリの 1 フィールド
 ```
 
-フラグ: `--separator` (デフォルトは改行 — ファイル自身はセパレータを記録していません)、`--format`、
-`--raw`、`--no-partial`。
+フラグ: `--finder` と `--finder-arg` (レコードの終わり。上記)、`--separator` (デフォルトは改行 —
+ファイル自身はセパレータを記録していません)、`--format`、`--raw`、`--no-partial`。
 
 ### `zstdsep save <path>`
 
@@ -79,8 +99,8 @@ plugin use zstdsep
 がそれを上書きし、`--raw` は直列化を拒否します。入力がセパレータで終わっていなければ 1 つ足すので、
 ファイルがレコードの途中で終わることはありません。
 
-フラグ: `--append`/`-a`、`--force`/`-f` (付けなければ既存ファイルは残します)、`--separator`/`-s`、
-`--format`、`--raw`/`-r`、`--insert-separator`、それに圧縮器自身の `--frame-size`、
+フラグ: `--append`/`-a`、`--force`/`-f` (付けなければ既存ファイルは残します)、`--finder`、
+`--finder-arg`、`--separator`/`-s`、`--format`、`--raw`/`-r`、`--insert-separator`、それに圧縮器自身の `--frame-size`、
 `--records-per-frame`、`--limit-multiplier`、`--no-check`。
 
 `--append` はライブラリの `seekzstdsep append` そのもので、その 2 つの拒否も受け継ぎます。フレームが

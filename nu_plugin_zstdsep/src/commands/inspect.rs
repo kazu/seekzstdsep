@@ -4,10 +4,14 @@ use nu_protocol::{
     Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Spanned,
     SyntaxShape, Type, Value, record, shell_error::generic::GenericError,
 };
-use seekzstdsep::{InspectOptions, seekzstdsep_lib::inspect_with_opts};
+use seekzstdsep::find::Boundary;
+use seekzstdsep::{
+    InspectOptions,
+    seekzstdsep_lib::{inspect_records_with_opts, inspect_with_opts},
+};
 
 use crate::ZstdsepPlugin;
-use crate::commands::{resolve, separator};
+use crate::commands::{finder, finder_flags, resolve};
 
 pub struct Inspect;
 
@@ -23,15 +27,10 @@ impl PluginCommand for Inspect {
     }
 
     fn signature(&self) -> Signature {
-        Signature::build(self.name())
+        let signature = Signature::build(self.name())
             .input_output_types(vec![(Type::Nothing, Type::table())])
-            .required("path", SyntaxShape::Filepath, "the file to inspect")
-            .named(
-                "separator",
-                SyntaxShape::String,
-                "the separator records end with (default: a newline)",
-                Some('s'),
-            )
+            .required("path", SyntaxShape::Filepath, "the file to inspect");
+        finder_flags(signature)
             .switch(
                 "no-fast-mode",
                 "count separators in every frame instead of extrapolating from frame 0",
@@ -64,19 +63,22 @@ impl PluginCommand for Inspect {
     ) -> Result<PipelineData, LabeledError> {
         let path: Spanned<String> = call.req(0)?;
         let path = resolve(engine, &path.item)?;
-        let separator = separator(call.get_flag("separator")?)?;
+        let finder = finder(call)?;
         let options = InspectOptions {
             fast_mode: !call.has_flag("no-fast-mode")?,
         };
 
-        let frames =
-            inspect_with_opts(path.clone(), separator.as_bytes(), options).map_err(|e| {
-                ShellError::Generic(GenericError::new(
-                    format!("cannot inspect {}", path.display()),
-                    e.to_string(),
-                    call.head,
-                ))
-            })?;
+        let frames = match finder.boundary(call.head)? {
+            Boundary::Separator(sep) => inspect_with_opts(path.clone(), &sep, options),
+            Boundary::Finder(find) => inspect_records_with_opts(path.clone(), &*find, options),
+        }
+        .map_err(|e| {
+            ShellError::Generic(GenericError::new(
+                format!("cannot inspect {}", path.display()),
+                e.to_string(),
+                call.head,
+            ))
+        })?;
 
         let head = call.head;
         let rows = frames
