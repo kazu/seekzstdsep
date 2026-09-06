@@ -32,12 +32,12 @@ Reading one record out of a 1,000,000-record JSONL file (74.2 MB), best of ten, 
 
 The two baselines pay for the position; `seekzstdsep` does not. Every frame holds the same number of
 separators, so a record index becomes a frame index by division and only that one frame is
-decompressed. The full matrix, and the conditions it was taken under, are in `docs/bench/`.
+decompressed. The full matrix, and the conditions it was taken under, are in [`docs/bench/`][bench].
 
 ## Install
 
-Rust 1.85 or later (edition 2024) and a C compiler — `zstd-sys` builds a bundled libzstd 1.5.7 from
-source, so no system libzstd and no `pkg-config` are needed.
+Rust 1.85 or later (edition 2024) and a C compiler — [`zstd-sys`][zstd-sys] builds a bundled
+libzstd 1.5.7 from source, so no system libzstd and no `pkg-config` are needed.
 
 ```sh
 cargo install --path .
@@ -51,11 +51,11 @@ seekzstdsep cat events.jsonl.seek.zst --from 10000 --cnt 3   # 0-based record in
 seekzstdsep inspect events.jsonl.seek.zst                    # per-frame extents and record counts
 ```
 
-`truncate` cuts a file back to a frame boundary in place, re-encoding nothing. `append` adds
-records in place, re-encoding only the frame the edit lands in — or nothing at all, where `append
---input-seekable` joins another seekable file. `copy-range` writes a record range out to a second
-file by copying the frames as they are.
-`docs/cli.md` covers every subcommand and flag.
+[`truncate`][truncate] cuts a file back to a frame boundary in place, re-encoding nothing.
+[`append`][append] adds records in place, re-encoding only the frame the edit lands in — or nothing
+at all, where [`append --input-seekable`][append-seekable] joins another seekable file.
+[`copy-range`][copy-range] writes a record range out to a second file by copying the frames as they
+are. [`docs/cli.md`][cli] covers every subcommand and flag.
 
 As a library, compression works over any `Read`/`Write` pair:
 
@@ -81,6 +81,16 @@ assert!(!compressed.is_empty());
 That fourth argument is the whole point: with `false`, frames are cut by size alone and `cat` can no
 longer resolve a record index by arithmetic.
 
+Reading takes a record range out of a file on disk and writes it as it decodes:
+
+```rust,no_run
+use seekzstdsep::RecordReader;
+use std::io;
+
+let mut reader = RecordReader::open("events.jsonl.seek.zst".into(), b"\n").unwrap();
+reader.records_to(10_000, 3, &mut io::stdout()).unwrap();
+```
+
 ## nushell plugin
 
 `nu_plugin_zstdsep/` reads the same files from nushell, keeping the file open as a value:
@@ -90,18 +100,20 @@ longer resolve a record index by arithmetic.
 > $h.1999999.msg
 ```
 
-380 µs on a 2,000,000-record file, against 4.9 s to read all of it. `nu/install.nu` links a hook
-into nushell's autoload directory so that `open` and `save` route `.seek.zst` paths to the plugin on
-their own. See `nu_plugin_zstdsep/README.md`.
+380 µs on a 2,000,000-record file, against 4.9 s to read all of it.
+[`nu_plugin_zstdsep/nu/install.nu`][install] links a hook into nushell's autoload directory so
+that `open` and `save` route `.seek.zst` paths to the plugin on their own.
+See [`nu_plugin_zstdsep/README.md`][plugin].
 
 ## Documentation
 
-- `docs/format.md` — what the file is, and the invariant that makes lookup arithmetic
-- `docs/cli.md` — every subcommand and flag
-- `docs/library.md` — the rest of the API: reading, `truncate`, `append`, `copy_range`, options
-- `docs/benchmark.md` — what the benchmarks measure, and the traps they avoid
-- `docs/bench/` — the measurements themselves
-- `docs/bugs.md` — known issues
+- [`docs/format.md`][format] — what the file is, and the invariant that makes lookup arithmetic
+- [`docs/cli.md`][cli] — every subcommand and flag
+- [`docs/library.md`][library] — the rest of the API: reading, `truncate`, `append`, `copy_range`,
+  options
+- [`docs/benchmark.md`][benchmark] — what the benchmarks measure, and the traps they avoid
+- [`docs/bench/`][bench] — the measurements themselves
+- [`docs/bugs.md`][bugs] — known issues
 
 ## License
 
@@ -110,3 +122,16 @@ MIT ([LICENSE](./LICENSE)).
 [spec]: https://github.com/rorosen/zeekstd/blob/main/seekable_format.md
 [bgzf]: https://www.htslib.org/doc/bgzip.html
 [tabix]: https://www.htslib.org/doc/tabix.html
+[bench]: ./docs/bench/
+[zstd-sys]: https://docs.rs/zstd-sys
+[truncate]: ./docs/cli.md#truncate
+[append]: ./docs/cli.md#append
+[append-seekable]: ./docs/cli.md#joining-another-seekable-file
+[copy-range]: ./docs/cli.md#copy-a-record-range
+[cli]: ./docs/cli.md
+[install]: ./nu_plugin_zstdsep/nu/install.nu
+[plugin]: ./nu_plugin_zstdsep/README.md
+[format]: ./docs/format.md
+[library]: ./docs/library.md
+[benchmark]: ./docs/benchmark.md
+[bugs]: ./docs/bugs.md
