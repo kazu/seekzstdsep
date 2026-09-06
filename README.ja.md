@@ -32,12 +32,12 @@ JSONL、CSV、TSV、logfmt — レコードが特定の文字列で区切られ�
 
 2 つのベースラインは位置のぶんだけ時間を払いますが、`seekzstdsep` は払いません。すべてのフレームが
 同じ数のセパレータを持つので、レコード番号は除算だけでフレーム番号になり、展開されるのはその 1
-フレームだけです。全体の表と測定条件は `docs/bench/` にあります。
+フレームだけです。全体の表と測定条件は [`docs/bench/`][bench] にあります。
 
 ## インストール
 
-Rust 1.85 以降 (edition 2024) と C コンパイラが必要です。`zstd-sys` が同梱の libzstd 1.5.7 を
-ソースからビルドするので、システムの libzstd も `pkg-config` も要りません。
+Rust 1.85 以降 (edition 2024) と C コンパイラが必要です。[`zstd-sys`][zstd-sys] が同梱の
+libzstd 1.5.7 をソースからビルドするので、システムの libzstd も `pkg-config` も要りません。
 
 ```sh
 cargo install --path .
@@ -51,11 +51,12 @@ seekzstdsep cat events.jsonl.seek.zst --from 10000 --cnt 3   # --from は 0 始�
 seekzstdsep inspect events.jsonl.seek.zst                    # フレームごとの範囲とレコード数
 ```
 
-`truncate` はファイルをフレーム境界までその場で切り詰め、何も再エンコードしません。`append` は
-その場で追記し、再エンコードするのは編集が落ちたフレームだけです。`append --input-seekable` で
-別の seekable ファイルを継ぐときは 1 バイトも再エンコードしません。`copy-range` はレコード範囲を
-別のファイルへ書き出し、フレームはそのままコピーします。
-全サブコマンドとフラグは `docs/cli.md` にあります。
+[`truncate`][truncate] はファイルをフレーム境界までその場で切り詰め、何も再エンコードしません。
+[`append`][append] はその場で追記し、再エンコードするのは編集が落ちたフレームだけです。
+[`append --input-seekable`][append-seekable] で別の seekable ファイルを継ぐときは 1 バイトも
+再エンコードしません。[`copy-range`][copy-range] はレコード範囲を別のファイルへ書き出し、
+フレームはそのままコピーします。
+全サブコマンドとフラグは [`docs/cli.md`][cli] にあります。
 
 ライブラリとしては、任意の `Read`/`Write` の組に対して圧縮できます:
 
@@ -81,6 +82,16 @@ assert!(!compressed.is_empty());
 4 番目の引数がこのツールの核心です。`false` にするとフレームはサイズだけで切られ、`cat` は
 レコード番号を計算で解決できなくなります。
 
+読み出しは、ディスク上のファイルからレコード範囲を取り出し、デコードしながら書き出します:
+
+```rust,no_run
+use seekzstdsep::RecordReader;
+use std::io;
+
+let mut reader = RecordReader::open("events.jsonl.seek.zst".into(), b"\n").unwrap();
+reader.records_to(10_000, 3, &mut io::stdout()).unwrap();
+```
+
 ## nushell plugin
 
 `nu_plugin_zstdsep/` は同じファイルを nushell から読みます。ファイルを開いたまま値として持ちます:
@@ -90,18 +101,20 @@ assert!(!compressed.is_empty());
 > $h.1999999.msg
 ```
 
-2,000,000 レコードのファイルで 380 µs、全体を読むと 4.9 s かかるのに対してです。`nu/install.nu` は
-nushell の autoload ディレクトリに hook を置くので、`open` と `save` が `.seek.zst` のパスを自動で
-plugin へ回します。詳細は `nu_plugin_zstdsep/README.ja.md` にあります。
+2,000,000 レコードのファイルで 380 µs、全体を読むと 4.9 s かかるのに対してです。
+[`nu_plugin_zstdsep/nu/install.nu`][install] は nushell の autoload ディレクトリに hook を置くので、
+`open` と `save` が `.seek.zst` のパスを自動で plugin へ回します。
+詳細は [`nu_plugin_zstdsep/README.ja.md`][plugin] にあります。
 
 ## ドキュメント
 
-- `docs/format.md` — ファイルの実体と、参照を計算にする不変条件
-- `docs/cli.md` — 全サブコマンドとフラグ
-- `docs/library.md` — API の残り: 読み出し、`truncate`、`append`、`copy_range`、オプション
-- `docs/benchmark.md` — ベンチマークが何を測っているか、避けている罠は何か
-- `docs/bench/` — 測定結果そのもの
-- `docs/bugs.md` — 既知の問題
+- [`docs/format.md`][format] — ファイルの実体と、参照を計算にする不変条件
+- [`docs/cli.md`][cli] — 全サブコマンドとフラグ
+- [`docs/library.md`][library] — API の残り: 読み出し、`truncate`、`append`、`copy_range`、
+  オプション
+- [`docs/benchmark.md`][benchmark] — ベンチマークが何を測っているか、避けている罠は何か
+- [`docs/bench/`][bench] — 測定結果そのもの
+- [`docs/bugs.md`][bugs] — 既知の問題
 
 ## ライセンス
 
@@ -110,3 +123,16 @@ MIT ([LICENSE](./LICENSE))。
 [spec]: https://github.com/rorosen/zeekstd/blob/main/seekable_format.md
 [bgzf]: https://www.htslib.org/doc/bgzip.html
 [tabix]: https://www.htslib.org/doc/tabix.html
+[bench]: ./docs/bench/
+[zstd-sys]: https://docs.rs/zstd-sys
+[truncate]: ./docs/cli.md#truncate
+[append]: ./docs/cli.md#append
+[append-seekable]: ./docs/cli.md#joining-another-seekable-file
+[copy-range]: ./docs/cli.md#copy-a-record-range
+[cli]: ./docs/cli.md
+[install]: ./nu_plugin_zstdsep/nu/install.nu
+[plugin]: ./nu_plugin_zstdsep/README.ja.md
+[format]: ./docs/format.md
+[library]: ./docs/library.md
+[benchmark]: ./docs/benchmark.md
+[bugs]: ./docs/bugs.md
