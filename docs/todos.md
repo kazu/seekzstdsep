@@ -237,3 +237,9 @@ records hold. **nushell has no `from flatbuffers`**, so records found by `--find
 could only come back as bytes under `--raw`. That is a reason to scope the work, not to skip it:
 `fixed` and `msgpack` are reachable today, `flatbuffers` needs a decoder that is not nushell's to
 give.
+
+Where flatbuffers is wanted, the decoder is generated rather than written here. A record cannot be
+read without its schema, so it belongs to whoever owns the `.fbs`: `flatc` emits the Rust, and a
+thin plugin around it puts `from <schema>` in scope, which `--format` already resolves and pipes
+the records through. Nothing in this crate changes for it. Untested: `call_decl` refuses a command
+defined in nushell itself, and whether it runs one a plugin provides has not been measured.
