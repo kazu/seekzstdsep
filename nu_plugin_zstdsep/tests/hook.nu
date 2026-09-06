@@ -41,15 +41,23 @@ assert equal (open records.jsonl.seek.zst --raw --no-partial | first | describe)
 assert equal (open records.jsonl.seek.zst --format json --no-partial | get a) [1, 2, 3]
 
 # A separator other than a newline has to be said on both sides.
-"a;b;c;" | save --raw --separator ";" split.seek.zst
-assert equal (open split.seek.zst --separator ";" --raw --no-partial) [a, b, c]
+"a;b;c;" | save --raw --finder-arg ";" split.seek.zst
+assert equal (open split.seek.zst --finder-arg ";" --raw --no-partial) [a, b, c]
+
+# A finder other than sep reaches the plugin: with its argument when it takes one, and without
+# one when it does not.
+[aaaa bbbb cccc] | save --finder fixed --finder-arg 4 fixed.seek.zst
+assert equal (open fixed.seek.zst --finder fixed --finder-arg 4 --raw --no-partial) [aaaa, bbbb, cccc]
+[{a: 1} {a: 2}] | each {|row| $row | to msgpack } | save --raw --finder msgpack rows.msgpack.seek.zst
+assert equal (open rows.msgpack.seek.zst --finder msgpack --raw --no-partial | each { from msgpack } | get a) [1, 2]
+assert error {|| open rows.msgpack.seek.zst --finder msgpack --finder-arg 4 --raw --no-partial }
 
 # --- flags stay on their own side --------------------------------------------
 
 assert error {|| open plain.txt --no-partial }
-assert error {|| open plain.txt --separator "," }
+assert error {|| open plain.txt --finder-arg "," }
 assert error {|| open plain.txt --format json }
-assert error {|| "x\n" | save --separator "," plain2.txt }
+assert error {|| "x\n" | save --finder-arg "," plain2.txt }
 assert error {|| "x\n" | save --no-check plain2.txt }
 assert error {|| [{a: 1}] | save --progress progress.jsonl.seek.zst }
 assert error {|| [{a: 1}] | save --stderr err.txt stderr.jsonl.seek.zst }
@@ -71,8 +79,8 @@ assert equal (open grow.jsonl.seek.zst --no-partial | get a) [5]
 
 # --- the defaults the hook repeats are the plugin's own ----------------------
 
-# A named flag cannot be forwarded unset, so the hook passes --separator, --frame-size and
-# --limit-multiplier on every call. That has to be the same call as passing none of them.
+# A named flag cannot be forwarded unset, so the hook passes --finder, --finder-arg, --frame-size
+# and --limit-multiplier on every call. That has to be the same call as passing none of them.
 [{a: 1}, {a: 2}] | zstdsep save by-plugin.jsonl.seek.zst
 [{a: 1}, {a: 2}] | save by-hook.jsonl.seek.zst
 assert equal (^cmp --silent by-plugin.jsonl.seek.zst by-hook.jsonl.seek.zst | complete | get exit_code) 0

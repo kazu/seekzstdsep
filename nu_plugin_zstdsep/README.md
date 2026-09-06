@@ -161,6 +161,9 @@ refused rather than dropped: `open notes.txt --no-partial` and `ls | save --prog
 listing.jsonl.seek.zst` are both errors. `core-open` and `core-save` are the builtins under names
 that survive the shadowing, and are the only way to read a `.seek.zst` file as bytes.
 
+The hook takes `--finder` and `--finder-arg` and no `--separator`: a separator is
+`--finder-arg ";"`, with `sep` as the default finder.
+
 Two limits. Autoload files are read when the REPL starts and never for `nu script.nu`, so a script
 needs a `use .../nu/zstdsep-hook.nu *` of its own. And a handle belongs to one file, so `open
 a.seek.zst b.seek.zst` is refused where the builtin would have concatenated them.

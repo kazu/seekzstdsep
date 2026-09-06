@@ -19,11 +19,19 @@ module zstdsep_hook {
     # The plugin's own defaults, repeated here because a named flag cannot be forwarded unset:
     # `--frame-size=$x` with `$x` null is a type error, and a call's flags cannot be built at
     # runtime. Passing these always is the same call as passing none of them, which `tests/hook.nu`
-    # checks byte for byte. The two with no value standing for "unset" — `--format` and
-    # `--records-per-frame` — are branched on instead.
+    # checks byte for byte. The ones with no value standing for "unset" — `--finder-arg`,
+    # `--format` and `--records-per-frame` — are branched on instead.
+    const FINDER = "sep"
     const SEPARATOR = "\n"
     const FRAME_SIZE = 65536
     const LIMIT_MULTIPLIER = 4
+
+    # What `--finder-arg` is forwarded as, or null for "not at all". `sep` has a default and is
+    # always forwarded; `fixed` needs one and is forwarded as given; the rest take none, and the
+    # plugin refuses one, so an unset one stays unset.
+    def finder-arg [finder: any, arg: any]: nothing -> any {
+        if ($finder | default $FINDER) == $FINDER { $arg | default $SEPARATOR } else { $arg }
+    }
 
     # Whether `path` belongs to the plugin, refusing a flag that went to the other side.
     #
@@ -51,7 +59,8 @@ module zstdsep_hook {
     export def open [
         ...files: glob          # the file(s) to open
         --raw(-r)               # open the file as raw binary
-        --separator(-s): string # .seek.zst: the separator records end with (default: a newline)
+        --finder: string        # .seek.zst: record format, sep, fixed, flatbuffers or msgpack (default: sep)
+        --finder-arg: string    # .seek.zst: the separator for sep (default: a newline), the length for fixed
         --format(-f): string    # .seek.zst: parse records with `from <format>` instead
         --no-partial            # .seek.zst: every record as a list stream instead of a handle
     ] {
@@ -62,14 +71,19 @@ module zstdsep_hook {
                 msg: $"one *($MARKER) file at a time: ($names | length) were named, and a handle is one file's"
             }
         }
-        let mine = { separator: $separator, format: $format, no-partial: $no_partial }
+        let mine = { finder: $finder, finder-arg: $finder_arg, format: $format, no-partial: $no_partial }
         if (routes "open" ($seekable | append "" | first) {} $mine) {
             let path = ($seekable | first)
-            let sep = ($separator | default $SEPARATOR)
-            if $format == null {
-                (zstdsep open $path --separator=$sep --raw=$raw --no-partial=$no_partial)
+            let finder = ($finder | default $FINDER)
+            let arg = (finder-arg $finder $finder_arg)
+            if $format == null and $arg == null {
+                (zstdsep open $path --finder=$finder --raw=$raw --no-partial=$no_partial)
+            } else if $format == null {
+                (zstdsep open $path --finder=$finder --finder-arg=$arg --raw=$raw --no-partial=$no_partial)
+            } else if $arg == null {
+                (zstdsep open $path --finder=$finder --format=$format --raw=$raw --no-partial=$no_partial)
             } else {
-                (zstdsep open $path --separator=$sep --format=$format --raw=$raw --no-partial=$no_partial)
+                (zstdsep open $path --finder=$finder --finder-arg=$arg --format=$format --raw=$raw --no-partial=$no_partial)
             }
         } else {
             core-open --raw=$raw ...$files
@@ -88,7 +102,8 @@ module zstdsep_hook {
         --append(-a)              # add to the file instead of writing a new one
         --force(-f)               # overwrite an existing file
         --progress(-p)            # show a progress bar
-        --separator(-s): string   # .seek.zst: the separator to end records with
+        --finder: string          # .seek.zst: record format, sep, fixed, flatbuffers or msgpack (default: sep)
+        --finder-arg: string      # .seek.zst: the separator for sep (default: a newline), the length for fixed
         --format: string          # .seek.zst: serialise with `to <format>` instead
         --insert-separator        # .seek.zst: with --append, close a trailing fragment first
         --frame-size: int         # .seek.zst: target size of a frame in bytes
@@ -99,7 +114,8 @@ module zstdsep_hook {
         if (routes "save" $filename
                 { stderr: $stderr, progress: $progress }
                 {
-                    separator: $separator
+                    finder: $finder
+                    finder-arg: $finder_arg
                     format: $format
                     insert-separator: $insert_separator
                     frame-size: $frame_size
@@ -107,16 +123,47 @@ module zstdsep_hook {
                     limit-multiplier: $limit_multiplier
                     no-check: $no_check
                 }) {
-            if $format == null and $records_per_frame == null {
+            if (finder-arg $finder $finder_arg) == null and $format == null and $records_per_frame == null {
                 (zstdsep save $filename
-                    --separator=($separator | default $SEPARATOR)
+                    --finder=($finder | default $FINDER)
+                    --frame-size=($frame_size | default $FRAME_SIZE)
+                    --limit-multiplier=($limit_multiplier | default $LIMIT_MULTIPLIER)
+                    --append=$append --force=$force --raw=$raw
+                    --insert-separator=$insert_separator --no-check=$no_check)
+            } else if (finder-arg $finder $finder_arg) == null and $format == null {
+                (zstdsep save $filename
+                    --finder=($finder | default $FINDER)
+                    --frame-size=($frame_size | default $FRAME_SIZE)
+                    --limit-multiplier=($limit_multiplier | default $LIMIT_MULTIPLIER)
+                    --records-per-frame=$records_per_frame
+                    --append=$append --force=$force --raw=$raw
+                    --insert-separator=$insert_separator --no-check=$no_check)
+            } else if (finder-arg $finder $finder_arg) == null and $records_per_frame == null {
+                (zstdsep save $filename
+                    --finder=($finder | default $FINDER)
+                    --frame-size=($frame_size | default $FRAME_SIZE)
+                    --limit-multiplier=($limit_multiplier | default $LIMIT_MULTIPLIER)
+                    --format=$format
+                    --append=$append --force=$force --raw=$raw
+                    --insert-separator=$insert_separator --no-check=$no_check)
+            } else if (finder-arg $finder $finder_arg) == null {
+                (zstdsep save $filename
+                    --finder=($finder | default $FINDER)
+                    --frame-size=($frame_size | default $FRAME_SIZE)
+                    --limit-multiplier=($limit_multiplier | default $LIMIT_MULTIPLIER)
+                    --format=$format --records-per-frame=$records_per_frame
+                    --append=$append --force=$force --raw=$raw
+                    --insert-separator=$insert_separator --no-check=$no_check)
+            } else if $format == null and $records_per_frame == null {
+                (zstdsep save $filename
+                    --finder=($finder | default $FINDER) --finder-arg=(finder-arg $finder $finder_arg)
                     --frame-size=($frame_size | default $FRAME_SIZE)
                     --limit-multiplier=($limit_multiplier | default $LIMIT_MULTIPLIER)
                     --append=$append --force=$force --raw=$raw
                     --insert-separator=$insert_separator --no-check=$no_check)
             } else if $format == null {
                 (zstdsep save $filename
-                    --separator=($separator | default $SEPARATOR)
+                    --finder=($finder | default $FINDER) --finder-arg=(finder-arg $finder $finder_arg)
                     --frame-size=($frame_size | default $FRAME_SIZE)
                     --limit-multiplier=($limit_multiplier | default $LIMIT_MULTIPLIER)
                     --records-per-frame=$records_per_frame
@@ -124,7 +171,7 @@ module zstdsep_hook {
                     --insert-separator=$insert_separator --no-check=$no_check)
             } else if $records_per_frame == null {
                 (zstdsep save $filename
-                    --separator=($separator | default $SEPARATOR)
+                    --finder=($finder | default $FINDER) --finder-arg=(finder-arg $finder $finder_arg)
                     --frame-size=($frame_size | default $FRAME_SIZE)
                     --limit-multiplier=($limit_multiplier | default $LIMIT_MULTIPLIER)
                     --format=$format
@@ -132,7 +179,7 @@ module zstdsep_hook {
                     --insert-separator=$insert_separator --no-check=$no_check)
             } else {
                 (zstdsep save $filename
-                    --separator=($separator | default $SEPARATOR)
+                    --finder=($finder | default $FINDER) --finder-arg=(finder-arg $finder $finder_arg)
                     --frame-size=($frame_size | default $FRAME_SIZE)
                     --limit-multiplier=($limit_multiplier | default $LIMIT_MULTIPLIER)
                     --format=$format --records-per-frame=$records_per_frame
@@ -140,6 +187,7 @@ module zstdsep_hook {
                     --insert-separator=$insert_separator --no-check=$no_check)
             }
         } else if $stderr == null {
+
             (core-save $filename --raw=$raw --append=$append --force=$force --progress=$progress)
         } else {
             (core-save $filename --stderr=$stderr --raw=$raw --append=$append --force=$force --progress=$progress)
