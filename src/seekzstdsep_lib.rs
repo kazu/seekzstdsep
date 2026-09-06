@@ -46,6 +46,20 @@ pub(crate) const READ_FRAME_BUF_SIZE: usize = READ_BUF_SIZE;
 /// Shorthand for [`convert_to_seekable_zst_reader`] with `is_same_separator_cnt` set to `false`.
 ///
 /// Frames are cut by size alone, so [`crate::RecordReader`] cannot locate records in the result.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::convert_text_to_seekable_zst_reader;
+///
+/// let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+/// let mut compressed = Vec::new();
+///
+/// convert_text_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, b"\n")?;
+///
+/// assert!(!compressed.is_empty());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn convert_text_to_seekable_zst_reader<R: Read, W: Write>(
     reader: R,
     writer: W,
@@ -56,6 +70,21 @@ pub fn convert_text_to_seekable_zst_reader<R: Read, W: Write>(
 }
 
 /// Options for [`compress_to_seekable_zst_with_opts`].
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::CompressOptions;
+///
+/// let opts = CompressOptions {
+///     level: 3,
+///     checksum: false,
+///     ..CompressOptions::default()
+/// };
+///
+/// assert_eq!(opts.level, 3);
+/// assert!(opts.out_path.is_none());
+/// ```
 #[derive(Debug, Clone)]
 pub struct CompressOptions {
     /// Separators per frame. `None` derives it from the first frame.
@@ -144,6 +173,22 @@ impl<T: Read + Seek> ReadSeekable for T {}
 /// [`compress_to_seekable_zst_with_opts`] without options.
 ///
 /// Passing no options leaves [`CompressOptions::out_path`] unset, so the output goes to `owriter`.
+///
+/// # Examples
+///
+/// ```
+/// use std::io::Cursor;
+///
+/// use seekzstdsep::compress_to_seekable_zst;
+///
+/// let input = Cursor::new(b"record 1\nrecord 2\nrecord 3\n");
+/// let mut compressed = Vec::new();
+///
+/// compress_to_seekable_zst(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+///
+/// assert!(!compressed.is_empty());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn compress_to_seekable_zst<R: ReadSeekable, W: Write>(
     mut reader: R,
     mut owriter: W,
@@ -172,6 +217,34 @@ pub fn compress_to_seekable_zst<R: ReadSeekable, W: Write>(
 /// Output is staged in a temporary file and cloned to [`CompressOptions::out_path`] with reflink,
 /// avoiding a second copy of the data. `owriter` receives it when reflink fails, and when there is
 /// no `out_path` to clone onto.
+///
+/// # Examples
+///
+/// ```
+/// use std::io::Cursor;
+///
+/// use seekzstdsep::{CompressOptions, compress_to_seekable_zst_with_opts};
+///
+/// let input = Cursor::new(b"record 1\nrecord 2\nrecord 3\n");
+/// let mut compressed = Vec::new();
+/// let opts = CompressOptions {
+///     level: 3,
+///     ..CompressOptions::default()
+/// };
+///
+/// compress_to_seekable_zst_with_opts(
+///     input,
+///     &mut compressed,
+///     64 * 1024,
+///     true,
+///     b"\n",
+///     None,
+///     Some(opts),
+/// )?;
+///
+/// assert!(!compressed.is_empty());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn compress_to_seekable_zst_with_opts<R: ReadSeekable, W: Write>(
     reader: R,
     owriter: W,
@@ -205,6 +278,31 @@ pub fn compress_to_seekable_zst_with_opts<R: ReadSeekable, W: Write>(
 /// # Errors
 ///
 /// Whatever the conversion reports once halving the records per frame no longer helps.
+///
+/// # Examples
+///
+/// ```
+/// use std::io::Cursor;
+///
+/// use seekzstdsep::compress_records_to_seekable_zst_with_opts;
+/// use seekzstdsep::find::by_fixed;
+///
+/// let input = Cursor::new(b"aaaabbbbccccdddd");
+/// let mut compressed = Vec::new();
+///
+/// compress_records_to_seekable_zst_with_opts(
+///     input,
+///     &mut compressed,
+///     64 * 1024,
+///     true,
+///     by_fixed(4),
+///     None,
+///     None,
+/// )?;
+///
+/// assert!(!compressed.is_empty());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn compress_records_to_seekable_zst_with_opts<R: ReadSeekable, W: Write, F>(
     reader: R,
     owriter: W,
@@ -341,6 +439,32 @@ fn compress_with_retry<R: ReadSeekable, W: Write>(
 /// Runs [`new_convert_to_seekable_zst_reader_with_opts`] or
 /// [`old_convert_to_seekable_zst_reader_with_opts`] according to [`CURRENT_COMPRESSOR`]. The two have to
 /// agree byte for byte, which `tests/compress_equivalence.rs` is where measures.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::{CompressOptions, convert_to_seekable_zst_reader_with_opts};
+///
+/// let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+/// let mut compressed = Vec::new();
+/// let opts = CompressOptions {
+///     checksum: false,
+///     ..CompressOptions::default()
+/// };
+///
+/// convert_to_seekable_zst_reader_with_opts(
+///     input,
+///     &mut compressed,
+///     64 * 1024,
+///     true,
+///     b"\n",
+///     None,
+///     Some(opts),
+/// )?;
+///
+/// assert!(!compressed.is_empty());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
     reader: R,
     writer: W,
@@ -580,6 +704,29 @@ pub fn new_convert_to_seekable_zst_reader_with_opts<R: Read, W: Write>(
 /// # Errors
 ///
 /// A read or a write failing, and unprocessed data passing the limit.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::convert_records_to_seekable_zst_reader_with_opts;
+/// use seekzstdsep::find::by_le32_prefix;
+///
+/// let input: &[u8] = b"\x03\x00\x00\x00abc\x03\x00\x00\x00def";
+/// let mut compressed = Vec::new();
+///
+/// convert_records_to_seekable_zst_reader_with_opts(
+///     input,
+///     &mut compressed,
+///     64 * 1024,
+///     true,
+///     by_le32_prefix,
+///     None,
+///     None,
+/// )?;
+///
+/// assert!(!compressed.is_empty());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn convert_records_to_seekable_zst_reader_with_opts<R: Read, W: Write, F>(
     reader: R,
     mut writer: W,
@@ -1219,6 +1366,16 @@ pub struct InspectResult {
 use std::cell::RefCell;
 
 /// Options for [`inspect_with_opts`].
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::InspectOptions;
+///
+/// let every_frame = InspectOptions { fast_mode: false };
+///
+/// assert!(!every_frame.fast_mode);
+/// ```
 #[derive(Debug, Clone)]
 pub struct InspectOptions {
     /// Measure separators only in frame 0 and the last two frames, assuming that count for the
@@ -1228,11 +1385,47 @@ pub struct InspectOptions {
 }
 
 /// [`inspect_with_opts`] with `fast_mode: true`.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::inspect;
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-inspect.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// let frames = inspect(path, b"\n")?;
+///
+/// assert_eq!(frames.len(), 3);
+/// assert_eq!(frames[0].decomp_start, 0);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn inspect(input: PathBuf, separator: &[u8]) -> anyhow::Result<Vec<InspectResult>> {
     inspect_with_opts(input, separator, InspectOptions { fast_mode: true })
 }
 
 /// Reports the frame layout of a compressed file. Cost depends on [`InspectOptions::fast_mode`].
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::InspectOptions;
+/// use seekzstdsep::seekzstdsep_lib::inspect_with_opts;
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-inspect-with-opts.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// let frames = inspect_with_opts(path, b"\n", InspectOptions { fast_mode: false })?;
+///
+/// assert_eq!(frames.len(), 3);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn inspect_with_opts(
     input: PathBuf,
     separator: &[u8],
@@ -1250,6 +1443,26 @@ pub fn inspect_with_opts(
 /// # Errors
 ///
 /// Whatever [`inspect_with_opts`] refuses.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::InspectOptions;
+/// use seekzstdsep::find::by_fixed;
+/// use seekzstdsep::seekzstdsep_lib::inspect_records_with_opts;
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-inspect-records.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// let opts = InspectOptions { fast_mode: false };
+/// let frames = inspect_records_with_opts(path, by_fixed(9), opts)?;
+///
+/// assert_eq!(frames.len(), 3);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn inspect_records_with_opts<F>(
     input: PathBuf,
     find: F,

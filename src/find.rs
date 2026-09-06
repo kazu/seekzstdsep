@@ -23,9 +23,34 @@ use memchr::memmem::Finder;
 ///
 /// Costs one indirect call per record, which is why the crate's own paths take the finder by value
 /// wherever the type can be named.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::find::{BoxFinder, by_fixed, by_le32_prefix};
+///
+/// let prefixed: BoxFinder = Box::new(by_le32_prefix);
+/// let fixed: BoxFinder = Box::new(by_fixed(8));
+///
+/// assert_eq!(prefixed(b"\x03\x00\x00\x00abc"), Some(7));
+/// assert_eq!(fixed(b"12345678"), Some(8));
+/// ```
 pub type BoxFinder = Box<dyn Fn(&[u8]) -> Option<usize> + Send + Sync>;
 
 /// Records that end with `finder`'s needle, which is the boundary this crate started with.
+///
+/// # Examples
+///
+/// ```
+/// use memchr::memmem::Finder;
+/// use seekzstdsep::find::by_separator;
+///
+/// let finder = Finder::new(b"\n");
+/// let find = by_separator(&finder);
+///
+/// assert_eq!(find(b"record 1\nrecord 2\n"), Some(9));
+/// assert_eq!(find(b"no separator yet"), None);
+/// ```
 pub fn by_separator<'a>(finder: &'a Finder<'a>) -> impl Fn(&[u8]) -> Option<usize> + 'a {
     let separator_len = finder.needle().len();
     move |data| finder.find(data).map(|pos| pos + separator_len)
@@ -33,6 +58,15 @@ pub fn by_separator<'a>(finder: &'a Finder<'a>) -> impl Fn(&[u8]) -> Option<usiz
 
 /// Records of a `u32` little-endian length not counting itself, then that many bytes, which is
 /// what FlatBuffers' `FinishSizePrefixed` writes.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::find::by_le32_prefix;
+///
+/// assert_eq!(by_le32_prefix(b"\x03\x00\x00\x00abc"), Some(7));
+/// assert_eq!(by_le32_prefix(b"\x03\x00\x00\x00ab"), None);
+/// ```
 pub fn by_le32_prefix(data: &[u8]) -> Option<usize> {
     let n = u32::from_le_bytes(data.get(..4)?.try_into().ok()?) as usize;
     (data.len() >= 4 + n).then_some(4 + n)
@@ -42,6 +76,17 @@ pub fn by_le32_prefix(data: &[u8]) -> Option<usize> {
 ///
 /// A `len` of 0 ends no record: a record of no bytes would leave every walk standing still, so the
 /// finder reports that nothing ever ends rather than returning `Some(0)`.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::find::by_fixed;
+///
+/// let find = by_fixed(4);
+///
+/// assert_eq!(find(b"abcdefgh"), Some(4));
+/// assert_eq!(find(b"abc"), None);
+/// ```
 pub fn by_fixed(len: usize) -> impl Fn(&[u8]) -> Option<usize> {
     move |data| (len > 0 && data.len() >= len).then_some(len)
 }
@@ -51,6 +96,15 @@ pub fn by_fixed(len: usize) -> impl Fn(&[u8]) -> Option<usize> {
 /// A byte that no MessagePack value starts with ends nothing: the finder reports "not yet" as it
 /// does for a value that is only partly here, so data that is not MessagePack reads as one endless
 /// fragment rather than as a record of the wrong length.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::find::by_msgpack;
+///
+/// assert_eq!(by_msgpack(b"\xa3abc"), Some(4));
+/// assert_eq!(by_msgpack(b"\xa3ab"), None);
+/// ```
 pub fn by_msgpack(data: &[u8]) -> Option<usize> {
     // The values a container still owes, rather than recursion: nesting is the input's to choose
     // and the stack is not.
@@ -129,6 +183,27 @@ fn msgpack_len(rest: &[u8], width: usize) -> Option<u64> {
 /// A separator is kept as the bytes rather than as a finder because the paths that take one do
 /// more with it than find a boundary: they write it at a join, name it in a refusal, and hand it
 /// back from [`crate::RecordReader::separator`].
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::RecordReader;
+/// use seekzstdsep::find::{Boundary, from_spec};
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-boundary.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// let mut reader = match from_spec("sep", Some("\n"))? {
+///     Boundary::Separator(sep) => RecordReader::open(path, &sep)?,
+///     Boundary::Finder(find) => RecordReader::open_with(path, find)?,
+/// };
+///
+/// assert_eq!(reader.total_records()?, 3);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub enum Boundary {
     /// `sep`: the bytes a record ends with.
     Separator(Vec<u8>),
@@ -154,6 +229,21 @@ impl std::fmt::Debug for Boundary {
 ///
 /// A format that is not one of `sep`, `fixed`, `flatbuffers` or `msgpack`, a `fixed` without a
 /// length or with one of 0, and a parameter given to a format that takes none.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::find::{Boundary, from_spec};
+///
+/// let Boundary::Separator(sep) = from_spec("sep", Some("\t"))? else {
+///     panic!("sep names a separator");
+/// };
+/// assert_eq!(sep, b"\t");
+///
+/// assert!(matches!(from_spec("fixed", Some("16"))?, Boundary::Finder(_)));
+/// assert!(from_spec("fixed", None).is_err());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn from_spec(name: &str, param: Option<&str>) -> anyhow::Result<Boundary> {
     let takes_none = |format: &str| -> anyhow::Result<()> {
         if param.is_some() {
