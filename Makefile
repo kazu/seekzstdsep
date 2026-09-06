@@ -4,12 +4,14 @@
 # Release:
 #   make release V=0.5.0 P_NEW=0.3.1 P_OLD=0.3.0
 # V is the crate, P_NEW the plugin on $(MASTER), P_OLD the plugin on $(NU_OLD).
+# The plugin alone, with the crate left at the version it has:
+#   make release-plugin P_NEW=0.3.1 P_OLD=0.3.0
 
 REMOTE ?= gh
 MASTER ?= master
 NU_OLD ?= 0.114/nu
 
-.PHONY: ci hook changelog set-version tag push-release release
+.PHONY: ci hook changelog set-version tag push-release release release-plugin
 
 ci:
 	cargo fmt --all --check
@@ -82,6 +84,28 @@ release:
 	$(MAKE) set-version V=$(V) P=$(P_OLD)
 	$(MAKE) ci
 	git commit -am "seekzstdsep: zstdsep: release $(V) and $(P_OLD)"
+	$(MAKE) tag
+	git checkout $(MASTER)
+	$(MAKE) push-release
+	git checkout $(NU_OLD)
+	$(MAKE) push-release
+	git checkout $(MASTER)
+
+# The plugin alone. The crate keeps its number, so `tag` finds `v*` already there and adds only
+# the plugin's, and `push-release` pushes only what points at HEAD. No changelog: the file is
+# divided by the crate's tags, and the plugin's commits land under the next one.
+release-plugin:
+	@test -n "$(P_NEW)" -a -n "$(P_OLD)" || \
+	  { echo 'usage: make release-plugin P_NEW=<plugin on $(MASTER)> P_OLD=<plugin on $(NU_OLD)>' >&2; exit 1; }
+	git checkout $(MASTER)
+	$(MAKE) set-version V=$$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[]|select(.name=="seekzstdsep").version') P=$(P_NEW)
+	$(MAKE) ci
+	git commit -am "nu_plugin_zstdsep: release $(P_NEW)"
+	$(MAKE) tag
+	git checkout $(NU_OLD)
+	$(MAKE) set-version V=$$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[]|select(.name=="seekzstdsep").version') P=$(P_OLD)
+	$(MAKE) ci
+	git commit -am "nu_plugin_zstdsep: release $(P_OLD)"
 	$(MAKE) tag
 	git checkout $(MASTER)
 	$(MAKE) push-release
