@@ -8,16 +8,18 @@ use nu_protocol::{
     Category, Example, LabeledError, PipelineData, ShellError, Signature, Spanned, SyntaxShape,
     Type, shell_error::generic::GenericError,
 };
+use seekzstdsep::find::Boundary;
 use seekzstdsep::{
-    CompressOptions, CompressionLevel, OnMissingSeparator, append_records,
-    compress_to_seekable_zst_with_opts, convert_to_seekable_zst_reader_with_opts,
+    CompressOptions, CompressionLevel, OnMissingSeparator, append_records, append_records_with,
+    compress_records_to_seekable_zst_with_opts, compress_to_seekable_zst_with_opts,
+    convert_records_to_seekable_zst_reader_with_opts, convert_to_seekable_zst_reader_with_opts,
 };
 use tempfile::spooled_tempfile;
 
 use crate::ZstdsepPlugin;
-use crate::commands::{resolve, separator};
+use crate::commands::{finder, finder_flags, resolve};
 use crate::encode;
-use crate::source;
+use crate::source::{self, FinderSpec};
 
 /// Bytes held in memory before the staged records spill to a file.
 const SPOOL_LIMIT: usize = 1024 * 1024;
@@ -36,7 +38,7 @@ impl PluginCommand for Save {
     }
 
     fn description(&self) -> &str {
-        "Write the input to a seekable zstd file as separator-terminated records."
+        "Write the input to a seekable zstd file as records."
     }
 
     fn extra_description(&self) -> &str {
@@ -44,12 +46,16 @@ impl PluginCommand for Save {
          command named by the file's inner extension (`events.jsonl.seek.zst` uses `to jsonl`), \
          which --format overrides and --raw refuses; a list of strings is one record per item \
          either way.\n\n\
+         Where a record ends is --finder and --finder-arg, as in the seekzstdsep CLI: a separator \
+         (`sep`, the default, with --separator as its shorthand), a fixed length, or the framing of \
+         flatbuffers or msgpack. A record found by anything but `sep` ends with nothing, so nothing \
+         is written after it.\n\n\
          --append adds to an existing file rather than writing a new one. It is the counterpart of \
-         `zstdsep open`: what --separator says here is what has to be said there."
+         `zstdsep open`: what --finder and --finder-arg say here is what has to be said there."
     }
 
     fn signature(&self) -> Signature {
-        Signature::build(self.name())
+        let signature = Signature::build(self.name())
             .input_output_types(vec![(Type::Any, Type::Nothing)])
             .required("path", SyntaxShape::Filepath, "the file to write")
             .switch(
@@ -57,13 +63,8 @@ impl PluginCommand for Save {
                 "add the records to an existing file instead of writing a new one",
                 Some('a'),
             )
-            .switch("force", "overwrite an existing file", Some('f'))
-            .named(
-                "separator",
-                SyntaxShape::String,
-                "the separator to end records with (default: a newline)",
-                Some('s'),
-            )
+            .switch("force", "overwrite an existing file", Some('f'));
+        finder_flags(signature)
             .named(
                 "format",
                 SyntaxShape::String,
@@ -123,6 +124,11 @@ impl PluginCommand for Save {
                 description: "Add records to a file that already holds some",
                 result: None,
             },
+            Example {
+                example: "$rows | each {|row| $row | to msgpack } | zstdsep save --raw --finder msgpack rows.msgpack.seek.zst",
+                description: "One msgpack value per record, cut by its framing rather than a separator",
+                result: None,
+            },
         ]
     }
 
@@ -135,7 +141,7 @@ impl PluginCommand for Save {
     ) -> Result<PipelineData, LabeledError> {
         let path: Spanned<String> = call.req(0)?;
         let path = resolve(engine, &path.item)?;
-        let separator = separator(call.get_flag("separator")?)?;
+        let finder = finder(call)?;
         let appending = call.has_flag("append")?;
 
         let format = match (call.has_flag("raw")?, call.get_flag::<String>("format")?) {
@@ -161,7 +167,7 @@ impl PluginCommand for Save {
             engine,
             input,
             format.as_deref(),
-            separator.as_bytes(),
+            finder.separator(),
             call.head,
             &mut records,
         )?;
@@ -173,21 +179,34 @@ impl PluginCommand for Save {
             } else {
                 OnMissingSeparator::Refuse
             };
+            let boundary = finder.boundary(call.head)?;
+            if on_missing == OnMissingSeparator::Insert
+                && !matches!(boundary, Boundary::Separator(_))
+            {
+                return Err(ShellError::Generic(GenericError::new(
+                    "--insert-separator needs --finder sep",
+                    "it writes a separator at the join, and only sep has one",
+                    call.head,
+                ))
+                .into());
+            }
             let mut file = File::options()
                 .read(true)
                 .write(true)
                 .open(&path)
                 .map_err(|e| io_failed(&path, &e, call))?;
-            append_records(
-                &mut file,
-                records,
-                separator.as_bytes(),
-                on_missing,
-                CompressionLevel::default(),
-            )
+            let level = CompressionLevel::default();
+            match boundary {
+                Boundary::Separator(sep) => {
+                    append_records(&mut file, records, &sep, on_missing, level)
+                }
+                Boundary::Finder(find) => {
+                    append_records_with(&mut file, records, &*find, on_missing, level)
+                }
+            }
             .map_err(|e| failed(&path, &e.to_string(), call))?;
         } else {
-            compress(&path, &mut records, &separator, call)?;
+            compress(&path, &mut records, &finder, call)?;
         }
 
         Ok(PipelineData::Empty)
@@ -222,7 +241,7 @@ fn check_destination(path: &Path, appending: bool, call: &EvaluatedCall) -> Resu
 fn compress(
     path: &Path,
     records: &mut (impl std::io::Read + Seek),
-    separator: &str,
+    finder: &FinderSpec,
     call: &EvaluatedCall,
 ) -> Result<(), ShellError> {
     let frame_size = call.get_flag::<i64>("frame-size")?.unwrap_or(FRAME_SIZE) as usize;
@@ -246,26 +265,43 @@ fn compress(
     // A uniform separator count per frame is what locating a record by index relies on, so it is
     // not a choice the caller gets to make.
     let uniform_records_per_frame = true;
-    let result = if records_per_frame.is_some() {
-        convert_to_seekable_zst_reader_with_opts(
+    let result = match (finder.boundary(call.head)?, records_per_frame.is_some()) {
+        (Boundary::Separator(sep), true) => convert_to_seekable_zst_reader_with_opts(
             records,
             out,
             frame_size,
             uniform_records_per_frame,
-            separator.as_bytes(),
+            &sep,
             Some(limit_multiplier),
             Some(options),
-        )
-    } else {
-        compress_to_seekable_zst_with_opts(
+        ),
+        (Boundary::Separator(sep), false) => compress_to_seekable_zst_with_opts(
             records,
             out,
             frame_size,
             uniform_records_per_frame,
-            separator.as_bytes(),
+            &sep,
             Some(limit_multiplier),
             Some(options),
-        )
+        ),
+        (Boundary::Finder(find), true) => convert_records_to_seekable_zst_reader_with_opts(
+            records,
+            out,
+            frame_size,
+            uniform_records_per_frame,
+            &*find,
+            Some(limit_multiplier),
+            Some(options),
+        ),
+        (Boundary::Finder(find), false) => compress_records_to_seekable_zst_with_opts(
+            records,
+            out,
+            frame_size,
+            uniform_records_per_frame,
+            &*find,
+            Some(limit_multiplier),
+            Some(options),
+        ),
     };
     result.map_err(|e| failed(path, &e.to_string(), call))
 }

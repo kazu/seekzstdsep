@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use nu_protocol::{ShellError, Span, shell_error::generic::GenericError};
 use seekzstdsep::RecordReader;
+use seekzstdsep::find::{self, Boundary};
+use serde::{Deserialize, Serialize};
 
 /// The extension the compressor adds, and the marker the crate's own files carry before it.
 const COMPRESSED_EXTENSION: &str = "zst";
@@ -76,23 +78,64 @@ pub fn inner_extension(path: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Where a record ends, as `--finder` and `--finder-arg` name it. The plugin's `--separator` is
+/// `--finder sep --finder-arg`.
+///
+/// Kept as the names rather than as the finder they configure, because a handle has to carry it
+/// through the engine and rebuild the finder after the plugin process has been restarted. For
+/// `sep` the argument is always filled in: the newline default is applied where the flags are
+/// read, so a handle says which separator it was opened with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinderSpec {
+    /// `sep`, `fixed`, `flatbuffers` or `msgpack`, as `--finder` names it.
+    pub finder: String,
+    /// What it is configured with: the separator for `sep`, the length for `fixed`.
+    pub arg: Option<String>,
+}
+
+impl FinderSpec {
+    /// The finder the names configure, as [`find::from_spec`] resolves it.
+    pub fn boundary(&self, span: Span) -> Result<Boundary, ShellError> {
+        find::from_spec(&self.finder, self.arg.as_deref()).map_err(|e| {
+            ShellError::Generic(GenericError::new(
+                format!("--finder {} cannot be used", self.finder),
+                e.to_string(),
+                span,
+            ))
+        })
+    }
+
+    /// The bytes a record ends with, which only `sep` has. Empty for any other finder, so that a
+    /// write appends nothing and a read strips nothing.
+    pub fn separator(&self) -> &[u8] {
+        match (self.finder.as_str(), &self.arg) {
+            ("sep", Some(sep)) => sep.as_bytes(),
+            _ => b"",
+        }
+    }
+}
+
 /// A file to read, resolved: the three things every command and every cell path needs.
 #[derive(Clone, Debug)]
 pub struct Source {
     pub path: PathBuf,
-    pub separator: String,
+    pub finder: FinderSpec,
     pub format: Format,
 }
 
 impl Source {
     /// Opens the file. The reader reads the seek table and frame 0, so this is where an unreadable
-    /// file and a separator that ends no record are both reported.
+    /// file and a finder that ends no record are both reported.
     ///
-    /// A file does not record the separator it was written with, so the wrong one is an ordinary
+    /// A file does not record what it was written with, so the wrong finder is an ordinary
     /// mistake, and one that costs nothing to make: every record count would come out 0. The
     /// reader refuses it, and the reason it gives is carried through as the message here.
     pub fn open(&self, span: Span) -> Result<RecordReader, ShellError> {
-        RecordReader::open(self.path.clone(), self.separator.as_bytes()).map_err(|e| {
+        match self.finder.boundary(span)? {
+            Boundary::Separator(sep) => RecordReader::open(self.path.clone(), &sep),
+            Boundary::Finder(find) => RecordReader::open_with(self.path.clone(), find),
+        }
+        .map_err(|e| {
             ShellError::Generic(GenericError::new(
                 format!("cannot read {}", self.path.display()),
                 e.to_string(),

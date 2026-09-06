@@ -3,8 +3,10 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{RECORDS, RECORDS_PER_FRAME, compress_fixture, eval, nu};
-use nu_plugin_zstdsep::ZstdsepHandle;
+use common::{
+    FIXED_LEN, RECORDS, RECORDS_PER_FRAME, compress_fixed_fixture, compress_fixture, eval, nu,
+};
+use nu_plugin_zstdsep::{FinderSpec, ZstdsepHandle};
 use nu_protocol::{ShellError, Value};
 use tempfile::{TempDir, tempdir};
 
@@ -86,7 +88,8 @@ fn displaying_a_handle_summarises_the_file() {
         columns,
         vec![
             "path",
-            "separator",
+            "finder",
+            "finder_arg",
             "format",
             "frames",
             "records_per_frame",
@@ -352,20 +355,28 @@ fn a_stream_reads_only_as_far_as_it_is_asked_to() {
 /// file. Returning its records would be silent and wrong.
 #[test]
 fn a_handle_only_matches_the_file_it_was_made_for() {
+    let newline = FinderSpec {
+        finder: "sep".to_string(),
+        arg: Some("\n".to_string()),
+    };
+    let semicolon = FinderSpec {
+        arg: Some(";".to_string()),
+        ..newline.clone()
+    };
     let handle = ZstdsepHandle {
         id: 0,
         path: PathBuf::from("/tmp/a.jsonl.seek.zst"),
-        separator: "\n".to_string(),
+        finder: newline.clone(),
         format: Some("json".to_string()),
     };
 
-    assert!(handle.refers_to(Path::new("/tmp/a.jsonl.seek.zst"), "\n"));
+    assert!(handle.refers_to(Path::new("/tmp/a.jsonl.seek.zst"), &newline));
     assert!(
-        !handle.refers_to(Path::new("/tmp/b.jsonl.seek.zst"), "\n"),
+        !handle.refers_to(Path::new("/tmp/b.jsonl.seek.zst"), &newline),
         "another file matched"
     );
     assert!(
-        !handle.refers_to(Path::new("/tmp/a.jsonl.seek.zst"), ";"),
+        !handle.refers_to(Path::new("/tmp/a.jsonl.seek.zst"), &semicolon),
         "another separator matched"
     );
     // The format decides how a record becomes a value, not which bytes are read.
@@ -373,7 +384,7 @@ fn a_handle_only_matches_the_file_it_was_made_for() {
         format: None,
         ..handle.clone()
     };
-    assert!(raw.refers_to(Path::new("/tmp/a.jsonl.seek.zst"), "\n"));
+    assert!(raw.refers_to(Path::new("/tmp/a.jsonl.seek.zst"), &newline));
 }
 
 /// A file does not record its own separator, so the wrong one is an ordinary mistake. It used to
@@ -424,4 +435,88 @@ fn the_inner_extension_is_taken_as_written() {
         };
         assert_eq!(got, want, "{name} was read as the wrong format");
     }
+}
+
+/// A file of fixed-length records has no separator, and the CLI's `--finder fixed` is what reads
+/// it. A cell path and `inspect` both have to take the same flags, or the file is unreachable from
+/// nushell.
+#[test]
+fn finder_fixed_reads_a_file_that_has_no_separator() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let path = compress_fixed_fixture(dir.path(), "fixed.bin.seek.zst");
+    let path = path.to_string_lossy();
+    let mut nu = nu();
+    let flags = format!("--finder fixed --finder-arg {FIXED_LEN}");
+
+    let record = eval(
+        &mut nu,
+        &format!("let h = zstdsep open \"{path}\" {flags}; $h.42"),
+    )
+    .expect("Failed to read record 42")
+    .into_string()
+    .expect("the record is not a string");
+    assert_eq!(record, "rec00042");
+
+    let mut field = |name: &str| {
+        eval(
+            &mut nu,
+            &format!("(zstdsep open \"{path}\" {flags}).{name}"),
+        )
+        .expect("Failed to read the summary")
+    };
+    assert_eq!(field("finder").as_str().ok(), Some("fixed"));
+    assert_eq!(
+        field("finder_arg").as_str().ok(),
+        Some(FIXED_LEN.to_string().as_str())
+    );
+    assert_eq!(field("records").as_int().ok(), Some(RECORDS as i64));
+
+    let records = eval(
+        &mut nu,
+        &format!("zstdsep inspect \"{path}\" {flags} --no-fast-mode | get records | first"),
+    )
+    .expect("Failed to inspect")
+    .as_int()
+    .expect("records is not an integer");
+    assert_eq!(records, RECORDS_PER_FRAME as i64);
+}
+
+/// `--separator` is `--finder sep --finder-arg`, so it contradicts any other finder and doubles
+/// up with `--finder-arg`.
+#[test]
+fn separator_is_refused_beside_another_finder_or_finder_arg() {
+    let (_dir, path) = fixture("events.jsonl.seek.zst");
+    let mut nu = nu();
+
+    for flags in [
+        "--finder fixed --separator ';'",
+        "--finder-arg ';' --separator ';'",
+    ] {
+        let err = eval(&mut nu, &format!("zstdsep open \"{path}\" {flags}"))
+            .expect_err("contradicting flags were accepted");
+        assert!(
+            err.to_string().contains("--separator"),
+            "the refusal did not name --separator: {err:?}"
+        );
+    }
+}
+
+/// The library names the finders; a name it does not know comes back as its refusal, under the
+/// command the user typed.
+#[test]
+fn an_unknown_finder_is_refused() {
+    let (_dir, path) = fixture("events.jsonl.seek.zst");
+    let mut nu = nu();
+
+    let err = eval(&mut nu, &format!("zstdsep open \"{path}\" --finder csv"))
+        .expect_err("an unknown finder was accepted");
+    let ShellError::LabeledError(err) = err else {
+        panic!("the plugin's error did not survive the protocol: {err:?}");
+    };
+    assert!(
+        err.labels
+            .iter()
+            .any(|l| l.text.contains("unknown --finder csv")),
+        "the failure did not name the finder: {err:?}"
+    );
 }

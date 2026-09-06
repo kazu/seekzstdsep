@@ -5,7 +5,7 @@ use nu_protocol::{
 };
 
 use crate::ZstdsepPlugin;
-use crate::commands::{resolve, separator};
+use crate::commands::{finder, finder_flags, resolve};
 use crate::decode;
 use crate::handle::ZstdsepHandle;
 use crate::source::{Format, Source};
@@ -34,15 +34,10 @@ impl PluginCommand for Open {
     }
 
     fn signature(&self) -> Signature {
-        Signature::build(self.name())
+        let signature = Signature::build(self.name())
             .input_output_types(vec![(Type::Nothing, Type::Any)])
-            .required("path", SyntaxShape::Filepath, "the file to open")
-            .named(
-                "separator",
-                SyntaxShape::String,
-                "the separator records end with (default: a newline)",
-                Some('s'),
-            )
+            .required("path", SyntaxShape::Filepath, "the file to open");
+        finder_flags(signature)
             .named(
                 "format",
                 SyntaxShape::String,
@@ -79,6 +74,11 @@ impl PluginCommand for Open {
                 description: "Records as strings, without resolving a `from` command",
                 result: None,
             },
+            Example {
+                example: "let h = zstdsep open fixed.bin.seek.zst --finder fixed --finder-arg 512; $h.10",
+                description: "A file of 512-byte records, which has no separator to find",
+                result: None,
+            },
         ]
     }
 
@@ -91,7 +91,7 @@ impl PluginCommand for Open {
     ) -> Result<PipelineData, LabeledError> {
         let path: Spanned<String> = call.req(0)?;
         let path = resolve(engine, &path.item)?;
-        let separator = separator(call.get_flag("separator")?)?;
+        let finder = finder(call)?;
         let format = match (call.has_flag("raw")?, call.get_flag::<String>("format")?) {
             (true, _) => Format::Raw,
             (false, Some(name)) => Format::named(&name),
@@ -99,7 +99,7 @@ impl PluginCommand for Open {
         };
         let source = Source {
             path,
-            separator,
+            finder,
             format,
         };
 

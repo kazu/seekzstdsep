@@ -27,12 +27,12 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 - [ ] [`out_dir` is written out at every call site](#out_dir-is-written-out-at-every-call-site)
 - [ ] [The read window and the default frame size are not tuned](#the-read-window-and-the-default-frame-size-are-not-tuned)
 - [ ] [`cat --cnt` cannot say "to the end"](#cat---cnt-cannot-say-to-the-end)
-- [ ] [The nushell plugin cannot open a file that has no separator](#the-nushell-plugin-cannot-open-a-file-that-has-no-separator)
 
 ## Done
 
 - [x] Indexed access still holds a whole frame
 - [x] Counting a frame's records holds the whole frame
+- [x] The nushell plugin cannot open a file that has no separator
 
 ### Concurrent append, and reading during an append
 
@@ -219,27 +219,3 @@ the read stops at the last record. What is left is that the same request is writ
 one command line. `Option<u64>` on `CatArgs::cnt` makes them one, and is a change to the interface
 rather than a defect.
 
-### The nushell plugin cannot open a file that has no separator
-
-`zstdsep inspect`, `open` and `save` take `--separator` and nothing else. `source.rs` calls
-`RecordReader::open`, never `open_with`, and the plugin names neither `find::from_spec` nor
-`BoxFinder` anywhere. A file written with `compress --finder fixed`, `--finder flatbuffers` or
-`--finder msgpack` therefore cannot be read from nushell at all, though the CLI reads it.
-
-Adding `--finder` and `--finder-arg` to the three commands is the missing half of
-`docs/design/2026-09-05-record-boundary-find-record.md`, which took the boundary as a finder in the
-library and the CLI only.
-
-Finding a record and decoding one are separate, and the second half is not there for every format.
-`--format <name>` pipes a record through the `from <name>` command in the caller's scope, so
-`--finder msgpack` would pair with `--format msgpack`, and `--finder fixed` with whatever the
-records hold. **nushell has no `from flatbuffers`**, so records found by `--finder flatbuffers`
-could only come back as bytes under `--raw`. That is a reason to scope the work, not to skip it:
-`fixed` and `msgpack` are reachable today, `flatbuffers` needs a decoder that is not nushell's to
-give.
-
-Where flatbuffers is wanted, the decoder is generated rather than written here. A record cannot be
-read without its schema, so it belongs to whoever owns the `.fbs`: `flatc` emits the Rust, and a
-thin plugin around it puts `from <schema>` in scope, which `--format` already resolves and pipes
-the records through. Nothing in this crate changes for it. Untested: `call_decl` refuses a command
-defined in nushell itself, and whether it runs one a plugin provides has not been measured.

@@ -449,3 +449,82 @@ fn a_header_less_serialisation_can_be_appended_as_text() {
         vec!["a\tb", "1\tx", "2\ty", "3\tz", "4\tw"]
     );
 }
+
+/// Records found by `--finder fixed` end with nothing, so nothing is written after them and the
+/// file reads back only with the same finder.
+#[test]
+fn finder_fixed_writes_records_back_to_back() {
+    let (_dir, path, mut nu) = target("fixed.bin.seek.zst");
+
+    eval(
+        &mut nu,
+        &format!(
+            "[aaaaaaaa bbbbbbbb cccccccc] | zstdsep save --finder fixed --finder-arg 8 \"{path}\""
+        ),
+    )
+    .expect("Failed to save");
+
+    assert_eq!(
+        records_with(&mut nu, &path, "--finder fixed --finder-arg 8"),
+        vec!["aaaaaaaa", "bbbbbbbb", "cccccccc"]
+    );
+    let decompressed = eval(
+        &mut nu,
+        &format!(
+            "zstdsep inspect \"{path}\" --finder fixed --finder-arg 8 | get decomp_size | math sum"
+        ),
+    )
+    .expect("Failed to inspect")
+    .as_filesize()
+    .expect("decomp_size is not a filesize");
+    assert_eq!(
+        decompressed.get(),
+        24,
+        "something was written between the records"
+    );
+}
+
+#[test]
+fn append_takes_the_finder_too() {
+    let (_dir, path, mut nu) = target("fixed.bin.seek.zst");
+    let flags = "--finder fixed --finder-arg 4 --records-per-frame 1";
+
+    eval(
+        &mut nu,
+        &format!("[aaaa bbbb cccc] | zstdsep save {flags} \"{path}\""),
+    )
+    .expect("Failed to save");
+    eval(
+        &mut nu,
+        &format!("[dddd] | zstdsep save --append --finder fixed --finder-arg 4 \"{path}\""),
+    )
+    .expect("Failed to append");
+
+    assert_eq!(
+        records_with(&mut nu, &path, "--finder fixed --finder-arg 4"),
+        vec!["aaaa", "bbbb", "cccc", "dddd"]
+    );
+}
+
+/// `--insert-separator` writes a separator at the join, and only `sep` has one.
+#[test]
+fn insert_separator_needs_finder_sep() {
+    let (_dir, path, mut nu) = target("fixed.bin.seek.zst");
+    eval(
+        &mut nu,
+        &format!("[aaaa bbbb cccc] | zstdsep save --finder fixed --finder-arg 4 --records-per-frame 1 \"{path}\""),
+    )
+    .expect("Failed to save");
+
+    let err = eval(
+        &mut nu,
+        &format!(
+            "[dddd] | zstdsep save -a --insert-separator --finder fixed --finder-arg 4 \"{path}\""
+        ),
+    )
+    .expect_err("--insert-separator was accepted without a separator");
+    assert!(
+        err.to_string().contains("--insert-separator"),
+        "the refusal did not name the flag: {err:?}"
+    );
+}

@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use nu_plugin_test_support::PluginTest;
 use nu_plugin_zstdsep::ZstdsepPlugin;
 use nu_protocol::{ShellError, Span, Value, engine::Command};
-use seekzstdsep::{CompressOptions, compress_to_seekable_zst_with_opts};
+use seekzstdsep::find::by_fixed;
+use seekzstdsep::{
+    CompressOptions, compress_records_to_seekable_zst_with_opts, compress_to_seekable_zst_with_opts,
+};
 
 /// Records per frame the fixture is compressed into, so that the tests span more than one frame
 /// and can tell a per-frame read from a whole-file one.
@@ -81,10 +84,48 @@ fn builtins() -> Vec<Box<dyn Command>> {
         Box::new(nu_command::Columns),
         Box::new(nu_command::FromTsv),
         Box::new(nu_command::ToTsv),
+        Box::new(nu_command::MathSum),
     ]
 }
 
 /// Evaluates `source` and returns the one value it produced.
 pub fn eval(test: &mut PluginTest, source: &str) -> Result<Value, ShellError> {
     test.eval(source)?.into_value(Span::test_data())
+}
+
+/// Bytes per record of [`fixed_fixture_body`].
+pub const FIXED_LEN: usize = 8;
+
+/// [`RECORDS`] records of [`FIXED_LEN`] bytes, `seq` zero-padded, with nothing between them.
+pub fn fixed_fixture_body() -> Vec<u8> {
+    (0..RECORDS)
+        .map(|i| format!("rec{i:05}"))
+        .collect::<String>()
+        .into_bytes()
+}
+
+/// Compresses [`fixed_fixture_body`] into `dir` under `name`, in frames of [`RECORDS_PER_FRAME`],
+/// with `--finder fixed --finder-arg 8` as its boundary.
+pub fn compress_fixed_fixture(dir: &Path, name: &str) -> PathBuf {
+    let out_path = dir.join(name);
+    let mut input = std::io::Cursor::new(fixed_fixture_body());
+    let mut sink = std::io::sink();
+
+    compress_records_to_seekable_zst_with_opts(
+        &mut input,
+        &mut sink,
+        4096,
+        true,
+        by_fixed(FIXED_LEN),
+        None,
+        Some(CompressOptions {
+            out_dir: Some(dir.to_path_buf()),
+            out_path: Some(out_path.clone()),
+            max_of_separator: Some(RECORDS_PER_FRAME),
+            ..Default::default()
+        }),
+    )
+    .expect("Failed to compress the fixed-length fixture");
+
+    out_path
 }

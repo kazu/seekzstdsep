@@ -21,7 +21,7 @@ use crate::source::{Format, Source};
 /// A cell path has no engine to call, so [`Format::From`] has nothing to resolve and the record
 /// comes back as a string. `--no-partial` is where those formats get parsed.
 pub fn record(source: &Source, bytes: &[u8], span: Span) -> Result<Value, ShellError> {
-    let bytes = strip_separator(bytes, source.separator.as_bytes());
+    let bytes = strip_separator(bytes, source.finder.separator());
     match (&source.format, std::str::from_utf8(bytes)) {
         (Format::Json, Ok(text)) => json::parse(text, span),
         _ => Ok(raw_value(bytes, span)),
