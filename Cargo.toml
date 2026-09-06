@@ -36,6 +36,7 @@ memchr = "2.7.6"
 
 [dev-dependencies]
 criterion = "0.5"
+memchr = "2.7.6"
 rand = "0.9"
 rand_chacha = "0.9"
 

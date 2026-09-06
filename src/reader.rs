@@ -92,6 +92,25 @@ struct RecordsRequest {
 ///
 /// Holds the decoder, the frame list and frame 0's separator count, plus the window
 /// [`Self::record`] last read through: consecutive indices in the same frame decode it once.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::RecordReader;
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-reader.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// let mut reader = RecordReader::open(path, b"\n")?;
+///
+/// assert_eq!(reader.total_records()?, 4);
+/// assert_eq!(reader.record(1)?.unwrap(), b"record 2\n");
+/// assert_eq!(reader.records(1, 2)?, b"record 2\nrecord 3\n");
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub struct RecordReader {
     path: PathBuf,
     lookup: Lookup,
@@ -153,6 +172,23 @@ impl RecordReader {
     ///
     /// An empty `separator`, the file not opening, a seek table with no frames in it, frame 0 not
     /// decompressing, or `separator` ending no record in frame 0.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-open.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let mut reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// assert_eq!(reader.total_records()?, 3);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn open(path: PathBuf, separator: &[u8]) -> anyhow::Result<Self> {
         let file =
             File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
@@ -164,6 +200,25 @@ impl RecordReader {
     /// # Errors
     ///
     /// Whatever [`Self::open`] refuses, bar the empty separator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    /// use seekzstdsep::find::by_fixed;
+    ///
+    /// # use seekzstdsep::convert_records_to_seekable_zst_reader_with_opts as compress_records;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-open-with.seek.zst");
+    /// # let input: &[u8] = b"aaaabbbbccccdddd";
+    /// # let mut compressed = Vec::new();
+    /// # compress_records(input, &mut compressed, 64 * 1024, true, by_fixed(4), None, None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let mut reader = RecordReader::open_with(path, Box::new(by_fixed(4)))?;
+    ///
+    /// assert_eq!(reader.total_records()?, 4);
+    /// assert_eq!(reader.record(2)?.unwrap(), b"cccc");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn open_with(path: PathBuf, find: BoxFinder) -> anyhow::Result<Self> {
         let file =
             File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
@@ -171,6 +226,26 @@ impl RecordReader {
     }
 
     /// [`Self::open`] on an already-open file. `path` is carried for error messages only.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::fs::File;
+    ///
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-from-file.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let file = File::open(&path)?;
+    /// let mut reader = RecordReader::from_file(path, file, b"\n")?;
+    ///
+    /// assert_eq!(reader.total_records()?, 3);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn from_file(path: PathBuf, file: File, separator: &[u8]) -> anyhow::Result<Self> {
         record::check_separator(separator)?;
         Self::build(
@@ -188,6 +263,27 @@ impl RecordReader {
     /// # Errors
     ///
     /// Whatever [`Self::from_file`] refuses, bar the empty separator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::fs::File;
+    ///
+    /// use seekzstdsep::RecordReader;
+    /// use seekzstdsep::find::by_fixed;
+    ///
+    /// # use seekzstdsep::convert_records_to_seekable_zst_reader_with_opts as compress_records;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-from-file-with.seek.zst");
+    /// # let input: &[u8] = b"aaaabbbbccccdddd";
+    /// # let mut compressed = Vec::new();
+    /// # compress_records(input, &mut compressed, 64 * 1024, true, by_fixed(4), None, None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let file = File::open(&path)?;
+    /// let mut reader = RecordReader::from_file_with(path, file, Box::new(by_fixed(4)))?;
+    ///
+    /// assert_eq!(reader.total_records()?, 4);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn from_file_with(path: PathBuf, file: File, find: BoxFinder) -> anyhow::Result<Self> {
         Self::build(path, file, Boundary::Finder(find))
     }
@@ -234,22 +330,93 @@ impl RecordReader {
 
     /// The separator records are counted by, and an empty slice when the reader was opened with a
     /// finder instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    /// use seekzstdsep::find::by_fixed;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-separator.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let reader = RecordReader::open(path.clone(), b"\n")?;
+    /// assert_eq!(reader.separator(), b"\n");
+    ///
+    /// let reader = RecordReader::open_with(path, Box::new(by_fixed(9)))?;
+    /// assert!(reader.separator().is_empty());
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn separator(&self) -> &[u8] {
         self.boundary.separator()
     }
 
     /// How many frames the file holds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-frame-count.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// assert_eq!(reader.frame_count(), 1);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn frame_count(&self) -> usize {
         self.frames.len()
     }
 
     /// Records in frame 0, which the invariant makes the record count of every frame but the last.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-records-per-frame.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// assert_eq!(reader.records_per_frame(), 3);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn records_per_frame(&self) -> usize {
         self.sep_cnt
     }
 
     /// How many whole records the file holds. Decompresses the last frame to count it, since the
     /// invariant says nothing about how full it is.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-total-records.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let mut reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// assert_eq!(reader.total_records()?, 4);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     // FIXME: counts records that [`Self::record`] cannot reach when a frame holds more than frame 0
     // does, which this crate's compressor never writes. See `docs/bugs.md`.
     pub fn total_records(&mut self) -> anyhow::Result<usize> {
@@ -272,6 +439,24 @@ impl RecordReader {
     /// What is held is one window, not the frame the record is in: the walk is left where the
     /// record ended, and the next index in the same frame goes on from there. See
     /// [`Lookup::walk_to`] for what an index elsewhere costs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-record.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let mut reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// assert_eq!(reader.record(0)?.unwrap(), b"record 1\n");
+    /// assert_eq!(reader.record(2)?.unwrap(), b"record 3\n");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn record(&mut self, index: usize) -> anyhow::Result<Option<Vec<u8>>> {
         let frame = index / self.sep_cnt;
         if frame >= self.frames.len() {
@@ -328,6 +513,23 @@ impl RecordReader {
     /// # Errors
     ///
     /// `from` being past the last frame, or a frame not decompressing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-records.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let mut reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// assert_eq!(reader.records(1, 2)?, b"record 2\nrecord 3\n");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn records(&mut self, from: usize, cnt: usize) -> anyhow::Result<Vec<u8>> {
         let req = self.records_request(from, cnt)?;
         with_find!(&self.boundary, |find| read_records_in_frame(
@@ -347,6 +549,26 @@ impl RecordReader {
     /// # Errors
     ///
     /// `from` being past the last frame, a frame not decompressing, or `dst` refusing bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-records-to.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let mut reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// let mut out = Vec::new();
+    /// reader.records_to(1, 2, &mut out)?;
+    ///
+    /// assert_eq!(out, b"record 2\nrecord 3\n");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn records_to(
         &mut self,
         from: usize,
@@ -367,6 +589,26 @@ impl RecordReader {
     /// Scans rather than divides, so unlike [`Self::record`] it does not rest on the
     /// same-count-per-frame invariant. What follows the last separator of a frame is dropped: the
     /// compressor cuts frames at separator boundaries, so only the end of the file can hold one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-into-records.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// let records = reader.into_records().collect::<anyhow::Result<Vec<_>>>()?;
+    ///
+    /// assert_eq!(records.len(), 3);
+    /// assert_eq!(records[0], b"record 1\n");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn into_records(self) -> RecordIter {
         RecordIter {
             frames: self.frames,
@@ -381,6 +623,28 @@ impl RecordReader {
     ///
     /// The decoder this was reading frames through, rewound — no second open, no second seek
     /// table.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io::Read;
+    ///
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-into-bytes.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// let mut all = Vec::new();
+    /// reader.into_bytes()?.read_to_end(&mut all)?;
+    ///
+    /// assert_eq!(all, b"record 1\nrecord 2\nrecord 3\n");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn into_bytes(self) -> anyhow::Result<impl Read + Send + 'static> {
         let mut decoder = self.lookup.window.into_source().into_inner();
         decoder.seek(SeekFrom::Start(0))?;
@@ -392,6 +656,28 @@ impl RecordReader {
 ///
 /// Decodes each frame through the record stream's fixed window, so no frame has to fit in
 /// memory — only the record being handed out does.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::RecordReader;
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-iter.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// let reader = RecordReader::open(path, b"\n")?;
+///
+/// let mut count = 0;
+/// for record in reader.into_records() {
+///     assert!(record?.ends_with(b"\n"));
+///     count += 1;
+/// }
+/// assert_eq!(count, 3);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub struct RecordIter {
     frames: Vec<(u64, u64)>,
     /// The frame being handed out, past the last one once the iterator is spent.

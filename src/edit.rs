@@ -73,6 +73,24 @@ pub enum SeparatorCheck {
 ///
 /// Refuses a `record_len` of 0, one past the records `f` holds, or one that does not land on a
 /// frame boundary, along with the refusals every operation in [this module](crate::edit) shares.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::{RecordReader, truncate};
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-truncate.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// # let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+/// truncate(&mut f, 4, b"\n")?;
+///
+/// assert_eq!(RecordReader::open(path, b"\n")?.total_records()?, 4);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Result<()> {
     record::check_separator(separator)?;
     let finder = Finder::new(separator);
@@ -84,6 +102,25 @@ pub fn truncate(f: &mut File, record_len: u64, separator: &[u8]) -> anyhow::Resu
 /// # Errors
 ///
 /// Whatever [`truncate`] refuses, bar the empty separator.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::{RecordReader, truncate_records};
+/// use seekzstdsep::find::by_fixed;
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-truncate-records.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// # let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+/// truncate_records(&mut f, 4, by_fixed(9))?;
+///
+/// assert_eq!(RecordReader::open(path, b"\n")?.total_records()?, 4);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn truncate_records<F: Fn(&[u8]) -> Option<usize>>(
     f: &mut File,
     record_len: u64,
@@ -185,6 +222,29 @@ pub enum RangeCheck {
 ///
 /// Whatever the variant of `input` refuses, along with the refusals every operation in
 /// [this module](crate::edit) shares.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::{AppendInput, OnMissingSeparator, RecordReader, append};
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-append.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// # let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+/// let added = AppendInput::Records {
+///     data: b"record 7\nrecord 8\n" as &[u8],
+///     on_missing: OnMissingSeparator::Refuse,
+///     level: 0,
+/// };
+/// append(&mut f, added, b"\n")?;
+///
+/// assert_eq!(RecordReader::open(path, b"\n")?.total_records()?, 8);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn append<R: Read>(
     f: &mut File,
     input: AppendInput<'_, R>,
@@ -220,6 +280,25 @@ pub fn append<R: Read>(
 /// Refuses a file that does not end with a whole record unless `on_missing` is
 /// [`OnMissingSeparator::Insert`], which refuses in turn where writing one separator leaves
 /// another fragment.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::{OnMissingSeparator, RecordReader, append_records};
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-append-records.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// # let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+/// let data = b"record 7\nrecord 8\n" as &[u8];
+/// append_records(&mut f, data, b"\n", OnMissingSeparator::Refuse, 0)?;
+///
+/// assert_eq!(RecordReader::open(path, b"\n")?.total_records()?, 8);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn append_records(
     f: &mut File,
     data: impl Read,
@@ -247,6 +326,26 @@ pub fn append_records(
 /// # Errors
 ///
 /// Whatever [`append_records`] refuses, along with [`OnMissingSeparator::Insert`].
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::{OnMissingSeparator, RecordReader, append_records_with};
+/// use seekzstdsep::find::by_fixed;
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let path = std::env::temp_dir().join("seekzstdsep-doc-append-records-with.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// # let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+/// let data = b"record 7\nrecord 8\n" as &[u8];
+/// append_records_with(&mut f, data, by_fixed(9), OnMissingSeparator::Refuse, 0)?;
+///
+/// assert_eq!(RecordReader::open(path, b"\n")?.total_records()?, 8);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn append_records_with<F: Fn(&[u8]) -> Option<usize>>(
     f: &mut File,
     data: impl Read,
@@ -399,6 +498,28 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
 /// frame is short or which does not end with a whole record, and a range that does not start at the
 /// first record of a frame or end at one or at the end of `input`. Under
 /// [`RangeCheck::EveryFrame`], also a frame inside the range holding a count of its own.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::{RangeCheck, RecordReader, append_frames};
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let dir = std::env::temp_dir();
+/// # let path = dir.join("seekzstdsep-doc-append-frames.seek.zst");
+/// # let src_path = dir.join("seekzstdsep-doc-append-frames-src.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, &compressed)?;
+/// # std::fs::write(&src_path, &compressed)?;
+/// # let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+/// let src = std::fs::File::open(&src_path)?;
+/// append_frames(&mut f, &src, 0, Some(2), b"\n", RangeCheck::FirstFrame)?;
+///
+/// assert_eq!(RecordReader::open(path, b"\n")?.total_records()?, 8);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn append_frames(
     f: &mut File,
     input: &File,
@@ -417,6 +538,29 @@ pub fn append_frames(
 /// # Errors
 ///
 /// Whatever [`append_frames`] refuses, bar the empty separator.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::{RangeCheck, RecordReader, append_frames_with};
+/// use seekzstdsep::find::by_fixed;
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let dir = std::env::temp_dir();
+/// # let path = dir.join("seekzstdsep-doc-append-frames-with.seek.zst");
+/// # let src_path = dir.join("seekzstdsep-doc-append-frames-with-src.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, &compressed)?;
+/// # std::fs::write(&src_path, &compressed)?;
+/// # let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+/// let src = std::fs::File::open(&src_path)?;
+/// append_frames_with(&mut f, &src, 0, Some(2), by_fixed(9), RangeCheck::FirstFrame)?;
+///
+/// assert_eq!(RecordReader::open(path, b"\n")?.total_records()?, 8);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn append_frames_with<F: Fn(&[u8]) -> Option<usize>>(
     f: &mut File,
     input: &File,
@@ -502,6 +646,36 @@ pub fn append_frames_with<F: Fn(&[u8]) -> Option<usize>>(
 /// of the file, and a `cnt` of 0. Unless `align` is [`Alignment::NotRequired`], refuses a range
 /// whose last frame holds a record count of its own, which the frame a file ends with generally
 /// does. Along with the refusals every operation in [this module](crate::edit) shares.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::{Alignment, RecordReader, SeparatorCheck, copy_range};
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let dir = std::env::temp_dir();
+/// # let path = dir.join("seekzstdsep-doc-copy-range.seek.zst");
+/// # let out_path = dir.join("seekzstdsep-doc-copy-range-out.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// let src = std::fs::File::open(&path)?;
+/// let out = std::fs::File::create(&out_path)?;
+/// copy_range(
+///     &src,
+///     out,
+///     2,
+///     Some(2),
+///     b"\n",
+///     Alignment::Required,
+///     SeparatorCheck::FirstFrame,
+/// )?;
+///
+/// let mut reader = RecordReader::open(out_path, b"\n")?;
+/// assert_eq!(reader.records(0, 2)?, b"record 3\nrecord 4\n");
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn copy_range(
     input: &File,
     output: impl Write,
@@ -529,6 +703,37 @@ pub fn copy_range(
 /// # Errors
 ///
 /// Whatever [`copy_range`] refuses, bar the empty separator.
+///
+/// # Examples
+///
+/// ```
+/// use seekzstdsep::{Alignment, RecordReader, SeparatorCheck, copy_range_with};
+/// use seekzstdsep::find::by_fixed;
+///
+/// # use seekzstdsep::convert_to_seekable_zst_reader;
+/// # let dir = std::env::temp_dir();
+/// # let path = dir.join("seekzstdsep-doc-copy-range-with.seek.zst");
+/// # let out_path = dir.join("seekzstdsep-doc-copy-range-with-out.seek.zst");
+/// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\nrecord 5\nrecord 6\n";
+/// # let mut compressed = Vec::new();
+/// # convert_to_seekable_zst_reader(input, &mut compressed, 16, true, b"\n", None)?;
+/// # std::fs::write(&path, compressed)?;
+/// let src = std::fs::File::open(&path)?;
+/// let out = std::fs::File::create(&out_path)?;
+/// copy_range_with(
+///     &src,
+///     out,
+///     2,
+///     Some(2),
+///     by_fixed(9),
+///     Alignment::Required,
+///     SeparatorCheck::FirstFrame,
+/// )?;
+///
+/// let mut reader = RecordReader::open(out_path, b"\n")?;
+/// assert_eq!(reader.records(0, 2)?, b"record 3\nrecord 4\n");
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn copy_range_with<F: Fn(&[u8]) -> Option<usize>>(
     input: &File,
     mut output: impl Write,
