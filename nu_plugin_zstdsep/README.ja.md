@@ -181,6 +181,9 @@ nu nu_plugin_zstdsep/nu/install.nu --uninstall
 `core-open` と `core-save` は覆いを生き延びた builtin の別名で、`.seek.zst` をバイト列として読む
 唯一の方法です。
 
+hook は `--finder` と `--finder-arg` を取り、`--separator` はありません。セパレータは
+`--finder-arg ";"` で、finder のデフォルトは `sep` です。
+
 制限が 2 つあります。autoload のファイルは REPL の起動時に読まれ、`nu script.nu` では読まれないので、
 スクリプトには自前の `use .../nu/zstdsep-hook.nu *` が要ります。もう 1 つ、ハンドルは 1 つのファイルに
 結びつくので、builtin なら連結していた `open a.seek.zst b.seek.zst` は拒否されます。
