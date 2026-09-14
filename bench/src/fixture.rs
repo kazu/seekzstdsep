@@ -73,18 +73,20 @@ pub fn ensure(dir: &Path, records: u64, frame_size: usize, zstd_level: i32) -> R
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let t = tag(records);
     let raw = dir.join(format!("f{t}.jsonl"));
-    let zstd_path = dir.join(format!("f{t}.jsonl.zst"));
-    // The seek file depends on frame_size, so it carries it; the raw and plain zstd files do
-    // not, and are shared by every frame size of the same record count.
-    let seek = dir.join(format!("f{t}-fs{frame_size}.seek.zst"));
-    let meta_path = dir.join(format!("f{t}-fs{frame_size}.meta.json"));
+    let zstd_path = dir.join(format!("f{t}-l{zstd_level}.jsonl.zst"));
+    // The compressed files carry what they depend on: the plain zstd file the level, the seek
+    // file the level and the frame size. The raw file is shared by every run of the same record
+    // count.
+    let seek = dir.join(format!("f{t}-fs{frame_size}-l{zstd_level}.seek.zst"));
+    let meta_path = dir.join(format!("f{t}-fs{frame_size}-l{zstd_level}.meta.json"));
 
     let complete = [&raw, &zstd_path, &seek, &meta_path]
         .iter()
         .all(|p| p.exists());
     if complete {
         let meta: Meta = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
-        if meta.records == records && meta.frame_size == frame_size {
+        if meta.records == records && meta.frame_size == frame_size && meta.zstd_level == zstd_level
+        {
             return Ok(Fixture {
                 meta,
                 raw,
@@ -104,7 +106,7 @@ pub fn ensure(dir: &Path, records: u64, frame_size: usize, zstd_level: i32) -> R
     if !zstd_path.exists() {
         write_zstd(&raw, &zstd_path, zstd_level)?;
     }
-    write_seek(&raw, &seek, frame_size)?;
+    write_seek(&raw, &seek, frame_size, zstd_level)?;
 
     let (seek_frames, seek_rpf) = seek_stats(&seek)?;
     let meta = Meta {
@@ -146,12 +148,13 @@ fn write_zstd(src: &Path, dst: &Path, level: i32) -> Result<()> {
 
 /// Uses the library's own compressor rather than the CLI, so the double `convert` call in
 /// `src/main.rs` does not enter the fixture.
-fn write_seek(src: &Path, dst: &Path, frame_size: usize) -> Result<()> {
+fn write_seek(src: &Path, dst: &Path, frame_size: usize, level: i32) -> Result<()> {
     let mut input = File::open(src)?;
     let mut sink = std::io::sink();
     let opts = seekzstdsep::CompressOptions {
         out_dir: dst.parent().map(|p| p.to_path_buf()),
         out_path: Some(dst.to_path_buf()),
+        level,
         ..Default::default()
     };
     seekzstdsep::compress_to_seekable_zst_with_opts(
