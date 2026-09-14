@@ -560,6 +560,10 @@ fn compress_cases(
             Run::single(vec![
                 szs.to_string(),
                 "compress".into(),
+                "--frame-size".into(),
+                fx.meta.frame_size.to_string(),
+                "--level".into(),
+                level.to_string(),
                 fx.raw.to_string_lossy().into_owned(),
                 out_seek.to_string_lossy().into_owned(),
             ]),
