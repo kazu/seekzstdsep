@@ -25,7 +25,7 @@ use crate::source::{self, FinderSpec};
 const SPOOL_LIMIT: usize = 1024 * 1024;
 
 /// The compressor's defaults, which are the CLI's.
-const FRAME_SIZE: i64 = 65536;
+const FRAME_SIZE: i64 = 131072;
 const LIMIT_MULTIPLIER: i64 = 4;
 
 pub struct Save;
@@ -84,7 +84,7 @@ impl PluginCommand for Save {
             .named(
                 "frame-size",
                 SyntaxShape::Int,
-                "target size of a frame in bytes (default: 65536)",
+                "target size of a frame in bytes (default: 131072)",
                 None,
             )
             .named(

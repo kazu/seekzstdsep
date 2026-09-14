@@ -175,8 +175,8 @@ pub struct ConvertArgs {
     output: Option<PathBuf>,
     #[command(flatten)]
     boundary: BoundaryArgs,
-    /// Max frame size in bytes (default: 65536)
-    #[arg(long, default_value_t = 65536)]
+    /// Target frame size in bytes (default: 131072)
+    #[arg(long, default_value_t = 131072)]
     frame_size: usize,
     /// Limit multiplier for separator buffer (default: 4)
     #[arg(short, long, default_value = "4")]

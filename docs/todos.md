@@ -194,8 +194,8 @@ writes that combination, so the change is invisible here and a behaviour change 
 ### The read window and the default frame size are not tuned
 
 `READ_BUF_SIZE` — and `READ_FRAME_BUF_SIZE` with it — is 32 KiB
-(`src/seekzstdsep_lib.rs`). `rg` reads in 64 KiB, and `--frame-size` defaults to 65536, so the
-window is half of both. Neither number was chosen by measurement.
+(`src/seekzstdsep_lib.rs`). `rg` reads in 64 KiB, and `--frame-size` defaults to 131072, so the
+window is half of one and a quarter of the other. The frame size was measured (`docs/bench/frame-size.svg`); the window was not.
 
 Two questions, and they are not independent: whether the window should be 64 KiB to match, and
 whether the default frame size should move once it is. A window the size of a frame reads a whole

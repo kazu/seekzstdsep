@@ -44,7 +44,7 @@ stdin and the result goes to stdout. Useful options:
 | Option | Meaning |
 | --- | --- |
 | `--finder`, `--finder-arg`, `-s, --separator` | Where a record ends, as above |
-| `--frame-size <N>` | Target frame size in bytes (default 65536) |
+| `--frame-size <N>` | Target frame size in bytes (default 131072) |
 | `-c, --cnt-of-separator-per-frame <N>` | Pin records per frame instead of auto-detecting |
 | `-l, --limit-multiplier <N>` | How far past `--frame-size` to search for a separator (default 4) |
 | `--rm` | Delete the input file after a successful conversion |
@@ -54,6 +54,15 @@ stdin and the result goes to stdout. Useful options:
 `--frame-size` is a target, not a hard bound — a frame ends at the first record boundary at or past
 it, the boundary itself included, so byte sizes vary while the record count per frame stays fixed.
 Leaving the defaults alone is fine for most input; `docs/format.md` explains when it is not.
+
+The frame size trades compressed size against the time to read one record. Reading a record
+decodes the frame it is in, so that time grows with the frame; compressed size shrinks as frames
+grow, quickly up to 128 KiB and then slowly, until frames reach the zstd window (2 MiB at level 3),
+past which it hardly shrinks at all. The default of 128 KiB sits where the shrinking slows down.
+Go down to 65536 to read a little faster, or up to 2097152 to get close to plain `zstd`'s size at
+about 2.5 times the read time. Measured on 1M records, 74 MB (`docs/bench/frame-size.svg`):
+
+![Time to read one record and compressed size, by frame size](bench/frame-size.svg)
 
 Each frame ends with a content checksum. It costs 4 bytes per frame, which `docs/performances.md`
 measures against a real file, and `--no-check` drops it. A frame is checked against it only when

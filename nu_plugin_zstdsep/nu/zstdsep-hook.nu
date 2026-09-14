@@ -23,7 +23,7 @@ module zstdsep_hook {
     # `--format` and `--records-per-frame` — are branched on instead.
     const FINDER = "sep"
     const SEPARATOR = "\n"
-    const FRAME_SIZE = 65536
+    const FRAME_SIZE = 131072
     const LIMIT_MULTIPLIER = 4
 
     # What `--finder-arg` is forwarded as, or null for "not at all". `sep` has a default and is
