@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 600" width="760" height="600" role="img">
+<g transform="translate(0,0)">
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif}
+.sf{fill:#fcfcfb}.gr{stroke:#e6e5e1}.t1{fill:#0b0b0b}.t2{fill:#52514e}
+.k0{stroke:#2a78d6}.e0{fill:#2a78d6;stroke:#fcfcfb}
+.k1{stroke:#eb6834}.e1{fill:#eb6834;stroke:#fcfcfb}
+.k2{stroke:#1baf7a}.e2{fill:#1baf7a;stroke:#fcfcfb}
+.k3{stroke:#8b5cf6}.e3{fill:#8b5cf6;stroke:#fcfcfb}
+.k4{stroke:#d9a400}.e4{fill:#d9a400;stroke:#fcfcfb}
+.k5{stroke:#0e9aa7}.e5{fill:#0e9aa7;stroke:#fcfcfb}
+.k6{stroke:#c0392b}.e6{fill:#c0392b;stroke:#fcfcfb}
+.k7{stroke:#6b7280}.e7{fill:#6b7280;stroke:#fcfcfb}
+@media (prefers-color-scheme:dark){.sf{fill:#1a1a19}.gr{stroke:#33332f}.t1{fill:#f0efea}.t2{fill:#a8a79f}}
+</style>
+<rect class="sf" width="760" height="300"/>
+<text class="t1" x="64" y="24" font-size="15" font-weight="600">Level 3: time to read one record, ms (mean over 7 positions)</text>
+<line class="gr" x1="64" y1="244.0" x2="740" y2="244.0"/><text class="t2" x="56" y="248.0" font-size="12" text-anchor="end">0</text>
+<line class="gr" x1="64" y1="203.2" x2="740" y2="203.2"/><text class="t2" x="56" y="207.2" font-size="12" text-anchor="end">5</text>
+<line class="gr" x1="64" y1="162.39999999999998" x2="740" y2="162.39999999999998"/><text class="t2" x="56" y="166.39999999999998" font-size="12" text-anchor="end">10</text>
+<line class="gr" x1="64" y1="121.60000000000001" x2="740" y2="121.60000000000001"/><text class="t2" x="56" y="125.60000000000001" font-size="12" text-anchor="end">15</text>
+<line class="gr" x1="64" y1="80.79999999999998" x2="740" y2="80.79999999999998"/><text class="t2" x="56" y="84.79999999999998" font-size="12" text-anchor="end">20</text>
+<line class="gr" x1="64" y1="40.0" x2="740" y2="40.0"/><text class="t2" x="56" y="44.0" font-size="12" text-anchor="end">25</text>
+<line class="gr" x1="62.67710371819961" y1="244" x2="62.67710371819961" y2="249"/><text class="t2" x="62.67710371819961" y="264" font-size="11" text-anchor="middle">0 B</text>
+<line class="gr" x1="147.34246575342465" y1="244" x2="147.34246575342465" y2="249"/><text class="t2" x="147.34246575342465" y="264" font-size="11" text-anchor="middle">1 MiB</text>
+<line class="gr" x1="232.0078277886497" y1="244" x2="232.0078277886497" y2="249"/><text class="t2" x="232.0078277886497" y="264" font-size="11" text-anchor="middle">2 MiB</text>
+<line class="gr" x1="316.67318982387474" y1="244" x2="316.67318982387474" y2="249"/><text class="t2" x="316.67318982387474" y="264" font-size="11" text-anchor="middle">3 MiB</text>
+<line class="gr" x1="401.33855185909977" y1="244" x2="401.33855185909977" y2="249"/><text class="t2" x="401.33855185909977" y="264" font-size="11" text-anchor="middle">4 MiB</text>
+<line class="gr" x1="486.00391389432485" y1="244" x2="486.00391389432485" y2="249"/><text class="t2" x="486.00391389432485" y="264" font-size="11" text-anchor="middle">5 MiB</text>
+<line class="gr" x1="570.6692759295499" y1="244" x2="570.6692759295499" y2="249"/><text class="t2" x="570.6692759295499" y="264" font-size="11" text-anchor="middle">6 MiB</text>
+<line class="gr" x1="655.334637964775" y1="244" x2="655.334637964775" y2="249"/><text class="t2" x="655.334637964775" y="264" font-size="11" text-anchor="middle">7 MiB</text>
+<line class="gr" x1="740.0" y1="244" x2="740.0" y2="249"/><text class="t2" x="740.0" y="264" font-size="11" text-anchor="middle">8 MiB</text>
+
+<polyline class="k0" fill="none" stroke-width="2" points="64.0,234.3 65.3,234.7 68.0,234.7 73.3,234.2 83.8,233.1 105.0,231.7 147.3,228.3 232.0,221.4 401.3,213.5 740.0,200.6"/><circle class="e0" cx="64.0" cy="234.3" r="3"/><circle class="e0" cx="65.3" cy="234.7" r="3"/><circle class="e0" cx="68.0" cy="234.7" r="3"/><circle class="e0" cx="73.3" cy="234.2" r="3"/><circle class="e0" cx="83.8" cy="233.1" r="3"/><circle class="e0" cx="105.0" cy="231.7" r="3"/><circle class="e0" cx="147.3" cy="228.3" r="3"/><circle class="e0" cx="232.0" cy="221.4" r="3"/><circle class="e0" cx="401.3" cy="213.5" r="3"/><circle class="e0" cx="740.0" cy="200.6" r="3"/><text class="t2" x="73.0" y="228.7" font-size="10">1.1 ms</text><text class="t2" x="152.3" y="222.3" font-size="10">1.9 ms</text><text class="t2" x="237.0" y="215.4" font-size="10">2.8 ms</text><text class="t2" x="406.3" y="207.5" font-size="10">3.7 ms</text><text class="t2" x="735.0" y="194.6" font-size="10" text-anchor="end">5.3 ms</text>
+<polyline class="k1" fill="none" stroke-width="2" points="64.0,80.8 65.3,83.7 68.0,80.9 73.3,82.4 83.8,81.6 105.0,82.8 147.3,82.3 232.0,81.7 401.3,79.7 740.0,82.7"/><circle class="e1" cx="64.0" cy="80.8" r="3"/><circle class="e1" cx="65.3" cy="83.7" r="3"/><circle class="e1" cx="68.0" cy="80.9" r="3"/><circle class="e1" cx="73.3" cy="82.4" r="3"/><circle class="e1" cx="83.8" cy="81.6" r="3"/><circle class="e1" cx="105.0" cy="82.8" r="3"/><circle class="e1" cx="147.3" cy="82.3" r="3"/><circle class="e1" cx="232.0" cy="81.7" r="3"/><circle class="e1" cx="401.3" cy="79.7" r="3"/><circle class="e1" cx="740.0" cy="82.7" r="3"/><text class="t2" x="735.0" y="96.7" font-size="10" text-anchor="end">19.8 ms</text>
+<line class="k0" stroke-width="2" x1="76" y1="48" x2="96" y2="48"/><text class="t1" x="102" y="52" font-size="12">seekzstdsep</text>
+<line class="k1" stroke-width="2" x1="76" y1="66" x2="96" y2="66"/><text class="t1" x="102" y="70" font-size="12">plain zstd -3, decoding from the start</text>
+
+
+</g>
+<g transform="translate(0,300)">
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif}
+.sf{fill:#fcfcfb}.gr{stroke:#e6e5e1}.t1{fill:#0b0b0b}.t2{fill:#52514e}
+.k0{stroke:#2a78d6}.e0{fill:#2a78d6;stroke:#fcfcfb}
+.k1{stroke:#eb6834}.e1{fill:#eb6834;stroke:#fcfcfb}
+.k2{stroke:#1baf7a}.e2{fill:#1baf7a;stroke:#fcfcfb}
+.k3{stroke:#8b5cf6}.e3{fill:#8b5cf6;stroke:#fcfcfb}
+.k4{stroke:#d9a400}.e4{fill:#d9a400;stroke:#fcfcfb}
+.k5{stroke:#0e9aa7}.e5{fill:#0e9aa7;stroke:#fcfcfb}
+.k6{stroke:#c0392b}.e6{fill:#c0392b;stroke:#fcfcfb}
+.k7{stroke:#6b7280}.e7{fill:#6b7280;stroke:#fcfcfb}
+@media (prefers-color-scheme:dark){.sf{fill:#1a1a19}.gr{stroke:#33332f}.t1{fill:#f0efea}.t2{fill:#a8a79f}}
+</style>
+<rect class="sf" width="760" height="300"/>
+<text class="t1" x="64" y="24" font-size="15" font-weight="600">Level 3: compressed size, MB (74.2 MB raw)</text>
+<line class="gr" x1="64" y1="244.0" x2="740" y2="244.0"/><text class="t2" x="56" y="248.0" font-size="12" text-anchor="end">0</text>
+<line class="gr" x1="64" y1="193.0" x2="740" y2="193.0"/><text class="t2" x="56" y="197.0" font-size="12" text-anchor="end">1</text>
+<line class="gr" x1="64" y1="142.0" x2="740" y2="142.0"/><text class="t2" x="56" y="146.0" font-size="12" text-anchor="end">2</text>
+<line class="gr" x1="64" y1="91.0" x2="740" y2="91.0"/><text class="t2" x="56" y="95.0" font-size="12" text-anchor="end">3</text>
+<line class="gr" x1="64" y1="40.0" x2="740" y2="40.0"/><text class="t2" x="56" y="44.0" font-size="12" text-anchor="end">4</text>
+<line class="gr" x1="62.67710371819961" y1="244" x2="62.67710371819961" y2="249"/><text class="t2" x="62.67710371819961" y="264" font-size="11" text-anchor="middle">0 B</text>
+<line class="gr" x1="147.34246575342465" y1="244" x2="147.34246575342465" y2="249"/><text class="t2" x="147.34246575342465" y="264" font-size="11" text-anchor="middle">1 MiB</text>
+<line class="gr" x1="232.0078277886497" y1="244" x2="232.0078277886497" y2="249"/><text class="t2" x="232.0078277886497" y="264" font-size="11" text-anchor="middle">2 MiB</text>
+<line class="gr" x1="316.67318982387474" y1="244" x2="316.67318982387474" y2="249"/><text class="t2" x="316.67318982387474" y="264" font-size="11" text-anchor="middle">3 MiB</text>
+<line class="gr" x1="401.33855185909977" y1="244" x2="401.33855185909977" y2="249"/><text class="t2" x="401.33855185909977" y="264" font-size="11" text-anchor="middle">4 MiB</text>
+<line class="gr" x1="486.00391389432485" y1="244" x2="486.00391389432485" y2="249"/><text class="t2" x="486.00391389432485" y="264" font-size="11" text-anchor="middle">5 MiB</text>
+<line class="gr" x1="570.6692759295499" y1="244" x2="570.6692759295499" y2="249"/><text class="t2" x="570.6692759295499" y="264" font-size="11" text-anchor="middle">6 MiB</text>
+<line class="gr" x1="655.334637964775" y1="244" x2="655.334637964775" y2="249"/><text class="t2" x="655.334637964775" y="264" font-size="11" text-anchor="middle">7 MiB</text>
+<line class="gr" x1="740.0" y1="244" x2="740.0" y2="249"/><text class="t2" x="740.0" y="264" font-size="11" text-anchor="middle">8 MiB</text>
+
+<polyline class="k0" fill="none" stroke-width="2" points="64.0,65.4 65.3,89.7 68.0,104.4 73.3,116.2 83.8,123.8 105.0,128.8 147.3,151.7 232.0,176.6 401.3,187.1 740.0,191.8"/><circle class="e0" cx="64.0" cy="65.4" r="3"/><circle class="e0" cx="65.3" cy="89.7" r="3"/><circle class="e0" cx="68.0" cy="104.4" r="3"/><circle class="e0" cx="73.3" cy="116.2" r="3"/><circle class="e0" cx="83.8" cy="123.8" r="3"/><circle class="e0" cx="105.0" cy="128.8" r="3"/><circle class="e0" cx="147.3" cy="151.7" r="3"/><circle class="e0" cx="232.0" cy="176.6" r="3"/><circle class="e0" cx="401.3" cy="187.1" r="3"/><circle class="e0" cx="740.0" cy="191.8" r="3"/><text class="t2" x="73.0" y="98.4" font-size="10">2.74 MB</text><text class="t2" x="78.3" y="110.2" font-size="10">2.51 MB</text><text class="t2" x="152.3" y="145.7" font-size="10">1.81 MB</text><text class="t2" x="237.0" y="170.6" font-size="10">1.32 MB</text><text class="t2" x="406.3" y="181.1" font-size="10">1.12 MB</text><text class="t2" x="735.0" y="185.8" font-size="10" text-anchor="end">1.02 MB</text>
+<polyline class="k1" fill="none" stroke-width="2" points="64.0,195.9 65.3,195.9 68.0,195.9 73.3,195.9 83.8,195.9 105.0,195.9 147.3,195.9 232.0,195.9 401.3,195.9 740.0,195.9"/><circle class="e1" cx="64.0" cy="195.9" r="3"/><circle class="e1" cx="65.3" cy="195.9" r="3"/><circle class="e1" cx="68.0" cy="195.9" r="3"/><circle class="e1" cx="73.3" cy="195.9" r="3"/><circle class="e1" cx="83.8" cy="195.9" r="3"/><circle class="e1" cx="105.0" cy="195.9" r="3"/><circle class="e1" cx="147.3" cy="195.9" r="3"/><circle class="e1" cx="232.0" cy="195.9" r="3"/><circle class="e1" cx="401.3" cy="195.9" r="3"/><circle class="e1" cx="740.0" cy="195.9" r="3"/><text class="t2" x="735.0" y="209.9" font-size="10" text-anchor="end">0.94 MB</text>
+<line class="k0" stroke-width="2" x1="590" y1="48" x2="610" y2="48"/><text class="t1" x="616" y="52" font-size="12">seekzstdsep</text>
+<line class="k1" stroke-width="2" x1="590" y1="66" x2="610" y2="66"/><text class="t1" x="616" y="70" font-size="12">plain zstd -3</text>
+<text class="t2" x="402.0" y="288" font-size="12" text-anchor="middle">frame size</text>
+
+</g>
+</svg>

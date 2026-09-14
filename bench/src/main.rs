@@ -53,7 +53,7 @@ struct FixtureArgs {
     cache_dir: Option<PathBuf>,
     #[arg(long, default_value_t = 1_000_000)]
     records: u64,
-    #[arg(long, default_value_t = 65536)]
+    #[arg(long, default_value_t = 131072)]
     frame_size: usize,
     #[arg(long, default_value_t = 3)]
     level: i32,
@@ -86,7 +86,7 @@ struct RunArgs {
     /// Record counts to read at each position.
     #[arg(long, value_delimiter = ',', default_value = "1,10,100")]
     cnts: Vec<u64>,
-    #[arg(long, default_value_t = 65536)]
+    #[arg(long, default_value_t = 131072)]
     frame_size: usize,
     #[arg(long, default_value_t = 3)]
     level: i32,
