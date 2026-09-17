@@ -38,7 +38,6 @@ pub use seekzstdsep_lib::compress_records_to_seekable_zst_with_opts;
 pub use seekzstdsep_lib::compress_to_seekable_zst;
 pub use seekzstdsep_lib::compress_to_seekable_zst_with_opts;
 pub use seekzstdsep_lib::convert_records_to_seekable_zst_reader_with_opts;
-pub use seekzstdsep_lib::convert_text_to_seekable_zst_reader;
 pub use seekzstdsep_lib::convert_to_seekable_zst_reader;
 pub use seekzstdsep_lib::convert_to_seekable_zst_reader_with_opts;
 pub use seekzstdsep_lib::inspect;
