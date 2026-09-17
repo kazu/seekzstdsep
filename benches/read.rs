@@ -13,8 +13,9 @@
 //! cargo bench --bench read
 //! ```
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use memchr::memmem::Finder;
+use pprof::criterion::{Output, PProfProfiler};
 use std::hint::black_box;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -429,7 +430,68 @@ fn read(c: &mut Criterion) {
         }
         group.finish();
     }
+
+    {
+        // The three ways a reader walks records, through one held open, at ranges long enough to
+        // cross frames. The groups above pair a body against the one it replaced; this one has
+        // nothing to pair with, and is here to be compared against itself across commits — a
+        // change to the walk shows up as a difference in these three and in nothing else.
+        let mut group = c.benchmark_group("walk");
+        // The offsets are built once and the whole list is one iteration. A walk handed a
+        // different offset every time measures a different amount of work every time, and
+        // criterion decides for itself how many iterations a sample holds -- so two runs would not
+        // be over the same offsets at all.
+        //
+        // A stride rather than the next range along, so each call starts in a different frame and
+        // the window the last one left is never the one asked for.
+        let spread = |n: usize, span: usize| -> Vec<usize> {
+            (0..n).map(|turn| turn * 7919 % span).collect()
+        };
+        let indices = spread(400, RECORDS);
+
+        // The reader is opened per iteration and outside the timing, so every iteration starts on
+        // the same cold window rather than on wherever the last one left it, and neither side is
+        // charged for the open.
+        let open = || RecordReader::open(path.clone(), SEPARATOR).expect("no reader");
+
+        // The record count halves across the sweep because what a range read costs turns on how
+        // many frame ends it crosses, not on how many records it returns. A frame holds 555 of
+        // them here, so this sweep stays inside one: what it shows is the floor a call pays
+        // whatever the count -- the frame decoded and the records skipped to reach the range.
+        for cnt in (0..=9).rev().map(|e| 1usize << e) {
+            let froms = spread(40, RECORDS - cnt);
+            group.bench_with_input(BenchmarkId::new("records_to", cnt), &cnt, |b, &cnt| {
+                b.iter_with_setup(open, |mut reader| {
+                    for from in &froms {
+                        reader
+                            .records_to(black_box(*from), black_box(cnt), &mut std::io::sink())
+                            .unwrap()
+                    }
+                })
+            });
+        }
+
+        group.bench_function("record", |b| {
+            b.iter_with_setup(open, |mut reader| {
+                for index in &indices {
+                    black_box(reader.record(black_box(*index)).unwrap());
+                }
+            })
+        });
+
+        group.sample_size(20);
+        group.bench_function("into_records", |b| {
+            b.iter_with_setup(open, |reader| {
+                black_box(reader.into_records().filter(|r| r.is_ok()).count())
+            })
+        });
+        group.finish();
+    }
 }
 
-criterion_group!(benches, read);
+criterion_group! {
+    name = benches;
+    config = Criterion::default().with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
+    targets = read
+}
 criterion_main!(benches);
