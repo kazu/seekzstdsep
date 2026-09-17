@@ -12,6 +12,29 @@ Performance costs that are not defects live in `docs/performances.md`.
 
 Each has a command below that reproduces the stated output. Ordered by damage, worst first.
 
+- [ ] `total_records` counts records `record` cannot reach
+
+  `total_records` reads the count off the last frame; `record` forms an index by multiplying frame
+  0's count by the number of frames. A frame holding more than frame 0 puts the two out of step.
+  `total_records` answers whatever it counted either way: it walks the last frame without judging
+  it, where a read that walks the same frame under `RecordReaderVerify` refuses it. The `FIXME` on
+  `total_records` (`src/reader.rs`) points here.
+
+  What the two answer is asserted rather than printed, so the reproduction is the assertion. Frames
+  of 10, 10 and 15 hold 35 records: `total_records` counts all 35, and `record(30)` is `None`
+  because no index past 29 can be formed.
+
+  ```sh
+  cargo test --test verify a_last_frame_holding_more_than_frame_zero
+  ```
+
+  Frames of 10, 15 and 10 hold 35 as well, and there `total_records` answers 30 — the five records
+  in the middle are counted by neither.
+
+  ```sh
+  cargo test --test verify a_middle_frame_holding_more
+  ```
+
 ## Not reproduced
 
 Read off the source, not observed. Each says what would settle it.
