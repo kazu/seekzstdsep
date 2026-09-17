@@ -152,7 +152,7 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Stream<R, F> {
 ///
 /// [`Stream`] is the compress side's accumulator, which holds records until a frame is cut. This
 /// does not accumulate, which is why it is not that.
-pub(crate) struct Reader<R> {
+pub struct Reader<R> {
     /// Behind a cell because the walk reads it and the consumer takes bytes out of it while that
     /// walk is alive: both hold `&Reader`, and only [`Iterator::next`] borrows the inside mutably.
     window: RefCell<Window<R>>,
@@ -182,7 +182,7 @@ struct Window<R> {
 /// Records that lie next to each other in the window: where they start, how many bytes they take
 /// and how many records that is. [`Reader::bytes`] is the bytes.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Run {
+pub struct Run {
     start: usize,
     len: usize,
     pub(crate) count: u64,
@@ -235,6 +235,11 @@ impl<R: Read> Reader<R> {
         })
     }
 
+    /// How many records have been handed out since the window was last pointed at a region.
+    pub(crate) fn walked(&self) -> u64 {
+        self.window.borrow().walked
+    }
+
     /// Everything read and not handed out — after the source is spent, the trailing fragment.
     pub(crate) fn remainder(&self) -> Ref<'_, [u8]> {
         Ref::map(self.window.borrow(), |window| {
@@ -270,6 +275,7 @@ impl<R: Read> Reader<R> {
             reader: self,
             find,
             left: None,
+            watch: Unwatched,
         }
     }
 }
@@ -300,7 +306,15 @@ impl<R: Read> Window<R> {
 
     /// How many bytes the records that end in the window take, and how many records that is, up to
     /// `want` of them.
-    fn walk(&self, find: &impl Fn(&[u8]) -> Option<usize>, want: Option<u64>) -> (usize, u64) {
+    ///
+    /// Compiled once per watcher, which it never reads: one copy shared between the walk a read
+    /// watches and the walk it does not is a second caller, and a second caller is what stops it
+    /// being inlined into either.
+    fn walk<W: Watcher>(
+        &self,
+        find: &impl Fn(&[u8]) -> Option<usize>,
+        want: Option<u64>,
+    ) -> (usize, u64) {
         let held = &self.buf[self.pos..self.filled];
         let mut used = 0usize;
         let mut count = 0u64;
@@ -355,25 +369,152 @@ impl<R: Read> Window<R> {
 ///
 /// Records in a run are next to each other in the window, so a run goes out in one write of the
 /// decoder's own bytes.
-pub(crate) struct Records<'a, R, F> {
+pub(crate) struct Records<'a, R, F, W = Unwatched> {
     reader: &'a Reader<R>,
     find: F,
     /// Records still wanted, or `None` for all of them.
     left: Option<u64>,
+    watch: W,
 }
 
-impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Iterator for Records<'_, R, F> {
+/// What a walk tells as it hands out runs.
+///
+/// The walk is compiled once per watcher, so what a watcher asks of it leaves no trace in a walk
+/// nobody watches.
+pub trait Watcher {
+    /// Whether anything is listening.
+    const WATCHES: bool;
+
+    /// Called with the run just handed out, once it is counted in the window.
+    fn saw<R: Read>(
+        &mut self,
+        reader: &Reader<R>,
+        run: &Run,
+        find: &impl Fn(&[u8]) -> Option<usize>,
+    ) -> anyhow::Result<()>;
+
+    /// Called where the walk stops with the source spent and records still wanted.
+    ///
+    /// An offset the walk never reached is not reported by [`Self::saw`], and a walk that runs out
+    /// inside a region has reached nothing past where it stopped. What is left there is a fragment
+    /// of a record rather than one, so the last stretch the walk covered is told about here or not
+    /// at all.
+    fn spent<R: Read>(&mut self, reader: &Reader<R>) -> anyhow::Result<()>;
+}
+
+/// The watcher of a walk nobody watches.
+pub struct Unwatched;
+
+impl Watcher for Unwatched {
+    const WATCHES: bool = false;
+
+    #[inline]
+    fn saw<R: Read>(
+        &mut self,
+        _reader: &Reader<R>,
+        _run: &Run,
+        _find: &impl Fn(&[u8]) -> Option<usize>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[inline]
+    fn spent<R: Read>(&mut self, _reader: &Reader<R>) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// Byte offsets a walk is watched against, counted from where the window was pointed and in order,
+/// and what to call with the offset's place among them, the records that ended before it, and
+/// whether one ended on it.
+pub struct Watch<'a> {
+    at: Vec<u64>,
+    next: usize,
+    /// Bytes the runs reported so far came to. Kept here rather than by the window, which would
+    /// then count them for every walk, watched or not.
+    seen: u64,
+    passed: Box<dyn FnMut(usize, u64, bool) -> anyhow::Result<()> + 'a>,
+}
+
+impl<'a> Watch<'a> {
+    pub(crate) fn new(
+        at: Vec<u64>,
+        passed: impl FnMut(usize, u64, bool) -> anyhow::Result<()> + 'a,
+    ) -> Self {
+        Self {
+            at,
+            next: 0,
+            seen: 0,
+            passed: Box::new(passed),
+        }
+    }
+
+    /// Watched against no offset at all, for a read that verifies elsewhere than in its runs.
+    ///
+    /// Not [`Unwatched`]: that one is the walk of a read that verifies nothing, and a walk shared
+    /// with it is a walk that stops being inlined into it. The closure captures nothing, so the
+    /// box is of no size and allocates nothing.
+    pub(crate) fn nothing() -> Self {
+        Self::new(Vec::new(), |_, _, _| Ok(()))
+    }
+}
+
+impl Watcher for Watch<'_> {
+    const WATCHES: bool = true;
+
+    /// Reports every offset the run just handed out reached.
+    ///
+    /// A run holds the records that lie next to each other in the window, so one straddles an
+    /// offset: the records before it are counted by scanning that much of the run again.
+    fn saw<R: Read>(
+        &mut self,
+        reader: &Reader<R>,
+        run: &Run,
+        find: &impl Fn(&[u8]) -> Option<usize>,
+    ) -> anyhow::Result<()> {
+        let began = self.seen;
+        let ended = began + run.len as u64;
+        self.seen = ended;
+        if self.next >= self.at.len() || self.at[self.next] > ended {
+            return Ok(());
+        }
+        let bytes = reader.bytes(run);
+        let walked = reader.walked() - run.count;
+        while self.next < self.at.len() && self.at[self.next] <= ended {
+            let upto = (self.at[self.next] - began) as usize;
+            let before = walked + count(&bytes[..upto], find) as u64;
+            (self.passed)(self.next, before, ends_whole(&bytes[..upto], find))?;
+            self.next += 1;
+        }
+        Ok(())
+    }
+
+    /// Reports the stretch the walk stopped in as if the offset it never reached were where it
+    /// stopped: everything it walked belongs to that stretch, and what is left over is not a
+    /// record.
+    fn spent<R: Read>(&mut self, reader: &Reader<R>) -> anyhow::Result<()> {
+        if self.next >= self.at.len() {
+            return Ok(());
+        }
+        (self.passed)(self.next, reader.walked(), reader.remainder().is_empty())?;
+        self.next += 1;
+        Ok(())
+    }
+}
+
+impl<R: Read, F: Fn(&[u8]) -> Option<usize>, W: Watcher> Iterator for Records<'_, R, F, W> {
     type Item = anyhow::Result<Run>;
 
     /// The next run, refilling the window until one turns up. `None` once the source is spent or
-    /// the count asked for is reached.
+    /// the count asked for is reached. A watcher is told about the run before it goes out, and
+    /// what it refuses comes back as the item's error.
     fn next(&mut self) -> Option<Self::Item> {
         if self.left == Some(0) {
             return None;
         }
         let mut window = self.reader.window.borrow_mut();
         loop {
-            let (used, count) = window.walk(&self.find, self.left);
+            let (used, count) = window.walk::<W>(&self.find, self.left);
             if count > 0 {
                 let run = Run {
                     start: window.pos,
@@ -385,6 +526,12 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Iterator for Records<'_, R, F> {
                 window.on_boundary = true;
                 if let Some(left) = self.left.as_mut() {
                     *left -= count;
+                }
+                if W::WATCHES {
+                    drop(window);
+                    if let Err(e) = self.watch.saw(self.reader, &run, &self.find) {
+                        return Some(Err(e));
+                    }
                 }
                 return Some(Ok(run));
             }
@@ -398,7 +545,19 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Iterator for Records<'_, R, F> {
     }
 }
 
-impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Records<'_, R, F> {
+impl<'a, R: Read, F: Fn(&[u8]) -> Option<usize>> Records<'a, R, F> {
+    /// Told about every run this hands out.
+    pub(crate) fn watching<W: Watcher>(self, watch: W) -> Records<'a, R, F, W> {
+        Records {
+            reader: self.reader,
+            find: self.find,
+            left: self.left,
+            watch,
+        }
+    }
+}
+
+impl<R: Read, F: Fn(&[u8]) -> Option<usize>, W: Watcher> Records<'_, R, F, W> {
     /// At most `n` records in all. [`Iterator::take`] counts runs, which is not the same question.
     pub(crate) fn take_records(mut self, n: u64) -> Self {
         self.left = Some(n);
@@ -406,11 +565,12 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Records<'_, R, F> {
     }
 
     /// Past the first `n` records, and how many there were to pass. Fewer than `n` means the
-    /// source ended first, which is not an error to every caller.
+    /// source ended first, which is not an error to every caller — but a watcher is told where the
+    /// walk stopped, since that offset is one it will never reach.
     ///
     /// # Errors
     ///
-    /// A read failing.
+    /// A read failing, or a watcher refusing where the walk stopped.
     pub(crate) fn skip_up_to(mut self, n: u64) -> anyhow::Result<(Self, u64)> {
         if n == 0 {
             return Ok((self, 0));
@@ -420,6 +580,9 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Records<'_, R, F> {
         let skipped = self
             .by_ref()
             .try_fold(0u64, |skipped, run| run.map(|run| skipped + run.count))?;
+        if W::WATCHES && skipped < n {
+            self.watch.spent(self.reader)?;
+        }
         self.left = wanted;
         Ok((self, skipped))
     }
@@ -428,7 +591,8 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Records<'_, R, F> {
     ///
     /// # Errors
     ///
-    /// The source ending before `n` of them, or a read failing.
+    /// The source ending before `n` of them, or a read failing. A watcher sees the walk run out
+    /// first, so what it refuses there is what a caller gets rather than the shortfall.
     pub(crate) fn skip_records(self, n: u64) -> anyhow::Result<Self> {
         let (records, skipped) = self.skip_up_to(n)?;
         if skipped < n {
@@ -450,11 +614,12 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Records<'_, R, F> {
     /// Writes them to `dst`, one write per run.
     ///
     /// When the source ends before the count asked for, what followed the last record goes to
-    /// `dst` as well: that is what a whole-span read returned.
+    /// `dst` as well: that is what a whole-span read returned. A watcher is told where the walk
+    /// stopped first, so a refusal there is raised before that fragment is written.
     ///
     /// # Errors
     ///
-    /// A read failing, or `dst` refusing bytes.
+    /// A read failing, `dst` refusing bytes, or a watcher refusing what the walk passed.
     pub(crate) fn write_to(mut self, dst: &mut impl Write) -> anyhow::Result<()> {
         let reader = self.reader;
         self.by_ref().try_for_each(|run| -> anyhow::Result<()> {
@@ -462,6 +627,9 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Records<'_, R, F> {
             Ok(())
         })?;
         if self.left.is_some_and(|left| left > 0) {
+            if W::WATCHES {
+                self.watch.spent(reader)?;
+            }
             dst.write_all(&reader.remainder())?;
         }
         Ok(())

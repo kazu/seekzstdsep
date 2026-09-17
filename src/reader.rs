@@ -4,13 +4,13 @@
 //! opened per range pays for all three every time. [`RecordReader`] is those three held open, so a
 //! caller that reads one record at a time — the nushell plugin's cell paths, say — pays once.
 //!
-//! The reader inherits the same-count-per-frame invariant that it locates records by: a
-//! file compressed without it is read at the wrong offsets and reports no error. See
-//! `docs/format.md`.
+//! The reader inherits the same-count-per-frame invariant that it locates records by: a file
+//! compressed without it is read at the wrong offsets, and says so only under
+//! [`RecordReaderVerify`]. See `docs/format.md`.
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Take, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::Context;
@@ -111,7 +111,7 @@ struct RecordsRequest {
 /// assert_eq!(reader.records(1, 2)?, b"record 2\nrecord 3\n");
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct RecordReader {
+pub struct RecordReader<V: Verifier = NoVerify> {
     path: PathBuf,
     lookup: Lookup,
     frames: Vec<(u64, u64)>,
@@ -119,7 +119,12 @@ pub struct RecordReader {
     /// Records in frame 0, taken as the record count of every frame. Never 0: every record range
     /// divides by it, and [`Self::from_file`] refuses a boundary that leaves it 0.
     sep_cnt: usize,
+    judge: V::Judge,
 }
+
+/// A [`RecordReader`] that judges the frames it walks. [`RecordReader::verifying`] is how one is
+/// made.
+pub type RecordReaderVerify = RecordReader<AsRead>;
 
 /// Where the reader finds records, held so that the public type gains no parameter.
 ///
@@ -141,6 +146,241 @@ impl Boundary {
             Self::Finder(_) => &[],
         }
     }
+}
+
+/// How far a read goes to confirm what it is asked to verify, as a type rather than a value:
+/// [`RecordReader`] is [`NoVerify`] and [`RecordReaderVerify`] is [`AsRead`].
+///
+/// The reads themselves are written once per verifier, in the `impl` for that one, so what a
+/// verifier asks of a read leaves no trace in the reader that asks for nothing. What the two share
+/// is the reader's fields, and the one the verifier adds is [`Self::Judge`], of no size at all for
+/// [`NoVerify`].
+///
+/// [`NoVerify`] and [`AsRead`] are the two this crate reads through. What [`Self::Watch`] has to
+/// be is the crate's own and has no name outside it, so a third implementation can only borrow one
+/// of theirs through `<AsRead as Verifier>::Watch` — which is why [`Self::watch`] answers for
+/// arguments no reader would hand it rather than trusting the caller.
+pub trait Verifier {
+    /// Whether a read judges anything at all, for a read the two verifiers can share: one body
+    /// branching on this compiles to the arm its verifier takes, and the other arm is not there.
+    const VERIFIES: bool;
+
+    /// What the read has to keep to judge the frames it walks.
+    type Judge: Judge;
+
+    /// What the walk of a read is told to: nothing at all for [`NoVerify`], the frame ends for
+    /// [`AsRead`].
+    type Watch<'a>: record::Watcher;
+
+    /// What to watch the walk of `[start, start + len)` with, the read having been placed by
+    /// record `from` of a file holding `per_frame` records to a frame.
+    ///
+    /// Where the frames end is worked out here rather than by the read, so that the read that
+    /// watches nothing neither counts them nor allocates the list. A `per_frame` of 0, or a `from`
+    /// past the last frame, leaves no frame end to reach and is watched against none.
+    fn watch<'j>(
+        judge: &'j Self::Judge,
+        frames: &[(u64, u64)],
+        per_frame: usize,
+        from: usize,
+        start: u64,
+        len: u64,
+    ) -> Self::Watch<'j>;
+
+    /// What to watch a walk with that has no frame end to report — one that stops inside a frame,
+    /// and is judged where it stops rather than as it goes.
+    ///
+    /// Not the unwatched walk for [`AsRead`]: that one is the walk of a read that verifies
+    /// nothing, and a walk shared with it is a walk that stops being inlined into it.
+    fn watch_nothing<'j>() -> Self::Watch<'j>;
+}
+
+/// Reads without judging the frames it walks. What [`RecordReader`] is unless it is turned into
+/// the other one.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoVerify;
+
+/// Refuses a frame the read walks to the end of whose record count is not frame 0's, or that holds
+/// bytes after its last record. The frame the file ends with may hold fewer records and may hold
+/// the bytes; holding more is refused there too.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AsRead;
+
+impl Verifier for NoVerify {
+    const VERIFIES: bool = false;
+    type Judge = ();
+    type Watch<'a> = record::Unwatched;
+
+    #[inline]
+    fn watch(
+        _judge: &(),
+        _frames: &[(u64, u64)],
+        _per_frame: usize,
+        _from: usize,
+        _start: u64,
+        _len: u64,
+    ) -> record::Unwatched {
+        record::Unwatched
+    }
+
+    #[inline]
+    fn watch_nothing<'j>() -> Self::Watch<'j> {
+        record::Unwatched
+    }
+}
+
+impl Verifier for AsRead {
+    const VERIFIES: bool = true;
+    type Judge = FrameJudge;
+    type Watch<'a> = record::Watch<'a>;
+
+    fn watch<'j>(
+        judge: &'j FrameJudge,
+        frames: &[(u64, u64)],
+        per_frame: usize,
+        from: usize,
+        start: u64,
+        len: u64,
+    ) -> record::Watch<'j> {
+        // A file with no records to a frame, or a read placed past the last frame, has no frame
+        // end for the walk to reach. A reader never asks either — its count is never 0 and a read
+        // past the end is refused before it walks — but this is reachable from outside the crate.
+        if per_frame == 0 {
+            return record::Watch::nothing();
+        }
+        let first = from / per_frame;
+        if first >= frames.len() {
+            return record::Watch::nothing();
+        }
+        watch_frames(judge, first, frame_ends_from(frames, first, start, len))
+    }
+
+    fn watch_nothing<'j>() -> record::Watch<'j> {
+        record::Watch::nothing()
+    }
+}
+
+/// What a walk asks about each frame it reaches the end of.
+///
+/// The one that judges nothing is `()`, whose calls compile away and whose size is nothing, so a
+/// walk that holds one is the walk that was there before any of this.
+/// What is asked is passed as a closure rather than a value: the judge that judges nothing never
+/// calls it, so a read that keeps one does not go and count what it would have been asked about.
+pub trait Judge {
+    /// Built from what a refusal has to name and hold every frame to.
+    fn new(path: PathBuf, last: usize, per_frame: u64) -> Self;
+
+    /// Refuses the frame at `i` for the records it turns out to hold.
+    fn count(&self, i: usize, held: impl FnOnce() -> u64) -> anyhow::Result<()>;
+
+    /// Refuses the frame at `i` for holding bytes after its last record.
+    fn ends_whole(&self, i: usize, ends_whole: impl FnOnce() -> bool) -> anyhow::Result<()>;
+}
+
+impl Judge for () {
+    #[inline]
+    fn new(_path: PathBuf, _last: usize, _per_frame: u64) -> Self {}
+
+    #[inline]
+    fn count(&self, _i: usize, _held: impl FnOnce() -> u64) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[inline]
+    fn ends_whole(&self, _i: usize, _ends_whole: impl FnOnce() -> bool) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// What [`AsRead`] holds to judge a frame: the file to name in a refusal, the last frame's index
+/// because only that one may hold fewer records, and the count every other frame has to hold.
+pub struct FrameJudge {
+    path: PathBuf,
+    last: usize,
+    per_frame: u64,
+}
+
+impl Judge for FrameJudge {
+    fn new(path: PathBuf, last: usize, per_frame: u64) -> Self {
+        Self {
+            path,
+            last,
+            per_frame,
+        }
+    }
+
+    fn count(&self, i: usize, held: impl FnOnce() -> u64) -> anyhow::Result<()> {
+        verify_frame_count(&self.path, i, self.last, held(), self.per_frame)
+    }
+
+    fn ends_whole(&self, i: usize, ends_whole: impl FnOnce() -> bool) -> anyhow::Result<()> {
+        verify_frame_ends_whole(&self.path, i, self.last, ends_whole())
+    }
+}
+
+/// Refuses frame `i` holding a count other than `per_frame`. Only the frame the file ends with may
+/// hold fewer.
+fn verify_frame_count(
+    path: &Path,
+    i: usize,
+    last: usize,
+    held: u64,
+    per_frame: u64,
+) -> anyhow::Result<()> {
+    if held != per_frame && !(i == last && held < per_frame) {
+        anyhow::bail!(
+            "frame {i} of {} holds {held} records rather than {per_frame}: a record index is \
+             resolved by dividing it by the count frame 0 holds, so a frame holding another count \
+             is read at the wrong offsets",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Where the frames covering `[start, start + len)` end, as byte offsets from `start`, `first`
+/// being the frame `start` is the start of.
+///
+/// The ends are a prefix of `frames[first..]`, so the n'th of them is frame `first + n` and a
+/// refusal names the frame it judged. A frame that cannot be counted from `start` ends the prefix
+/// rather than being passed over: skipping one would hand the next frame's end under its index. A
+/// reader hands no such frame — `first` is the frame `start` begins — but [`AsRead::watch`] is
+/// reachable from outside the crate.
+fn frame_ends_from(frames: &[(u64, u64)], first: usize, start: u64, len: u64) -> Vec<u64> {
+    frames[first..]
+        .iter()
+        .map(|&(frame_start, frame_len)| frame_start.checked_add(frame_len)?.checked_sub(start))
+        .take_while(|end| end.is_some_and(|end| end <= len))
+        .flatten()
+        .collect()
+}
+
+/// What judges the frames a read walks past, frame `first` being the one the walk starts in.
+fn watch_frames<J: Judge>(judge: &J, first: usize, ends: Vec<u64>) -> record::Watch<'_> {
+    let mut walked = 0;
+    record::Watch::new(ends, move |i, before, ends_whole| {
+        let frame = first + i;
+        judge.count(frame, || before - walked)?;
+        walked = before;
+        judge.ends_whole(frame, || ends_whole)
+    })
+}
+
+/// Refuses frame `i` holding bytes after its last record. Only the frame the file ends with may.
+fn verify_frame_ends_whole(
+    path: &Path,
+    i: usize,
+    last: usize,
+    ends_whole: bool,
+) -> anyhow::Result<()> {
+    if !ends_whole && i != last {
+        anyhow::bail!(
+            "frame {i} of {} holds bytes after its last record: a record spans its end, so the \
+             frames do not divide the file into records and a count per frame does not place them",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// Runs the body with `find` bound to the reader's record boundary.
@@ -165,7 +405,7 @@ macro_rules! with_find {
     };
 }
 
-impl RecordReader {
+impl RecordReader<NoVerify> {
     /// Opens `path` and reads its seek table and frame 0's record count.
     ///
     /// # Errors
@@ -301,6 +541,7 @@ impl RecordReader {
             frames,
             boundary,
             sep_cnt: 0,
+            judge: (),
         };
         let (start, len) = reader.frames[0];
         reader.sep_cnt = with_find!(&reader.boundary, |find| count_records_in_frame(
@@ -323,6 +564,48 @@ impl RecordReader {
         Ok(reader)
     }
 
+    /// The same reader, judging the frames it walks from here on.
+    ///
+    /// A read placed by a frame it never walks is not covered: nothing counts that frame.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-verifying.seek.zst");
+    /// # let input: &[u8] = b"aaaa\nb\nb\nb\nb\nb\nb\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 6, false, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// // Seven records in frames of 2, 3 and 2: the counts were left to the byte target.
+    /// let mut reader = RecordReader::open(path, b"\n")?.verifying();
+    ///
+    /// // A read inside frame 0 is answered; one that walks into frame 1 is not.
+    /// assert_eq!(reader.records(0, 2)?, b"aaaa\nb\n");
+    /// let err = reader.records(0, 7).unwrap_err();
+    /// assert!(err.to_string().contains("frame 1"));
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn verifying(self) -> RecordReaderVerify {
+        let judge = FrameJudge::new(
+            self.path.clone(),
+            self.frames.len() - 1,
+            self.sep_cnt as u64,
+        );
+        RecordReader {
+            path: self.path,
+            lookup: self.lookup,
+            frames: self.frames,
+            boundary: self.boundary,
+            sep_cnt: self.sep_cnt,
+            judge,
+        }
+    }
+}
+
+impl<V: Verifier> RecordReader<V> {
     /// The file this reads from.
     pub fn path(&self) -> &PathBuf {
         &self.path
@@ -431,6 +714,219 @@ impl RecordReader {
         Ok(self.sep_cnt * last + in_last)
     }
 
+    /// The whole file decompressed, from the start, as a byte stream.
+    ///
+    /// The decoder this was reading frames through, rewound — no second open, no second seek
+    /// table.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io::Read;
+    ///
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-into-bytes.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// let mut all = Vec::new();
+    /// reader.into_bytes()?.read_to_end(&mut all)?;
+    ///
+    /// assert_eq!(all, b"record 1\nrecord 2\nrecord 3\n");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn into_bytes(self) -> anyhow::Result<impl Read + Send + 'static> {
+        let mut decoder = self.lookup.window.into_source().into_inner();
+        decoder.seek(SeekFrom::Start(0))?;
+        Ok(decoder)
+    }
+
+    /// What a read of `cnt` records from `from` has to ask
+    /// [`records_between_by_separator_in_frame`] for.
+    ///
+    /// # Errors
+    ///
+    /// `from` being past the last frame.
+    fn records_request(&self, from: usize, cnt: usize) -> anyhow::Result<RecordsRequest> {
+        let total_sep_cnt = self.sep_cnt * self.frames.len();
+        let frame_idx = self.frames.len().saturating_mul(from) / total_sep_cnt;
+        if frame_idx >= self.frames.len() {
+            return Err(anyhow::anyhow!(
+                "record {from} is past the end of {}",
+                self.path.display()
+            ));
+        }
+        let idx_in_frame = from % self.sep_cnt;
+        let start = self.frames[frame_idx].0;
+
+        let end = from.saturating_add(cnt).saturating_add(1);
+        let end_frame_idx =
+            (self.frames.len().saturating_mul(end) / total_sep_cnt).min(self.frames.len() - 1);
+        let len = self.frames[end_frame_idx].0 + self.frames[end_frame_idx].1 - start;
+        Ok(RecordsRequest {
+            start,
+            len,
+            skip: idx_in_frame as u64,
+        })
+    }
+
+    /// `cnt` records from `from`, or fewer when the file holds fewer, gathered into a `Vec`.
+    /// [`Self::records_to`] writes the same records without building it.
+    ///
+    /// The frame is found by dividing `from` by the separator count of frame 0, so this rests on
+    /// every frame holding the same count. On a file compressed without that invariant it returns
+    /// the wrong records, and reports it only under [`RecordReaderVerify`].
+    ///
+    /// # Errors
+    ///
+    /// `from` being past the last frame, or a frame not decompressing. Under
+    /// [`RecordReaderVerify`], also a frame the walk leaves behind that it refuses.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-records.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let mut reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// assert_eq!(reader.records(1, 2)?, b"record 2\nrecord 3\n");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn records(&mut self, from: usize, cnt: usize) -> anyhow::Result<Vec<u8>> {
+        // A whole-span read has no walk to watch, so the verifying one takes the route that has
+        // one and gathers what it writes. The other arm is not compiled for either.
+        if V::VERIFIES {
+            let mut out = Vec::new();
+            self.records_to(from, cnt, &mut out)?;
+            return Ok(out);
+        }
+        let req = self.records_request(from, cnt)?;
+        with_find!(&self.boundary, |find| read_records_in_frame(
+            self.lookup.load_decoder(),
+            req.start,
+            req.len,
+            req.skip,
+            cnt as u64,
+            find,
+        ))
+    }
+
+    /// [`Self::records`] into `dst`: the same `cnt` records from `from`, written as they are
+    /// decoded instead of gathered into a `Vec`, so no more than the window is held at once.
+    /// Decoding stops within one window of the separator that ends the last record asked for.
+    ///
+    /// # Errors
+    ///
+    /// `from` being past the last frame, a frame not decompressing, or `dst` refusing bytes. Under
+    /// [`RecordReaderVerify`], also a frame the walk leaves behind that it refuses; the records
+    /// walked before such a refusal have already gone to `dst`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-records-to.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let mut reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// let mut out = Vec::new();
+    /// reader.records_to(1, 2, &mut out)?;
+    ///
+    /// assert_eq!(out, b"record 2\nrecord 3\n");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn records_to(
+        &mut self,
+        from: usize,
+        cnt: usize,
+        dst: &mut impl Write,
+    ) -> anyhow::Result<()> {
+        let req = self.records_request(from, cnt)?;
+        let watch = V::watch(
+            &self.judge,
+            &self.frames,
+            self.sep_cnt,
+            from,
+            req.start,
+            req.len,
+        );
+        let reader = record::region(self.lookup.load_decoder(), req.start, req.len)?;
+        with_find!(&self.boundary, |find| reader
+            .records(find)
+            .watching(watch)
+            .skip_records(req.skip)?
+            .take_records(cnt as u64)
+            .write_to(dst))
+    }
+}
+
+impl RecordReader<AsRead> {
+    /// [`RecordReader::into_records`], stopping at the first frame [`AsRead`] refuses — one
+    /// holding a count other than frame 0's, or bytes after its last record.
+    pub fn into_records(self) -> RecordIter<AsRead> {
+        RecordIter {
+            frames: self.frames,
+            frame: 0,
+            armed: false,
+            boundary: self.boundary,
+            reader: self.lookup.window,
+            judge: self.judge,
+        }
+    }
+}
+
+impl RecordReader<NoVerify> {
+    /// Every whole record in the file, in order, decoding a window at a time.
+    ///
+    /// Scans rather than divides, so unlike [`Self::record`] it does not rest on the
+    /// same-count-per-frame invariant. What follows the last separator of a frame is dropped: the
+    /// compressor cuts frames at separator boundaries, so only the end of the file can hold one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-into-records.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// let records = reader.into_records().collect::<anyhow::Result<Vec<_>>>()?;
+    ///
+    /// assert_eq!(records.len(), 3);
+    /// assert_eq!(records[0], b"record 1\n");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn into_records(self) -> RecordIter {
+        RecordIter {
+            frames: self.frames,
+            frame: 0,
+            armed: false,
+            boundary: self.boundary,
+            reader: self.lookup.window,
+            judge: (),
+        }
+    }
     /// Record `index`, or `None` when the file holds no such whole record.
     ///
     /// The returned bytes carry the separator, as [`Self::records`] does. A trailing fragment with
@@ -473,182 +969,46 @@ impl RecordReader {
             records.next_owned()
         })
     }
+}
 
-    /// What a read of `cnt` records from `from` has to ask
-    /// [`records_between_by_separator_in_frame`] for.
+impl RecordReader<AsRead> {
+    /// [`RecordReader::record`], refusing a frame the walk ran out in that holds a record count of
+    /// its own.
     ///
     /// # Errors
     ///
-    /// `from` being past the last frame.
-    fn records_request(&self, from: usize, cnt: usize) -> anyhow::Result<RecordsRequest> {
-        let total_sep_cnt = self.sep_cnt * self.frames.len();
-        let frame_idx = self.frames.len().saturating_mul(from) / total_sep_cnt;
-        if frame_idx >= self.frames.len() {
-            return Err(anyhow::anyhow!(
-                "record {from} is past the end of {}",
-                self.path.display()
-            ));
+    /// A frame the walk ran out in that holds a count other than frame 0's — where
+    /// [`RecordReader::record`] answers `None`.
+    pub fn record(&mut self, index: usize) -> anyhow::Result<Option<Vec<u8>>> {
+        let frame = index / self.sep_cnt;
+        if frame >= self.frames.len() {
+            return Ok(None);
         }
-        let idx_in_frame = from % self.sep_cnt;
-        let start = self.frames[frame_idx].0;
-
-        let end = from.saturating_add(cnt).saturating_add(1);
-        let end_frame_idx =
-            (self.frames.len().saturating_mul(end) / total_sep_cnt).min(self.frames.len() - 1);
-        let len = self.frames[end_frame_idx].0 + self.frames[end_frame_idx].1 - start;
-        Ok(RecordsRequest {
-            start,
-            len,
-            skip: idx_in_frame as u64,
+        let in_frame = (index % self.sep_cnt) as u64;
+        let region = self.frames[frame];
+        let skip = self.lookup.walk_to(frame, region, in_frame)?;
+        with_find!(&self.boundary, |find| {
+            let (records, skipped) = self
+                .lookup
+                .window
+                .records(find)
+                .watching(record::Watch::nothing())
+                .skip_up_to(skip)?;
+            if skipped < skip {
+                self.verify_walked_frame(frame)?;
+                return Ok(None);
+            }
+            let record = records.next_owned()?;
+            if record.is_none() {
+                self.verify_walked_frame(frame)?;
+            }
+            Ok(record)
         })
     }
 
-    /// `cnt` records from `from`, or fewer when the file holds fewer, gathered into a `Vec`.
-    /// [`Self::records_to`] writes the same records without building it.
-    ///
-    /// The frame is found by dividing `from` by the separator count of frame 0, so this rests on
-    /// every frame holding the same count. On a file compressed without that invariant it returns
-    /// the wrong records and reports no error.
-    ///
-    /// # Errors
-    ///
-    /// `from` being past the last frame, or a frame not decompressing.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use seekzstdsep::RecordReader;
-    ///
-    /// # use seekzstdsep::convert_to_seekable_zst_reader;
-    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-records.seek.zst");
-    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\n";
-    /// # let mut compressed = Vec::new();
-    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
-    /// # std::fs::write(&path, compressed)?;
-    /// let mut reader = RecordReader::open(path, b"\n")?;
-    ///
-    /// assert_eq!(reader.records(1, 2)?, b"record 2\nrecord 3\n");
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn records(&mut self, from: usize, cnt: usize) -> anyhow::Result<Vec<u8>> {
-        let req = self.records_request(from, cnt)?;
-        with_find!(&self.boundary, |find| read_records_in_frame(
-            self.lookup.load_decoder(),
-            req.start,
-            req.len,
-            req.skip,
-            cnt as u64,
-            find,
-        ))
-    }
-
-    /// [`Self::records`] into `dst`: the same `cnt` records from `from`, written as they are
-    /// decoded instead of gathered into a `Vec`, so no more than the window is held at once.
-    /// Decoding stops within one window of the separator that ends the last record asked for.
-    ///
-    /// # Errors
-    ///
-    /// `from` being past the last frame, a frame not decompressing, or `dst` refusing bytes.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use seekzstdsep::RecordReader;
-    ///
-    /// # use seekzstdsep::convert_to_seekable_zst_reader;
-    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-records-to.seek.zst");
-    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\n";
-    /// # let mut compressed = Vec::new();
-    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
-    /// # std::fs::write(&path, compressed)?;
-    /// let mut reader = RecordReader::open(path, b"\n")?;
-    ///
-    /// let mut out = Vec::new();
-    /// reader.records_to(1, 2, &mut out)?;
-    ///
-    /// assert_eq!(out, b"record 2\nrecord 3\n");
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn records_to(
-        &mut self,
-        from: usize,
-        cnt: usize,
-        dst: &mut impl Write,
-    ) -> anyhow::Result<()> {
-        let req = self.records_request(from, cnt)?;
-        let reader = record::region(self.lookup.load_decoder(), req.start, req.len)?;
-        with_find!(&self.boundary, |find| reader
-            .records(find)
-            .skip_records(req.skip)?
-            .take_records(cnt as u64)
-            .write_to(dst))
-    }
-
-    /// Every whole record in the file, in order, decoding a window at a time.
-    ///
-    /// Scans rather than divides, so unlike [`Self::record`] it does not rest on the
-    /// same-count-per-frame invariant. What follows the last separator of a frame is dropped: the
-    /// compressor cuts frames at separator boundaries, so only the end of the file can hold one.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use seekzstdsep::RecordReader;
-    ///
-    /// # use seekzstdsep::convert_to_seekable_zst_reader;
-    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-into-records.seek.zst");
-    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
-    /// # let mut compressed = Vec::new();
-    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
-    /// # std::fs::write(&path, compressed)?;
-    /// let reader = RecordReader::open(path, b"\n")?;
-    ///
-    /// let records = reader.into_records().collect::<anyhow::Result<Vec<_>>>()?;
-    ///
-    /// assert_eq!(records.len(), 3);
-    /// assert_eq!(records[0], b"record 1\n");
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn into_records(self) -> RecordIter {
-        RecordIter {
-            frames: self.frames,
-            frame: 0,
-            armed: false,
-            boundary: self.boundary,
-            reader: self.lookup.window,
-        }
-    }
-
-    /// The whole file decompressed, from the start, as a byte stream.
-    ///
-    /// The decoder this was reading frames through, rewound — no second open, no second seek
-    /// table.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::io::Read;
-    ///
-    /// use seekzstdsep::RecordReader;
-    ///
-    /// # use seekzstdsep::convert_to_seekable_zst_reader;
-    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-into-bytes.seek.zst");
-    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
-    /// # let mut compressed = Vec::new();
-    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
-    /// # std::fs::write(&path, compressed)?;
-    /// let reader = RecordReader::open(path, b"\n")?;
-    ///
-    /// let mut all = Vec::new();
-    /// reader.into_bytes()?.read_to_end(&mut all)?;
-    ///
-    /// assert_eq!(all, b"record 1\nrecord 2\nrecord 3\n");
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn into_bytes(self) -> anyhow::Result<impl Read + Send + 'static> {
-        let mut decoder = self.lookup.window.into_source().into_inner();
-        decoder.seek(SeekFrom::Start(0))?;
-        Ok(decoder)
+    /// Refuses the frame the walk stopped in for the records it turned out to hold.
+    fn verify_walked_frame(&self, frame: usize) -> anyhow::Result<()> {
+        self.judge.count(frame, || self.lookup.window.walked())
     }
 }
 
@@ -678,7 +1038,7 @@ impl RecordReader {
 /// assert_eq!(count, 3);
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct RecordIter {
+pub struct RecordIter<V: Verifier = NoVerify> {
     frames: Vec<(u64, u64)>,
     /// The frame being handed out, past the last one once the iterator is spent.
     frame: usize,
@@ -687,9 +1047,10 @@ pub struct RecordIter {
     boundary: Boundary,
     /// The record reader, holding the decoder limited to the armed frame.
     reader: record::Reader<Take<Decoder<'static, File>>>,
+    judge: V::Judge,
 }
 
-impl Iterator for RecordIter {
+impl<V: Verifier> Iterator for RecordIter<V> {
     type Item = anyhow::Result<Vec<u8>>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -708,6 +1069,7 @@ impl Iterator for RecordIter {
             match with_find!(&self.boundary, |find| self
                 .reader
                 .records(find)
+                .watching(V::watch_nothing())
                 .next_owned())
             {
                 Ok(Some(item)) => return Some(Ok(item)),
@@ -716,8 +1078,19 @@ impl Iterator for RecordIter {
                     return Some(Err(e));
                 }
                 Ok(None) => {
-                    // Only a fragment, or nothing, is left in this frame: drop it and move on,
-                    // as the frame-at-a-time iterator did.
+                    // Only a fragment, or nothing, is left in this frame: judge what it turned out
+                    // to hold, then drop it and move on as the frame-at-a-time iterator did.
+                    let checked = self
+                        .judge
+                        .count(self.frame, || self.reader.walked())
+                        .and_then(|()| {
+                            self.judge
+                                .ends_whole(self.frame, || self.reader.remainder().is_empty())
+                        });
+                    if let Err(e) = checked {
+                        self.frame = self.frames.len();
+                        return Some(Err(e));
+                    }
                     self.frame += 1;
                     self.armed = false;
                 }
