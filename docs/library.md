@@ -30,7 +30,9 @@ That fourth argument is the whole point. Either way a frame ends at a record bou
 the record count is left to fall where the byte target puts it, and `cat` can no longer resolve a
 record index by arithmetic. `RecordReader` opens such a file all the same and divides by the count
 frame 0 happens to hold, so it answers with the wrong records;
-`RecordReader::set_verify_records_per_frame(Verify::AsRead)` is what turns that into an error.
+`RecordReader::verifying` turns that into an error for the frames a read walks to the end of. A
+read placed by a frame it never reaches is still answered with the wrong records: nothing counted
+that frame.
 
 ## Read a record range, and the frame layout
 
