@@ -26,9 +26,11 @@ convert_to_seekable_zst_reader(
 assert!(!compressed.is_empty());
 ```
 
-That fourth argument is the whole point: with `false`, frames are cut by size alone and `cat` can no
-longer resolve a record index by arithmetic. `convert_text_to_seekable_zst_reader` is a shorthand
-that passes `false`.
+That fourth argument is the whole point. Either way a frame ends at a record boundary; with `false`
+the record count is left to fall where the byte target puts it, and `cat` can no longer resolve a
+record index by arithmetic. `RecordReader` opens such a file all the same and divides by the count
+frame 0 happens to hold, so it answers with the wrong records;
+`RecordReader::set_verify_records_per_frame(Verify::AsRead)` is what turns that into an error.
 
 ## Read a record range, and the frame layout
 

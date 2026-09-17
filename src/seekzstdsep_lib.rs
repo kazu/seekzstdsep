@@ -43,32 +43,6 @@ pub(crate) const READ_BUF_SIZE: usize = 32768; // 大きなバッファでI/O削
 /// it because the two answer different questions.
 pub(crate) const READ_FRAME_BUF_SIZE: usize = READ_BUF_SIZE;
 
-/// Shorthand for [`convert_to_seekable_zst_reader`] with `is_same_separator_cnt` set to `false`.
-///
-/// Frames are cut by size alone, so [`crate::RecordReader`] cannot locate records in the result.
-///
-/// # Examples
-///
-/// ```
-/// use seekzstdsep::convert_text_to_seekable_zst_reader;
-///
-/// let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
-/// let mut compressed = Vec::new();
-///
-/// convert_text_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, b"\n")?;
-///
-/// assert!(!compressed.is_empty());
-/// # Ok::<(), anyhow::Error>(())
-/// ```
-pub fn convert_text_to_seekable_zst_reader<R: Read, W: Write>(
-    reader: R,
-    writer: W,
-    frame_size: usize,
-    separator: &[u8],
-) -> anyhow::Result<()> {
-    convert_to_seekable_zst_reader(reader, writer, frame_size, false, separator, None)
-}
-
 /// Options for [`compress_to_seekable_zst_with_opts`].
 ///
 /// # Examples
