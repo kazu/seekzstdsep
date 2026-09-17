@@ -87,8 +87,9 @@ half-written file at the destination.
 
 ## What depends on the invariant
 
-Three things break if the invariant stops holding. All of them are silent failures — they produce
-wrong answers rather than errors.
+Three things break if the invariant stops holding. All of them produce wrong answers rather than
+errors, except where a read is asked to check the frames it walks — which is the first of the
+three, and only there.
 
 **1. `RecordReader::records` record lookup.** It reads the separator count of frame 0, then computes:
 
@@ -99,8 +100,12 @@ idx_in_frame  = from % sep_cnt
 ```
 
 The `frames.len()` factor cancels, so `frame_idx` is just `from / sep_cnt`. It is correct precisely
-because every frame holds `sep_cnt` separators. If frames held varying counts, this would silently
-return the wrong records — there is no index to fall back on and no way to detect the drift.
+because every frame holds `sep_cnt` separators. If frames held varying counts, this returns the
+wrong records, and there is no index to fall back on. `RecordReader::verifying`
+is what makes it say so: under `RecordReaderVerify` a read counts the frames it walks to the end of and
+refuses one holding a count of its own. It speaks only for those frames — a frame no read touches is
+a frame nothing counted. The frame the file ends with may hold fewer, since that is where a short
+count belongs; holding more is refused there too.
 
 **2. `inspect` fast mode.** It counts separators in frame 0 and the last few frames, and
 assumes that count for everything in between. `--no-fast-mode` counts every frame and is the way to
@@ -153,11 +158,13 @@ invariant doing its job.
 ## Rules for changes
 
 1. **Do not break the uniform separator count.** If a change can produce frames with differing
-   counts, `RecordReader::records` returns wrong records with no error. Whatever the change, the
-   body of the file must keep a uniform count, or the lookup path must be replaced at the same time.
+   counts, `RecordReader::records` returns wrong records, and says so only where the caller asked
+   for `RecordReaderVerify`. Whatever the change, the body of the file must keep a uniform count,
+   or the lookup path must be replaced at the same time.
 2. **A partial frame is only ever allowed at the end.** Consumers special-case the tail; they do not
    special-case the middle.
 3. **Frame byte sizes are not a contract.** They drift by design. Nothing should assume a frame's
    decompressed size.
 4. **Verify with `inspect --no-fast-mode`.** Fast mode assumes the invariant it would be used to
-   check, so it cannot detect a violation in the middle of a file.
+   check, so it cannot detect a violation in the middle of a file. `RecordReaderVerify` is the
+   cheaper half of the same question: it judges the frames a read walks and nothing else.

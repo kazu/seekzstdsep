@@ -453,11 +453,12 @@ fn read(c: &mut Criterion) {
         // the same cold window rather than on wherever the last one left it, and neither side is
         // charged for the open.
         let open = || RecordReader::open(path.clone(), SEPARATOR).expect("no reader");
+        let verify = || open().verifying();
 
         // The record count halves across the sweep because what a range read costs turns on how
         // many frame ends it crosses, not on how many records it returns. A frame holds 555 of
-        // them here, so this sweep stays inside one: what it shows is the floor a call pays
-        // whatever the count -- the frame decoded and the records skipped to reach the range.
+        // them here and the offsets land anywhere in one, so the longest counts cross a frame end
+        // and the shortest ones stop before it: what the sweep shows is where that line falls.
         for cnt in (0..=9).rev().map(|e| 1usize << e) {
             let froms = spread(40, RECORDS - cnt);
             group.bench_with_input(BenchmarkId::new("records_to", cnt), &cnt, |b, &cnt| {
@@ -469,6 +470,19 @@ fn read(c: &mut Criterion) {
                     }
                 })
             });
+            group.bench_with_input(
+                BenchmarkId::new("records_to/as-read", cnt),
+                &cnt,
+                |b, &cnt| {
+                    b.iter_with_setup(verify, |mut reader| {
+                        for from in &froms {
+                            reader
+                                .records_to(black_box(*from), black_box(cnt), &mut std::io::sink())
+                                .unwrap()
+                        }
+                    })
+                },
+            );
         }
 
         group.bench_function("record", |b| {
@@ -479,9 +493,22 @@ fn read(c: &mut Criterion) {
             })
         });
 
+        group.bench_function("record/as-read", |b| {
+            b.iter_with_setup(verify, |mut reader| {
+                for index in &indices {
+                    black_box(reader.record(black_box(*index)).unwrap());
+                }
+            })
+        });
+
         group.sample_size(20);
         group.bench_function("into_records", |b| {
             b.iter_with_setup(open, |reader| {
+                black_box(reader.into_records().filter(|r| r.is_ok()).count())
+            })
+        });
+        group.bench_function("into_records/as-read", |b| {
+            b.iter_with_setup(verify, |reader| {
                 black_box(reader.into_records().filter(|r| r.is_ok()).count())
             })
         });

@@ -29,6 +29,7 @@ pub use edit::truncate;
 pub use edit::truncate_records;
 pub use reader::RecordIter;
 pub use reader::RecordReader;
+pub use reader::{AsRead, Judge, NoVerify, RecordReaderVerify, Verifier};
 pub use seekzstdsep_lib::CompressOptions;
 pub use seekzstdsep_lib::CompressionLevel;
 pub use seekzstdsep_lib::InspectOptions;

@@ -7,12 +7,14 @@ Ordered by how much each one costs, worst first.
 - [ ] [Frame 0 is read on every call](#frame-0-is-read-on-every-call) — doubles the decoding per lookup
 - [ ] [The seek table is read in full on every call](#the-seek-table-is-read-in-full-on-every-call) — grows with the file: 9 kB at a million records, 90 kB at ten million
 - [ ] [The frame table is built in full when three entries are needed](#the-frame-table-is-built-in-full-when-three-entries-are-needed) — also grows with the file, but only an allocation and a pass
+- [ ] [Checking the frames a read walks costs 3.4% of a range that crosses them](#checking-the-frames-a-read-walks-costs-34-of-a-range-that-crosses-them) — only where the caller asks for it
 - [ ] [The frame checksum costs 4 bytes per frame](#the-frame-checksum-costs-4-bytes-per-frame) — 0.06% of the file, collected only where a whole frame is decoded
 - [x] [Reading several frames rebuilt the decoder for each](#reading-several-frames-rebuilt-the-decoder-for-each) — 4 to 18% of the time spent reading two frames or more
 - [x] [A lookup by index held a whole frame](#a-lookup-by-index-held-a-whole-frame) — peak RSS followed the frame size: 36.8 MiB at 32 MiB frames
 - [x] [The record boundary was reached through a box](#the-record-boundary-was-reached-through-a-box) — one indirect call per record: 1.1% of a range read
 
-Numbers come from `docs/bench/`; the harness is in `bench/`.
+Numbers come from `docs/bench/`; the harness is in `bench/`. Instruction counts come from
+callgrind instead, over a fixture the section that quotes them describes.
 
 ## Reading several frames rebuilt the decoder for each
 
@@ -139,6 +141,45 @@ Does not vary with `--from` or with the file size. The frame is streamed through
 reader's window rather than held, so the cost is the decode, not the memory.
 
 Holding one reader open is what removes all three costs above — see below.
+
+## Checking the frames a read walks costs 3.4% of a range that crosses them
+
+`RecordReader::verifying` walks the same span the unchecked read walks and judges each frame end it
+passes. What the walk hands out is a run of records at a time, so a run straddles the frame end:
+the records before it are counted by scanning that run's first bytes a second time. That second
+scan is where the cost is, and it falls on the frames a read crosses rather than on the records it
+returns.
+
+Instruction counts under callgrind, the same binary either way, over 200,000 records of about 55
+bytes at `frame_size` 65536 — 1,258 records to a frame across 159 frames. Not the fixture
+`benches/read.rs` builds: its records are JSON lines around 118 bytes, so a frame holds 555 of
+them and a range read of the same record count crosses fewer frame ends.
+
+| walk | unchecked | checked | |
+|---|---|---|---|
+| 40 reads of 4,000 records, each crossing three or four frames | 87,096,933 | 90,046,782 | +3.4% |
+| every record of the file | 144,556,713 | 155,172,502 | +7.3% |
+| 4,000 lookups by index | 1,819,926,808 | 1,820,448,995 | +0.03% |
+
+A lookup by index pays almost nothing because it stops inside a frame: there is no frame end to
+report, and what it is judged on is where it stopped.
+
+Capping the walk at the frame end instead would remove the second scan, at the price of a
+comparison per record inside the walk. That is the shape of cost the finder box had, 1.1% of a
+range read, and it would fall on the unchecked path too.
+
+**The read that checks nothing is not what it was — it is faster.** Against `fd2e6a8`, the commit
+before the check existed, the same 40 reads cost 22 instructions a call less and walking every
+record costs 74 a record less; a lookup by index is unchanged, to the instruction. The reads are
+written once and compiled per verifier, so they are generic where the earlier ones were not, and a
+generic read is compiled in the crate that calls it: `records_request` inlines into `records_to`
+there, and `Records::next` into `next_owned`, neither of which happened when they were compiled
+here and called.
+
+Which verifier a read has is a type rather than a value, so the frame ends a checked walk reports
+are not something the unchecked one tests and skips: its watcher is a type of no size, and the
+reporting is not compiled into it at all. `Judge` takes what it judges as a closure for the same
+reason — the judge that judges nothing never asks the window what it walked.
 
 ## The frame checksum costs 4 bytes per frame
 

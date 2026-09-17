@@ -203,7 +203,7 @@ pub enum RangeCheck {
     ///
     /// A frame elsewhere in the range holding a different count is not seen, and copying it puts a
     /// short frame in the interior of the result, where record lookup divides by a count that no
-    /// longer holds and returns the wrong records with no error.
+    /// longer holds and returns the wrong records.
     #[default]
     FirstFrame,
     /// Every frame of the copied range, which is the only check that rules the above out.

@@ -22,7 +22,7 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 
 - [ ] [A record read has no way to verify its frame's checksum](#a-record-read-has-no-way-to-verify-its-frames-checksum)
 - [ ] [The frame is read with a single `read` call](#the-frame-is-read-with-a-single-read-call)
-- [ ] [`RecordReader` cannot be asked to check the uniform count](#recordreader-cannot-be-asked-to-check-the-uniform-count)
+- [ ] [`cat` and the nushell plugin cannot ask for the frame check](#cat-and-the-nushell-plugin-cannot-ask-for-the-frame-check)
 - [ ] [`inspect_with_opts` is not re-exported](#inspect_with_opts-is-not-re-exported)
 - [ ] [`out_dir` is written out at every call site](#out_dir-is-written-out-at-every-call-site)
 - [ ] [The read window and the default frame size are not tuned](#the-read-window-and-the-default-frame-size-are-not-tuned)
@@ -33,6 +33,7 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 - [x] Indexed access still holds a whole frame
 - [x] Counting a frame's records holds the whole frame
 - [x] The nushell plugin cannot open a file that has no separator
+- [x] `RecordReader` cannot be asked to check the uniform count
 
 ### Concurrent append, and reading during an append
 
@@ -128,38 +129,12 @@ cannot be noticed. The loop is wanted only once zeekstd returns short, and a rel
 what would settle whether it ever will. The rustdoc on `decompressed_range_into` sends the reader
 to `docs/bugs.md` for this and has to change with it.
 
-### `RecordReader` cannot be asked to check the uniform count
+### `cat` and the nushell plugin cannot ask for the frame check
 
-`RecordReader` locates a record by dividing its index by frame 0's separator count, so everything it
-answers rests on every frame holding that count. A file that does not is read at the wrong offsets
-and reports nothing. Both sides say so in their rustdoc: `convert_text_to_seekable_zst_reader` cuts
-frames by size alone and states that `RecordReader` cannot locate records in its output, and
-`RecordReader::records` states the requirement from the other end. `seekzstdsep compress` holds the
-count uniform and has no flag to stop it, so writing such a file takes a library caller.
-
-One consequence shows without any wrong data being handed back. `total_records` counts the last
-frame directly, while `record` divides by frame 0's count and refuses anything past the last frame,
-so a file whose last frame holds more than frame 0 makes the two disagree: with 10 records in the
-first frame and 15 in the last, `total_records` is 25 and `record(20)` is `None`, which the nushell
-plugin reports as "Row number too large (max: 24)". This crate's compressor cannot write that file —
-its last frame holds at most as many as the rest — so it takes another writer or one built by hand.
-The `FIXME` on `total_records` (`src/reader.rs`) points at `docs/bugs.md` for this and moves with the
-work.
-
-The edit side already has the check. `records_per_frame` (`src/edit.rs`) takes a `SeparatorCheck`:
-`FirstFrame` confirms frame 0 ends with the separator, and `TwoFrames` also counts the last frame
-that is not allowed to be short, refusing when the two disagree. `append_frames` goes further with
-`RangeCheck::EveryFrame`. `RecordReader::open` offers none of it, so `cat`, `record`,
-`total_records` and the nushell plugin's row access take frame 0's count on trust. `truncate` sits
-between the two: it validates the separator against frame 0, then computes the total from that count
-without reading a second frame.
-
-The work is to let `RecordReader::open` take the same `SeparatorCheck`, defaulting to what it does
-now. `TwoFrames` is one extra frame decoded per open — `docs/performances.md` already counts frame
-0's as a cost of opening — and it catches a file cut by size rather than by record count, which is
-what `convert_text_to_seekable_zst_reader` writes. It does not prove uniformity: a file uniform at
-both ends and broken in the middle passes. Proving it costs every frame, which is the price the
-format exists to avoid, and `inspect --no-fast-mode` is already the way to pay it.
+`RecordReader::verifying` is a library call, and nothing in `src/cli.rs`,
+`src/main.rs` or `nu_plugin_zstdsep` reaches it, so `cat` and the plugin read on trust with no way
+to say otherwise. What it costs is in `docs/performances.md`; what has to be decided is whether it
+is a flag or the default for those two.
 
 ### `inspect_with_opts` is not re-exported
 
