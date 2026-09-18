@@ -116,6 +116,25 @@ reader.records_to(10_000, 3, &mut io::stdout()).unwrap();
 - [`docs/bench/`][bench] — 測定結果そのもの
 - [`docs/bugs.md`][bugs] — 既知の問題
 
+## 関連プロジェクト
+
+組み合わせて使えるもの:
+
+- [nu_plugin_polars_dyn][polars-dyn] — `.seek.zst` を polars の dataframe として読む scan source を同梱
+- [nu_plugin_flatbuffers][fbs] — `--finder flatbuffers` が切るレコードを nushell の値に戻す
+
+内部で使っているもの:
+
+- [zeekstd][zeekstd] — Seekable Format の Rust 実装。[仕様][spec]もここ
+- [zstd-rs][zstd-rs] — libzstd の Rust バインディング
+
+別のやり方で同じことをするもの:
+
+- [BGZF][bgzf] + [tabix][tabix] — gzip 互換のブロックと、別ファイルの索引
+- [gztool][gztool]、[zindex][zindex] — gzip に後から索引を作る。索引ファイルが要る
+- [t2sz][t2sz] — サイズだけで切る seekable zstd。レコード境界は見ない
+- [zstd の contrib/seekable_format][seekable] — 仕様の参照実装 (C)
+
 ## ライセンス
 
 MIT ([LICENSE](./LICENSE))。
@@ -136,3 +155,11 @@ MIT ([LICENSE](./LICENSE))。
 [library]: ./docs/library.md
 [benchmark]: ./docs/benchmark.md
 [bugs]: ./docs/bugs.md
+[polars-dyn]: https://github.com/kazu/nu_plugin_polars_dyn
+[fbs]: https://github.com/kazu/nu_plugin_flatbuffers
+[zeekstd]: https://github.com/rorosen/zeekstd
+[zstd-rs]: https://github.com/gyscos/zstd-rs
+[gztool]: https://github.com/circulosmeos/gztool
+[zindex]: https://github.com/mattgodbolt/zindex
+[t2sz]: https://github.com/martinellimarco/t2sz
+[seekable]: https://github.com/facebook/zstd/tree/dev/contrib/seekable_format
