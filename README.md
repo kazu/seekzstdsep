@@ -115,6 +115,25 @@ See [`nu_plugin_zstdsep/README.md`][plugin].
 - [`docs/bench/`][bench] — the measurements themselves
 - [`docs/bugs.md`][bugs] — known issues
 
+## Related projects
+
+Pairs with it:
+
+- [nu_plugin_polars_dyn][polars-dyn] — ships a scan source that reads `.seek.zst` as a polars dataframe
+- [nu_plugin_flatbuffers][fbs] — turns the records `--finder flatbuffers` cuts into nushell values
+
+Built on:
+
+- [zeekstd][zeekstd] — the Rust implementation of the Seekable Format; the [spec][spec] lives there too
+- [zstd-rs][zstd-rs] — the Rust bindings to libzstd
+
+Other ways to solve the same problem:
+
+- [BGZF][bgzf] + [tabix][tabix] — gzip-compatible blocks, with the index in its own file
+- [gztool][gztool], [zindex][zindex] — index a gzip file after the fact; the index is a sidecar
+- [t2sz][t2sz] — seekable zstd cut by size alone, with no regard for record boundaries
+- [zstd's contrib/seekable_format][seekable] — the reference implementation (C)
+
 ## License
 
 MIT ([LICENSE](./LICENSE)).
@@ -135,3 +154,11 @@ MIT ([LICENSE](./LICENSE)).
 [library]: ./docs/library.md
 [benchmark]: ./docs/benchmark.md
 [bugs]: ./docs/bugs.md
+[polars-dyn]: https://github.com/kazu/nu_plugin_polars_dyn
+[fbs]: https://github.com/kazu/nu_plugin_flatbuffers
+[zeekstd]: https://github.com/rorosen/zeekstd
+[zstd-rs]: https://github.com/gyscos/zstd-rs
+[gztool]: https://github.com/circulosmeos/gztool
+[zindex]: https://github.com/mattgodbolt/zindex
+[t2sz]: https://github.com/martinellimarco/t2sz
+[seekable]: https://github.com/facebook/zstd/tree/dev/contrib/seekable_format
