@@ -6,6 +6,28 @@ next release overwrites it. What belongs in a release note belongs in a commit m
 Only the crate's own tags (`v*`) mark a release here. The nushell plugin is versioned separately in
 `nu_plugin_zstdsep/`, and `nu_v.*` records which revision a nushell version takes.
 
+## [0.6.0] - 2026-09-18
+
+### Changed
+
+- nu_plugin_zstdsep: support --finder and --finder-arg
+- nu_plugin_zstdsep: hook: forward --finder and --finder-arg
+- Makefile: add release-plugin for a plugin-only release
+- nu_plugin_zstdsep: release 0.5.1
+- bench: sweep frame size and level, and chart it
+- compress: default the frame size to 128 KiB
+- bench: measure the reader's three walks, and profile them
+- reader: verify the records per frame as a read walks them
+- lib: drop convert_text_to_seekable_zst_reader
+
+### Documentation
+
+- docs: link the README's paths, and add a cat example through the API
+- docs: add examples to the functions callers reach for
+- docs: record that the nushell plugin has no --finder
+- docs: record how flatbuffers support would get its decoder
+- docs: record the disagreement between total_records and record
+
 ## [0.5.0] - 2026-09-05
 
 ### Changed
