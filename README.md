@@ -92,6 +92,7 @@ reader.records_to(10_000, 3, &mut io::stdout()).unwrap();
 ```
 
 Pass an editing callback to [`copy_and_replace`](src/file_update.rs) to update a private copy and replace the file.
+On the CLI, add `--copy` to `append` or `truncate`.
 
 ## nushell plugin
 

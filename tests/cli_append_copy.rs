@@ -165,6 +165,18 @@ fn cli_copy_cooperates_with_a_library_copy() {
         &path,
         &[fixture_records().concat(), b"direct\n".to_vec()].concat(),
     );
+    let err = seekzstdsep::copy_and_replace(&path, |_| {
+        let output = Command::new(BIN)
+            .arg("truncate")
+            .arg(&path)
+            .args(["--records", "234", "--copy"])
+            .output()?;
+        succeeded(&output);
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("conflict"));
+    assert_decompresses_to(&path, &fixture_records()[..234].concat());
 }
 
 #[cfg(target_os = "linux")]
@@ -193,4 +205,13 @@ fn copy_creation_failure_reports_direct_fallback() {
         &path,
         &[fixture_records().concat(), b"fallback\n".to_vec()].concat(),
     );
+    let output = Command::new(BIN)
+        .arg("truncate")
+        .arg(&path)
+        .args(["--records", "234", "--copy"])
+        .output()
+        .unwrap();
+    succeeded(&output);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("truncated directly"));
+    assert_decompresses_to(&path, &fixture_records()[..234].concat());
 }

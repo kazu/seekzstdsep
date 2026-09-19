@@ -93,6 +93,7 @@ reader.records_to(10_000, 3, &mut io::stdout()).unwrap();
 ```
 
 コピー上で編集して置換するには [`copy_and_replace`](src/file_update.rs) に編集関数を渡します。
+CLI では `append` / `truncate` に `--copy` を付けます。
 
 ## nushell plugin
 
