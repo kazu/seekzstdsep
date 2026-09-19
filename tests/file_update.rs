@@ -2,7 +2,7 @@
 #[path = "../src/file_update.rs"]
 mod file_update;
 
-use file_update::{AppendMode, FileOps, System, append_copy_using, with_file_lock_using};
+use file_update::{CopyMode, FileOps, System, copy_and_replace_using, with_file_lock_using};
 use fs2::FileExt;
 use std::{
     cell::Cell,
@@ -176,7 +176,7 @@ impl FileOps for Probe<'_> {
 fn ordinary_copy_clears_a_partial_reflink_and_all_critical_intervals_are_locked() {
     let fixture = Fixture::new();
     let probe = Probe::new(&fixture, Failure::None);
-    let mode = append_copy_using(
+    let mode = copy_and_replace_using(
         &fixture.path,
         |file| {
             fixture.unlocked();
@@ -190,7 +190,7 @@ fn ordinary_copy_clears_a_partial_reflink_and_all_critical_intervals_are_locked(
         &probe,
     )
     .unwrap();
-    assert_eq!(mode, AppendMode::Replaced);
+    assert_eq!(mode, CopyMode::Replaced);
     assert_eq!(
         (
             probe.copies.get(),
@@ -211,7 +211,7 @@ fn only_copy_failures_fall_back_with_the_unconsumed_input_and_lock() {
         let probe = Probe::new(&fixture, failure);
         let mut input = io::Cursor::new(b"added");
         let calls = Cell::new(0);
-        let mode = append_copy_using(
+        let mode = copy_and_replace_using(
             &fixture.path,
             |file| {
                 calls.set(calls.get() + 1);
@@ -225,7 +225,7 @@ fn only_copy_failures_fall_back_with_the_unconsumed_input_and_lock() {
             &probe,
         )
         .unwrap();
-        assert_eq!(mode, AppendMode::Direct);
+        assert_eq!(mode, CopyMode::Direct);
         assert_eq!(calls.get(), 1);
         assert_eq!(probe.renames.get(), 0);
         assert_eq!(fs::read(&fixture.path).unwrap(), b"originaladded");
@@ -247,7 +247,7 @@ fn hash_lock_unlock_and_rename_failures_never_run_a_direct_fallback() {
         let fixture = Fixture::new();
         let probe = Probe::new(&fixture, failure);
         let calls = Cell::new(0);
-        let result = append_copy_using(
+        let result = copy_and_replace_using(
             &fixture.path,
             |file| {
                 fixture.unlocked();
@@ -269,10 +269,10 @@ fn hash_lock_unlock_and_rename_failures_never_run_a_direct_fallback() {
 fn final_hash_reopens_the_path_instead_of_hashing_the_retired_handle() {
     let fixture = Fixture::new();
     let probe = Probe::new(&fixture, Failure::None);
-    let result = append_copy_using(
+    let result = copy_and_replace_using(
         &fixture.path,
         |file| {
-            file_update::append_copy(&fixture.path, |current| {
+            file_update::copy_and_replace(&fixture.path, |current| {
                 current.write_all(b"new data")?;
                 Ok(())
             })?;
@@ -292,7 +292,7 @@ fn a_failed_direct_callback_is_not_retried_or_rolled_back() {
     let fixture = Fixture::new();
     let probe = Probe::new(&fixture, Failure::Copy);
     let mut calls = 0;
-    let result = append_copy_using(
+    let result = copy_and_replace_using(
         &fixture.path,
         |file| {
             calls += 1;
@@ -333,7 +333,7 @@ fn direct_and_copy_open_the_target_only_after_obtaining_the_lock() {
                     anyhow::bail!("checked current file")
                 };
                 if copy {
-                    append_copy_using(&fixture.path, check, &ops).map(|_| ())
+                    copy_and_replace_using(&fixture.path, check, &ops).map(|_| ())
                 } else {
                     with_file_lock_using(&fixture.path, check, &ops)
                 }
@@ -365,7 +365,7 @@ fn separate_targets_can_be_updated_while_another_target_is_locked() {
     let a = Fixture::new();
     let b = Fixture::new();
     file_update::with_file_lock(&a.path, |_| {
-        file_update::append_copy(&b.path, |file| {
+        file_update::copy_and_replace(&b.path, |file| {
             file.write_all(b"other!!!")?;
             Ok(())
         })?;
@@ -379,7 +379,7 @@ fn separate_targets_can_be_updated_while_another_target_is_locked() {
 fn full_content_hash_detects_changes_with_the_same_size_and_mtime() {
     let fixture = Fixture::new();
     let times = fs::metadata(&fixture.path).unwrap();
-    let err = file_update::append_copy(&fixture.path, |_| {
+    let err = file_update::copy_and_replace(&fixture.path, |_| {
         file_update::with_file_lock(&fixture.path, |file| {
             file.write_all(b"changed!")?;
             file.sync_all()?;
@@ -405,7 +405,7 @@ fn permissions_owner_and_group_survive_replacement() {
     let fixture = Fixture::new();
     fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o640)).unwrap();
     let before = fs::metadata(&fixture.path).unwrap();
-    file_update::append_copy(&fixture.path, |_| Ok(())).unwrap();
+    file_update::copy_and_replace(&fixture.path, |_| Ok(())).unwrap();
     let after = fs::metadata(&fixture.path).unwrap();
     assert_eq!(
         (before.uid(), before.gid(), before.mode()),
@@ -426,7 +426,7 @@ fn symlinks_and_hardlinks_are_refused_without_touching_their_contents() {
         } else {
             std::os::unix::fs::symlink(&fixture.path, &alias).unwrap();
         }
-        let result = file_update::append_copy(&alias, |_| panic!("invalid target accepted"));
+        let result = file_update::copy_and_replace(&alias, |_| panic!("invalid target accepted"));
         assert!(result.is_err());
         assert_eq!(fs::read(&fixture.path).unwrap(), b"original");
     }
@@ -464,8 +464,8 @@ fn actual_reflink_success_does_not_invoke_ordinary_copy() {
     }
     drop(source);
     assert_eq!(
-        append_copy_using(&fixture.path, |_| Ok(()), &ReflinkOnly).unwrap(),
-        AppendMode::Replaced
+        copy_and_replace_using(&fixture.path, |_| Ok(()), &ReflinkOnly).unwrap(),
+        CopyMode::Replaced
     );
     assert_eq!(fs::read(&fixture.path).unwrap(), b"original");
     fixture.clean();

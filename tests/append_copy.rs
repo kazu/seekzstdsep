@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use seekzstdsep::{AppendMode, OnMissingSeparator, append_copy, append_records, with_file_lock};
+use seekzstdsep::{CopyMode, OnMissingSeparator, append_records, copy_and_replace, with_file_lock};
 use std::{
     fs::{self, File},
     io::{Read, Write},
@@ -28,13 +28,13 @@ fn copy_append_preserves_old_readers_and_publishes_complete_records() {
     let before = fs::read(&path).unwrap();
     let mut old = File::open(&path).unwrap();
     let added = fixture_records()[..10].concat();
-    let mode = append_copy(&path, |f| {
+    let mode = copy_and_replace(&path, |f| {
         add(f, &added)?;
         assert_eq!(fs::read(&path)?, before);
         Ok(())
     })
     .unwrap();
-    assert_eq!(mode, AppendMode::Replaced);
+    assert_eq!(mode, CopyMode::Replaced);
     let mut held = Vec::new();
     old.read_to_end(&mut held).unwrap();
     assert_eq!(held, before);
@@ -57,7 +57,7 @@ fn two_copies_of_one_version_cannot_lose_a_successful_append() {
                 s.spawn(move || {
                     (
                         data,
-                        append_copy(path, |f| {
+                        copy_and_replace(path, |f| {
                             barrier.wait();
                             add(f, data)
                         }),
@@ -91,7 +91,7 @@ fn two_copies_of_one_version_cannot_lose_a_successful_append() {
 fn locked_direct_append_causes_an_older_copy_to_conflict() {
     let dir = tempfile::tempdir().unwrap();
     let path = compress_fixture(dir.path());
-    let err = append_copy(&path, |f| {
+    let err = copy_and_replace(&path, |f| {
         with_file_lock(&path, |current| add(current, b"direct\n"))?;
         add(f, b"stale\n")
     })
@@ -109,7 +109,7 @@ fn failed_append_cleans_its_copy_without_changing_the_target() {
     let dir = tempfile::tempdir().unwrap();
     let path = compress_fixture(dir.path());
     let before = fs::read(&path).unwrap();
-    let err = append_copy(&path, |f| {
+    let err = copy_and_replace(&path, |f| {
         f.write_all(b"broken")?;
         anyhow::bail!("input failed")
     })
@@ -126,8 +126,8 @@ fn empty_append_keeps_the_bytes_and_reuses_the_lock() {
     let before = fs::read(&path).unwrap();
     for _ in 0..2 {
         assert_eq!(
-            append_copy(&path, |f| add(f, b"")).unwrap(),
-            AppendMode::Replaced
+            copy_and_replace(&path, |f| add(f, b"")).unwrap(),
+            CopyMode::Replaced
         );
         assert_eq!(fs::read(&path).unwrap(), before);
         assert_clean(&path);
@@ -175,9 +175,9 @@ fn explicit_count_finders_and_separator_insertion_match_direct_append() {
                     .open(&direct)
                     .unwrap(),
             );
-            let actual = append_copy(&path, operation);
+            let actual = copy_and_replace(&path, operation);
             match (expected, actual) {
-                (Ok(()), Ok(AppendMode::Replaced)) => (),
+                (Ok(()), Ok(CopyMode::Replaced)) => (),
                 (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string()),
                 other => panic!("different result: {other:?}"),
             }
@@ -206,7 +206,10 @@ fn frame_append_matches_the_existing_compressed_frame_entry() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(append_copy(&path, operation).unwrap(), AppendMode::Replaced);
+    assert_eq!(
+        copy_and_replace(&path, operation).unwrap(),
+        CopyMode::Replaced
+    );
     assert_eq!(fs::read(path).unwrap(), fs::read(direct).unwrap());
 }
 
@@ -215,7 +218,7 @@ fn checksum_selection_is_preserved() {
     for checksum in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let path = compress_fixture_with_checksum(dir.path(), checksum);
-        append_copy(&path, |file| add(file, b"new record\n")).unwrap();
+        copy_and_replace(&path, |file| add(file, b"new record\n")).unwrap();
         assert!(
             frame_checksum_flags(&path)
                 .iter()
@@ -234,7 +237,7 @@ fn held_record_reader_can_still_read_the_old_tail_after_publication() {
     let dir = tempfile::tempdir().unwrap();
     let path = compress_fixture(dir.path());
     let mut old = RecordReader::open(path.clone(), b"\n").unwrap();
-    append_copy(&path, |file| add(file, b"new record\n")).unwrap();
+    copy_and_replace(&path, |file| add(file, b"new record\n")).unwrap();
     assert_eq!(old.total_records().unwrap(), FIXTURE_RECORDS);
     let expected = fixture_records()[FIXTURE_RECORDS - 1].clone();
     assert_eq!(old.record(FIXTURE_RECORDS - 1).unwrap().unwrap(), expected);

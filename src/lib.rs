@@ -10,7 +10,7 @@ pub mod cli;
 pub mod edit;
 mod file_update;
 pub mod find;
-pub use file_update::{AppendMode, append_copy, with_file_lock};
+pub use file_update::{CopyMode, copy_and_replace, with_file_lock};
 mod reader;
 mod record;
 pub mod seekzstdsep_lib;

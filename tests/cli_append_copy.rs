@@ -150,7 +150,7 @@ fn cli_copy_cooperates_with_a_library_copy() {
     let path = compress_fixture(dir.path());
     let input = dir.path().join("input");
     fs::write(&input, b"direct\n").unwrap();
-    let err = seekzstdsep::append_copy(&path, |_| {
+    let err = seekzstdsep::copy_and_replace(&path, |_| {
         succeeded(&run(&path, &input, &["--copy"]));
         Ok(())
     })
