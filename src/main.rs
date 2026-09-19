@@ -216,6 +216,7 @@ fn main() -> anyhow::Result<()> {
                             data: records_input(opened),
                             on_missing,
                             level,
+                            records_per_frame: None,
                         }
                     };
                     append(&mut file, input, &sep)?;
@@ -234,6 +235,7 @@ fn main() -> anyhow::Result<()> {
                     &*find,
                     on_missing,
                     level,
+                    None,
                 )?,
             }
         }

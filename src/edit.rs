@@ -12,7 +12,8 @@
 //! [`truncate`] and [`append`] compare the first frame against the last one that is not allowed to
 //! be short: the two have to hold the same number of separators, and that number is the records per
 //! frame. They therefore refuse a file of fewer than three frames, where the comparison cannot be
-//! made. [`copy_range`] reads the count off frame 0 alone and checks that frame 0 *ends* with the
+//! made, unless raw-record append receives an explicit count; see [`append_records`].
+//! [`copy_range`] reads the count off frame 0 alone and checks that frame 0 *ends* with the
 //! separator, which is where the compressor cuts; [`SeparatorCheck::TwoFrames`] asks for the
 //! comparison as well.
 use std::{
@@ -173,6 +174,8 @@ pub enum AppendInput<'a, R> {
         on_missing: OnMissingSeparator,
         /// Zstandard compression level of the frames this writes. 0 uses the zstd default.
         level: i32,
+        /// Records per frame, or `None` to infer it. See [`append_records`] for validation.
+        records_per_frame: Option<usize>,
     },
     /// A record range of another seekable file, whose frames are copied as compressed bytes.
     ///
@@ -216,7 +219,8 @@ pub enum RangeCheck {
 /// Adds `input` to the end of `f`, keeping every frame but the last at the records per frame the
 /// file was built with.
 ///
-/// Nothing before the frame the operation affects is read or written.
+/// Frames before the replacement are validated as described by the selected input path and
+/// are never rewritten.
 ///
 /// # Errors
 ///
@@ -239,6 +243,7 @@ pub enum RangeCheck {
 ///     data: b"record 7\nrecord 8\n" as &[u8],
 ///     on_missing: OnMissingSeparator::Refuse,
 ///     level: 0,
+///     records_per_frame: Some(2),
 /// };
 /// append(&mut f, added, b"\n")?;
 ///
@@ -255,7 +260,8 @@ pub fn append<R: Read>(
             data,
             on_missing,
             level,
-        } => append_records(f, data, separator, on_missing, level),
+            records_per_frame,
+        } => append_records(f, data, separator, on_missing, level, records_per_frame),
         AppendInput::Frames {
             input,
             from,
@@ -274,6 +280,13 @@ pub fn append<R: Read>(
 /// leave a short frame in the interior. It is decoded, joined with `data` and cut again instead.
 /// An empty `data` rewrites nothing. The frames this writes are compressed at `level`, 0 being
 /// the zstd default; the frames before them keep whatever they were written with.
+///
+/// `records_per_frame = None` infers the count using the comparison described in this module
+/// and requires at least three frames. `Some(n)` accepts one or more data frames and requires
+/// `n > 0`. Frame 0 and the frame immediately before the last data frame, when present, must
+/// each contain exactly `n` whole records and no fragment. Intervening frames are not checked.
+/// Trailing empty frames are discarded on a nonempty append. The last data frame is recut,
+/// so its count may differ from `n`; a file containing only empty frames is refused.
 ///
 /// # Errors
 ///
@@ -294,7 +307,7 @@ pub fn append<R: Read>(
 /// # std::fs::write(&path, compressed)?;
 /// # let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
 /// let data = b"record 7\nrecord 8\n" as &[u8];
-/// append_records(&mut f, data, b"\n", OnMissingSeparator::Refuse, 0)?;
+/// append_records(&mut f, data, b"\n", OnMissingSeparator::Refuse, 0, Some(2))?;
 ///
 /// assert_eq!(RecordReader::open(path, b"\n")?.total_records()?, 8);
 /// # Ok::<(), anyhow::Error>(())
@@ -305,6 +318,7 @@ pub fn append_records(
     separator: &[u8],
     on_missing: OnMissingSeparator,
     level: i32,
+    records_per_frame: Option<usize>,
 ) -> anyhow::Result<()> {
     record::check_separator(separator)?;
     let finder = Finder::new(separator);
@@ -315,6 +329,7 @@ pub fn append_records(
         Some(separator),
         on_missing,
         level,
+        records_per_frame,
     )
 }
 
@@ -341,7 +356,7 @@ pub fn append_records(
 /// # std::fs::write(&path, compressed)?;
 /// # let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
 /// let data = b"record 7\nrecord 8\n" as &[u8];
-/// append_records_with(&mut f, data, by_fixed(9), OnMissingSeparator::Refuse, 0)?;
+/// append_records_with(&mut f, data, by_fixed(9), OnMissingSeparator::Refuse, 0, Some(2))?;
 ///
 /// assert_eq!(RecordReader::open(path, b"\n")?.total_records()?, 8);
 /// # Ok::<(), anyhow::Error>(())
@@ -352,6 +367,7 @@ pub fn append_records_with<F: Fn(&[u8]) -> Option<usize>>(
     find: F,
     on_missing: OnMissingSeparator,
     level: i32,
+    records_per_frame: Option<usize>,
 ) -> anyhow::Result<()> {
     if on_missing == OnMissingSeparator::Insert {
         bail!(
@@ -359,7 +375,7 @@ pub fn append_records_with<F: Fn(&[u8]) -> Option<usize>>(
              rather than by a separator, so there is nothing to insert"
         );
     }
-    append_records_inner(f, data, find, None, on_missing, level)
+    append_records_inner(f, data, find, None, on_missing, level, records_per_frame)
 }
 
 /// The append both entry points make. `separator` is what [`OnMissingSeparator::Insert`] writes,
@@ -371,15 +387,28 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
     separator: Option<&[u8]>,
     on_missing: OnMissingSeparator,
     level: i32,
+    records_per_frame: Option<usize>,
 ) -> anyhow::Result<()> {
+    if records_per_frame == Some(0) {
+        bail!("records per frame must be greater than zero");
+    }
     let table = open_target(f)?;
-
-    // Before the subtraction below: a seek table can hold no entries at all, and validation is
-    // what refuses that.
+    if table.num_frames() == 0 {
+        bail!("refusing to append to a file with no data frames");
+    }
     let mut reader = FrameReader::new(&*f, &table)?;
-    let n = validate_separator(&mut reader, &find)? as usize;
     // Replace the frame the last record is in; the set_len below drops the empty frames with it.
     let last = last_data_frame(&table)?;
+    let n = match records_per_frame {
+        Some(n) => {
+            if table.frame_size_decomp(last)? == 0 {
+                bail!("refusing to append to a file with no data frames");
+            }
+            validate_records_per_frame(&mut reader, &find, last, n)?;
+            n
+        }
+        None => validate_separator(&mut reader, &find)? as usize,
+    };
 
     // Before anything is decoded, so that appending nothing costs one read and rewrites nothing.
     // A pipe hands back what has arrived rather than what was asked for, so the first bytes are
@@ -876,6 +905,28 @@ fn validate_separator(
     }
 
     Ok(first)
+}
+
+fn validate_records_per_frame(
+    reader: &mut FrameReader,
+    find: &impl Fn(&[u8]) -> Option<usize>,
+    last: u32,
+    n: usize,
+) -> anyhow::Result<()> {
+    for index in
+        [0, last.saturating_sub(1)]
+            .into_iter()
+            .take(if last > 1 { 2 } else { last as usize })
+    {
+        let (count, whole) = walk_frame(reader, find, index)?;
+        if count != n as u64 || !whole {
+            bail!(
+                "frame {index} must contain {n} whole records and no fragment: \
+                 found {count} records, ends whole: {whole}"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The four bytes every zstd frame starts with.

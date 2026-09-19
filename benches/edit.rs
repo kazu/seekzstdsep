@@ -200,6 +200,7 @@ fn append_to(c: &mut Criterion) {
                     SEPARATOR,
                     OnMissingSeparator::Refuse,
                     CompressionLevel::default(),
+                    None,
                 )
                 .expect("failed to append records")
             },

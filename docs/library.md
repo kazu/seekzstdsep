@@ -93,6 +93,7 @@ append(
         data: File::open("more.jsonl").unwrap(),
         on_missing: OnMissingSeparator::Refuse,
         level: 0,
+        records_per_frame: None,
     },
     b"\n",
 )
@@ -102,6 +103,11 @@ append(
 The records come from any `Read`. `OnMissingSeparator::Insert` writes a separator at the join
 instead of refusing a file that ends in a fragment. `level` is the Zstandard compression level of
 the frames this writes, 0 the zstd default.
+
+Set `records_per_frame: Some(n)` to append with a known frame count, including to a file with
+only one or two frames. `None` retains count inference and its three-frame minimum.
+The validation scope and last-frame rules are documented on
+[`append_records`](https://docs.rs/seekzstdsep/latest/seekzstdsep/fn.append_records.html).
 
 `AppendInput::Frames` joins another seekable file instead, copying its frames as compressed bytes:
 

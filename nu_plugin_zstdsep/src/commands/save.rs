@@ -198,10 +198,10 @@ impl PluginCommand for Save {
             let level = CompressionLevel::default();
             match boundary {
                 Boundary::Separator(sep) => {
-                    append_records(&mut file, records, &sep, on_missing, level)
+                    append_records(&mut file, records, &sep, on_missing, level, None)
                 }
                 Boundary::Finder(find) => {
-                    append_records_with(&mut file, records, &*find, on_missing, level)
+                    append_records_with(&mut file, records, &*find, on_missing, level, None)
                 }
             }
             .map_err(|e| failed(&path, &e.to_string(), call))?;

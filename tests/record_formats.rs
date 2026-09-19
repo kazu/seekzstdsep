@@ -326,6 +326,7 @@ fn test_append_adds_flatbuffers_records_to_a_flatbuffers_file() {
         find::by_le32_prefix,
         OnMissingSeparator::Refuse,
         0,
+        None,
     )
     .expect("failed to append");
     drop(f);
@@ -366,6 +367,7 @@ fn test_append_refuses_to_insert_a_separator_it_has_no_way_to_write() {
         find::by_le32_prefix,
         OnMissingSeparator::Insert,
         0,
+        None,
     )
     .expect_err("Insert was accepted");
     assert!(

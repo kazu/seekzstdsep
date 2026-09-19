@@ -105,7 +105,7 @@ Existing signatures are kept and become thin layers over the new ones.
 | `convert_records_to_seekable_zst_reader_with_opts(reader, writer, frame_size, is_same_record_cnt, find, limit_multiplier, opts)` | `convert_to_seekable_zst_reader_with_opts(...)` |
 | `compress_records_to_seekable_zst_with_opts(reader, writer, frame_size, is_same_record_cnt, find, limit_multiplier, opts)` | `compress_to_seekable_zst_with_opts(...)` |
 | `truncate_records(f, record_len, find)` | `truncate(f, record_len, separator)` |
-| `append_records_with(f, data, find, on_missing, level)` | `append_records(f, data, separator, on_missing, level)` |
+| `append_records_with(f, data, find, on_missing, level, records_per_frame)` | `append_records(f, data, separator, on_missing, level, records_per_frame)` |
 | `append_frames_with(f, input, from, cnt, find, check)` | `append_frames(...)` |
 | `copy_range_with(input, output, from, cnt, find, align, check)` | `copy_range(...)` |
 
