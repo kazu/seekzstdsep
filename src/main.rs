@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use seekzstdsep::cli::{BoundaryArgs, ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
 use seekzstdsep::find::Boundary;
 use seekzstdsep::{
-    AppendInput, CompressionLevel, CopyMode, InspectOptions, OnMissingSeparator, RangeCheck,
-    RecordReader, append, append_frames_with, append_records_with, copy_and_replace,
+    AppendInput, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck, RecordReader,
+    append, append_frames_with, append_records_with, copy_and_replace,
     seekzstdsep_lib::{inspect_records_with_opts, inspect_with_opts},
     truncate, truncate_records,
 };
@@ -49,7 +49,7 @@ struct InspectArgs {
 
 #[derive(Args, Debug)]
 struct TruncateArgs {
-    /// Update a copy and replace FILE; fall back to locked direct truncate if copying fails
+    /// Update a copy and replace FILE; refuse if another writer holds the lock
     #[arg(long)]
     copy: bool,
     #[arg(value_name = "FILE", required = true)]
@@ -64,7 +64,7 @@ struct TruncateArgs {
 
 #[derive(Args, Debug)]
 struct AppendArgs {
-    /// Update a copy and replace FILE; fall back to locked direct append if copying fails
+    /// Update a copy and replace FILE; refuse if another writer holds the lock
     #[arg(long)]
     copy: bool,
     #[arg(value_name = "FILE", required = true)]
@@ -172,11 +172,7 @@ fn main() -> anyhow::Result<()> {
                 Boundary::Finder(find) => truncate_records(file, args.records, &*find),
             };
             if args.copy {
-                if copy_and_replace(&args.zstfile, update)? == CopyMode::Direct {
-                    tracing::warn!(
-                        "copy unavailable; truncated directly while holding the writer lock"
-                    );
-                }
+                copy_and_replace(&args.zstfile, update)?;
             } else {
                 let mut file = File::options()
                     .read(true)
@@ -252,11 +248,7 @@ fn main() -> anyhow::Result<()> {
                 Ok(())
             };
             if args.copy {
-                if copy_and_replace(&args.zstfile, update)? == CopyMode::Direct {
-                    tracing::warn!(
-                        "copy unavailable; appended directly while holding the writer lock"
-                    );
-                }
+                copy_and_replace(&args.zstfile, update)?;
             } else {
                 let mut file = File::options()
                     .read(true)

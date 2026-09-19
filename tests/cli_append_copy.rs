@@ -45,6 +45,7 @@ fn copy_flag_publishes_append_without_changing_an_open_reader() {
         &path,
         &[fixture_records().concat(), b"added\n".to_vec()].concat(),
     );
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
 }
 
 #[test]
@@ -145,66 +146,55 @@ fn copy_flag_keeps_fragment_refusal_and_separator_insertion() {
 }
 
 #[test]
-fn cli_copy_cooperates_with_a_library_copy() {
+fn cli_append_and_truncate_are_rejected_while_a_library_copy_holds_the_lock() {
     let dir = tempfile::tempdir().unwrap();
     let path = compress_fixture(dir.path());
     let input = dir.path().join("input");
     fs::write(&input, b"direct\n").unwrap();
-    let err = seekzstdsep::copy_and_replace(&path, |_| {
-        succeeded(&run(&path, &input, &["--copy"]));
-        Ok(())
-    })
-    .unwrap_err();
-    assert!(err.to_string().contains("conflict"));
-    let lock = path.with_file_name(format!(
-        ".{}.seekzstdsep.lock",
-        path.file_name().unwrap().to_str().unwrap()
-    ));
-    assert!(lock.is_file());
-    assert_decompresses_to(
-        &path,
-        &[fixture_records().concat(), b"direct\n".to_vec()].concat(),
-    );
-    let err = seekzstdsep::copy_and_replace(&path, |_| {
+    seekzstdsep::copy_and_replace(&path, |_| {
+        let output = run(&path, &input, &["--copy"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("creating writer lock"));
         let output = Command::new(BIN)
             .arg("truncate")
             .arg(&path)
             .args(["--records", "234", "--copy"])
             .output()?;
-        succeeded(&output);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("creating writer lock"));
         Ok(())
     })
-    .unwrap_err();
-    assert!(err.to_string().contains("conflict"));
-    assert_decompresses_to(&path, &fixture_records()[..234].concat());
+    .unwrap();
+    assert_decompresses_to(&path, &fixture_records().concat());
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn copy_creation_failure_reports_direct_fallback() {
+fn copy_creation_failure_is_an_error_without_direct_update() {
     let dir = tempfile::tempdir().unwrap();
-    let original = compress_fixture(dir.path());
-    let mut parent = dir.path().canonicalize().unwrap();
-    for _ in 0..30 {
-        let remaining = 4030 - parent.as_os_str().len();
-        if remaining == 0 {
-            break;
-        }
-        parent.push("d".repeat((remaining - 1).min(200)));
-        fs::create_dir(&parent).unwrap();
-    }
-    assert_eq!(parent.as_os_str().len(), 4030);
-    let path = parent.join("x");
-    fs::copy(&original, &path).unwrap();
+    let path = compress_fixture(dir.path());
+    let before = fs::read(&path).unwrap();
+    let temp = path.with_file_name(format!(
+        ".tmp.{}",
+        path.file_name().unwrap().to_str().unwrap()
+    ));
+    fs::write(&temp, b"leftover copy").unwrap();
     let input = dir.path().join("input");
-    fs::write(&input, b"fallback\n").unwrap();
+    fs::write(&input, b"added\n").unwrap();
     let output = run(&path, &input, &["--copy"]);
-    succeeded(&output);
-    assert!(String::from_utf8_lossy(&output.stderr).contains("appended directly"));
-    assert_decompresses_to(
-        &path,
-        &[fixture_records().concat(), b"fallback\n".to_vec()].concat(),
-    );
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let output = Command::new(BIN)
+        .arg("truncate")
+        .arg(&path)
+        .args(["--records", "234", "--copy"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read(&temp).unwrap(), b"leftover copy");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
+    fs::remove_file(temp).unwrap();
     let output = Command::new(BIN)
         .arg("truncate")
         .arg(&path)
@@ -212,6 +202,6 @@ fn copy_creation_failure_reports_direct_fallback() {
         .output()
         .unwrap();
     succeeded(&output);
-    assert!(String::from_utf8_lossy(&output.stderr).contains("truncated directly"));
     assert_decompresses_to(&path, &fixture_records()[..234].concat());
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
 }

@@ -6,7 +6,7 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     path::Path,
-    sync::{Arc, Barrier},
+    sync::mpsc,
 };
 
 fn add(f: &mut File, data: &[u8]) -> anyhow::Result<()> {
@@ -18,7 +18,7 @@ fn assert_clean(path: &Path) {
         .unwrap()
         .map(|e| e.unwrap().file_name())
         .collect();
-    assert_eq!(names.len(), 2, "only target and persistent lock: {names:?}");
+    assert_eq!(names.len(), 1, "only target: {names:?}");
 }
 
 #[test]
@@ -44,51 +44,40 @@ fn copy_append_preserves_old_readers_and_publishes_complete_records() {
 }
 
 #[test]
-fn two_copies_of_one_version_cannot_lose_a_successful_append() {
+fn a_second_copy_is_rejected_while_the_first_is_being_edited() {
     let dir = tempfile::tempdir().unwrap();
     let path = compress_fixture(dir.path());
-    let barrier = Arc::new(Barrier::new(2));
-    let results = std::thread::scope(|s| {
-        let handles: Vec<_> = [b"winner a\n".as_slice(), b"winner b\n".as_slice()]
-            .into_iter()
-            .map(|data| {
-                let barrier = barrier.clone();
-                let path = &path;
-                s.spawn(move || {
-                    (
-                        data,
-                        copy_and_replace(path, |f| {
-                            barrier.wait();
-                            add(f, data)
-                        }),
-                    )
-                })
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel();
+    std::thread::scope(|s| {
+        let path = &path;
+        let first = s.spawn(move || {
+            copy_and_replace(path, |f| {
+                ready_tx.send(()).unwrap();
+                go_rx.recv().unwrap();
+                add(f, b"winner\n")
             })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap())
-            .collect::<Vec<_>>()
+        });
+        ready_rx.recv().unwrap();
+        let rejected = copy_and_replace(path, |_| panic!("second writer entered"));
+        go_tx.send(()).unwrap();
+        first.join().unwrap().unwrap();
+        assert!(
+            rejected
+                .unwrap_err()
+                .to_string()
+                .contains("creating writer lock")
+        );
     });
-    assert_eq!(results.iter().filter(|(_, r)| r.is_ok()).count(), 1);
-    let winner = results.iter().find(|(_, r)| r.is_ok()).unwrap().0;
-    let err = results
-        .iter()
-        .find(|(_, r)| r.is_err())
-        .unwrap()
-        .1
-        .as_ref()
-        .unwrap_err();
-    assert!(err.to_string().contains("conflict"), "{err:#}");
     assert_decompresses_to(
         &path,
-        &[fixture_records().concat(), winner.to_vec()].concat(),
+        &[fixture_records().concat(), b"winner\n".to_vec()].concat(),
     );
     assert_clean(&path);
 }
 
 #[test]
-fn locked_direct_append_causes_an_older_copy_to_conflict() {
+fn locked_direct_append_is_rejected_while_a_copy_is_being_edited() {
     let dir = tempfile::tempdir().unwrap();
     let path = compress_fixture(dir.path());
     let err = copy_and_replace(&path, |f| {
@@ -96,16 +85,13 @@ fn locked_direct_append_causes_an_older_copy_to_conflict() {
         add(f, b"stale\n")
     })
     .unwrap_err();
-    assert!(err.to_string().contains("conflict"), "{err:#}");
-    assert_decompresses_to(
-        &path,
-        &[fixture_records().concat(), b"direct\n".to_vec()].concat(),
-    );
+    assert!(err.to_string().contains("creating writer lock"), "{err:#}");
+    assert_decompresses_to(&path, &fixture_records().concat());
     assert_clean(&path);
 }
 
 #[test]
-fn truncate_callback_detects_intervening_append_and_truncate() {
+fn truncate_callback_excludes_other_append_and_truncate_writers() {
     for direct in [false, true] {
         for append in [false, true] {
             let dir = tempfile::tempdir().unwrap();
@@ -126,13 +112,8 @@ fn truncate_callback_detects_intervening_append_and_truncate() {
                 seekzstdsep::truncate(file, 117, b"\n")
             })
             .unwrap_err();
-            assert!(error.to_string().contains("conflict"));
-            let expected = if append {
-                [fixture_records().concat(), b"winner\n".to_vec()].concat()
-            } else {
-                fixture_records_upto(234, true).concat()
-            };
-            assert_decompresses_to(&path, &expected);
+            assert!(error.to_string().contains("creating writer lock"));
+            assert_decompresses_to(&path, &fixture_records().concat());
             assert_clean(&path);
         }
     }
@@ -154,7 +135,7 @@ fn failed_append_cleans_its_copy_without_changing_the_target() {
 }
 
 #[test]
-fn empty_append_keeps_the_bytes_and_reuses_the_lock() {
+fn empty_append_keeps_the_bytes_and_removes_the_lock_each_time() {
     let dir = tempfile::tempdir().unwrap();
     let path = compress_fixture(dir.path());
     let before = fs::read(&path).unwrap();

@@ -193,7 +193,7 @@ fn test_truncate_copy_preserves_readers_and_existing_boundary_behavior() {
                 std::fs::read(&path).unwrap(),
                 std::fs::read(&direct).unwrap()
             );
-            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
         }
     }
 }

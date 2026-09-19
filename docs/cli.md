@@ -123,10 +123,10 @@ seekzstdsep truncate events.jsonl.seek.zst --records 10000
 The frames past the cut are dropped and nothing is re-encoded or rewritten before it. The seek
 table is rebuilt in full, so that part is linear in the number of frames.
 
-Add `--copy` to edit a private copy and replace the file, sharing the lock and conflict detection
-with `append --copy`. Existing readers retain the old file after replacement. If copying fails,
-truncate edits the original under lock and warns on stderr; that fallback does not protect readers.
-Other errors do not fall back. Without `--copy`, the existing in-place operation stays unlocked.
+Add `--copy` to edit a private copy and replace the file, sharing the writer lock
+with `append --copy`. Existing readers retain the old file after replacement. An existing lock
+causes an immediate error. Copy or edit failure leaves the original unchanged.
+Without `--copy`, the existing in-place operation stays unlocked.
 Direct library writers can cooperate through `with_file_lock`; see
 [`copy_and_replace`](https://docs.rs/seekzstdsep/latest/seekzstdsep/fn.copy_and_replace.html)
 for filesystem and metadata requirements. The same command works in bash/zsh and nushell:
@@ -151,9 +151,12 @@ Add `--copy` to update a temporary copy and replace the file:
 seekzstdsep append events.jsonl.seek.zst more.jsonl --copy
 ```
 
-This uses [`copy_and_replace`](https://docs.rs/seekzstdsep/latest/seekzstdsep/fn.copy_and_replace.html),
-including its writer lock and conflict detection. If copying is unavailable, it falls back to
-locked in-place append and reports that on stderr. All append input options work with `--copy`.
+This uses [`copy_and_replace`](https://docs.rs/seekzstdsep/latest/seekzstdsep/fn.copy_and_replace.html).
+It exclusively creates `.lock.<filename>` beside the target, edits `.tmp.<filename>`, replaces
+the target, and removes the lock. An existing lock or temporary file causes an error; neither
+is overwritten or removed by the rejected operation. Copy failure is an error, with no direct
+append fallback. Forced termination can leave these files behind; remove them only after
+verifying that no writer is active. All append input options work with `--copy`.
 Without it, append keeps its existing unlocked, in-place behavior; concurrent writers must use
 the cooperating library APIs or `--copy`.
 

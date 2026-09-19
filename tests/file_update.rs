@@ -2,14 +2,12 @@
 #[path = "../src/file_update.rs"]
 mod file_update;
 
-use file_update::{CopyMode, FileOps, System, copy_and_replace_using, with_file_lock_using};
-use fs2::FileExt;
+use file_update::{CopyMode, FileOps, System, copy_and_replace_using};
 use std::{
     cell::Cell,
     fs::{self, File},
     io::{self, Read, Seek, Write},
     path::{Path, PathBuf},
-    sync::mpsc,
 };
 
 struct Fixture {
@@ -22,33 +20,23 @@ impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("data");
-        let lock = dir.path().join(".data.seekzstdsep.lock");
+        let lock = dir.path().join(".lock.data");
         fs::write(&path, b"original").unwrap();
         Self { dir, path, lock }
     }
 
     fn clean(&self) {
-        assert!(self.lock.is_file());
-        assert_eq!(fs::read_dir(self.dir.path()).unwrap().count(), 2);
+        assert!(!self.lock.exists());
+        assert_eq!(fs::read_dir(self.dir.path()).unwrap().count(), 1);
     }
 
     fn locked(&self) {
-        let file = File::options()
-            .read(true)
+        let error = File::options()
             .write(true)
+            .create_new(true)
             .open(&self.lock)
-            .unwrap();
-        let error = FileExt::try_lock_exclusive(&file).unwrap_err();
-        assert_eq!(error.kind(), fs2::lock_contended_error().kind());
-    }
-
-    fn unlocked(&self) {
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .open(&self.lock)
-            .unwrap();
-        FileExt::try_lock_exclusive(&file).unwrap();
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
     }
 }
 
@@ -61,19 +49,12 @@ enum Failure {
     None,
     Temp,
     Copy,
-    FirstHash,
-    LastHash,
-    FirstLock,
-    LastLock,
-    Unlock,
     Rename,
 }
 
 struct Probe<'a> {
     fixture: &'a Fixture,
     failure: Failure,
-    locks: Cell<usize>,
-    hashes: Cell<usize>,
     copies: Cell<usize>,
     ordinary: Cell<usize>,
     renames: Cell<usize>,
@@ -84,8 +65,6 @@ impl<'a> Probe<'a> {
         Self {
             fixture,
             failure,
-            locks: Cell::new(0),
-            hashes: Cell::new(0),
             copies: Cell::new(0),
             ordinary: Cell::new(0),
             renames: Cell::new(0),
@@ -94,53 +73,13 @@ impl<'a> Probe<'a> {
 }
 
 impl FileOps for Probe<'_> {
-    fn lock(&self, file: &File) -> io::Result<()> {
-        let n = self.locks.get() + 1;
-        self.locks.set(n);
-        if matches!(
-            (self.failure, n),
-            (Failure::FirstLock, 1) | (Failure::LastLock, 2)
-        ) {
-            return Err(injected());
-        }
-        System.lock(file)
-    }
-
-    fn unlock(&self, file: &File) -> io::Result<()> {
-        if matches!(self.failure, Failure::Unlock) {
-            return Err(injected());
-        }
-        System.unlock(file)
-    }
-
-    fn hash(&self, file: &mut File) -> io::Result<String> {
-        self.fixture.locked();
-        let n = self.hashes.get() + 1;
-        self.hashes.set(n);
-        if matches!(
-            (self.failure, n),
-            (Failure::FirstHash, 1) | (Failure::LastHash, 2)
-        ) {
-            return Err(injected());
-        }
-        System.hash(file)
-    }
-
-    fn create_copy(&self, path: &Path, hash: &str) -> io::Result<tempfile::NamedTempFile> {
+    fn create_copy(&self, path: &Path) -> io::Result<tempfile::NamedTempFile> {
         self.fixture.locked();
         if matches!(self.failure, Failure::Temp) {
             return Err(injected());
         }
-        let temp = System.create_copy(path, hash)?;
-        assert_eq!(temp.path().parent(), path.parent());
-        assert!(
-            temp.path()
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .contains(hash)
-        );
+        let temp = System.create_copy(path)?;
+        assert_eq!(temp.path(), path.with_file_name(".tmp.data"));
         Ok(temp)
     }
 
@@ -163,7 +102,6 @@ impl FileOps for Probe<'_> {
 
     fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
         self.fixture.locked();
-        assert_eq!(self.hashes.get(), 2);
         self.renames.set(self.renames.get() + 1);
         if matches!(self.failure, Failure::Rename) {
             return Err(injected());
@@ -173,13 +111,13 @@ impl FileOps for Probe<'_> {
 }
 
 #[test]
-fn ordinary_copy_clears_a_partial_reflink_and_all_critical_intervals_are_locked() {
+fn ordinary_copy_clears_a_partial_reflink_and_the_entire_update_is_locked() {
     let fixture = Fixture::new();
     let probe = Probe::new(&fixture, Failure::None);
     let mode = copy_and_replace_using(
         &fixture.path,
         |file| {
-            fixture.unlocked();
+            fixture.locked();
             assert_eq!(file.stream_position()?, 0);
             let mut content = String::new();
             file.read_to_string(&mut content)?;
@@ -201,201 +139,156 @@ fn ordinary_copy_clears_a_partial_reflink_and_all_critical_intervals_are_locked(
     );
     assert_eq!(fs::read(&fixture.path).unwrap(), b"original added");
     fixture.clean();
-    fixture.unlocked();
 }
 
 #[test]
-fn only_copy_failures_fall_back_with_the_unconsumed_input_and_lock() {
-    for failure in [Failure::Temp, Failure::Copy] {
-        let fixture = Fixture::new();
-        let probe = Probe::new(&fixture, failure);
-        let mut input = io::Cursor::new(b"added");
-        let calls = Cell::new(0);
-        let mode = copy_and_replace_using(
-            &fixture.path,
-            |file| {
-                calls.set(calls.get() + 1);
-                fixture.locked();
-                assert_eq!(input.position(), 0);
-                assert_eq!(file.stream_position()?, 0);
-                file.seek(io::SeekFrom::End(0))?;
-                io::copy(&mut input, file)?;
-                Ok(())
-            },
-            &probe,
-        )
-        .unwrap();
-        assert_eq!(mode, CopyMode::Direct);
-        assert_eq!(calls.get(), 1);
-        assert_eq!(probe.renames.get(), 0);
-        assert_eq!(fs::read(&fixture.path).unwrap(), b"originaladded");
-        fixture.clean();
-        fixture.unlocked();
-    }
-}
-
-#[test]
-fn hash_lock_unlock_and_rename_failures_never_run_a_direct_fallback() {
-    for failure in [
-        Failure::FirstHash,
-        Failure::LastHash,
-        Failure::FirstLock,
-        Failure::LastLock,
-        Failure::Unlock,
-        Failure::Rename,
-    ] {
+fn copy_and_rename_failures_leave_the_original_and_remove_owned_files() {
+    for failure in [Failure::Temp, Failure::Copy, Failure::Rename] {
         let fixture = Fixture::new();
         let probe = Probe::new(&fixture, failure);
         let calls = Cell::new(0);
         let result = copy_and_replace_using(
             &fixture.path,
             |file| {
-                fixture.unlocked();
                 calls.set(calls.get() + 1);
+                fixture.locked();
                 file.write_all(b"changed!")?;
                 Ok(())
             },
             &probe,
         );
         assert!(format!("{:#}", result.unwrap_err()).contains("injected failure"));
-        assert!(calls.get() <= 1);
+        assert_eq!(calls.get(), usize::from(matches!(failure, Failure::Rename)));
         assert_eq!(fs::read(&fixture.path).unwrap(), b"original");
         fixture.clean();
-        fixture.unlocked();
     }
 }
 
 #[test]
-fn final_hash_reopens_the_path_instead_of_hashing_the_retired_handle() {
+fn existing_lock_is_rejected_without_touching_files_or_calling_update() {
     let fixture = Fixture::new();
-    let probe = Probe::new(&fixture, Failure::None);
-    let result = copy_and_replace_using(
-        &fixture.path,
-        |file| {
-            file_update::copy_and_replace(&fixture.path, |current| {
-                current.write_all(b"new data")?;
-                Ok(())
-            })?;
-            file.write_all(b"stale!!!")?;
-            Ok(())
-        },
-        &probe,
-    );
-    assert!(result.unwrap_err().to_string().contains("conflict"));
-    assert_eq!(probe.renames.get(), 0);
-    assert_eq!(fs::read(&fixture.path).unwrap(), b"new data");
-    fixture.clean();
-}
-
-#[test]
-fn a_failed_direct_callback_is_not_retried_or_rolled_back() {
-    let fixture = Fixture::new();
-    let probe = Probe::new(&fixture, Failure::Copy);
-    let mut calls = 0;
-    let result = copy_and_replace_using(
-        &fixture.path,
-        |file| {
-            calls += 1;
-            fixture.locked();
-            file.write_all(b"partial!")?;
-            anyhow::bail!("callback failure")
-        },
-        &probe,
-    );
-    assert!(result.unwrap_err().to_string().contains("callback failure"));
-    assert_eq!(calls, 1);
-    assert_eq!(fs::read(&fixture.path).unwrap(), b"partial!");
-    fixture.clean();
-    fixture.unlocked();
-}
-
-#[test]
-fn direct_and_copy_open_the_target_only_after_obtaining_the_lock() {
-    struct Waiting(mpsc::Sender<()>, mpsc::Receiver<()>);
-    impl FileOps for Waiting {
-        fn lock(&self, file: &File) -> io::Result<()> {
-            self.0.send(()).unwrap();
-            self.1.recv().unwrap();
-            System.lock(file)
-        }
+    let temp = fixture.dir.path().join(".tmp.data");
+    fs::write(&fixture.lock, b"another writer").unwrap();
+    fs::write(&temp, b"another copy").unwrap();
+    let update = |_: &mut File| -> anyhow::Result<()> { panic!("lock was ignored") };
+    for result in [
+        file_update::with_file_lock(&fixture.path, update),
+        file_update::copy_and_replace(&fixture.path, update).map(|_| ()),
+    ] {
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::AlreadyExists
+        );
     }
+    assert_eq!(fs::read(&fixture.lock).unwrap(), b"another writer");
+    assert_eq!(fs::read(temp).unwrap(), b"another copy");
+    assert_eq!(fs::read(&fixture.path).unwrap(), b"original");
+}
+
+#[test]
+fn existing_temporary_file_is_preserved_and_our_lock_is_removed() {
+    let fixture = Fixture::new();
+    let temp = fixture.dir.path().join(".tmp.data");
+    fs::write(&temp, b"leftover copy").unwrap();
+    let error = file_update::copy_and_replace(&fixture.path, |_| panic!("temp was overwritten"))
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<io::Error>().unwrap().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert!(!fixture.lock.exists());
+    assert_eq!(fs::read(temp).unwrap(), b"leftover copy");
+    assert_eq!(fs::read(&fixture.path).unwrap(), b"original");
+}
+
+#[test]
+fn missing_target_does_not_leave_a_lock() {
     for copy in [false, true] {
         let fixture = Fixture::new();
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let (go_tx, go_rx) = mpsc::channel();
-        std::thread::scope(|s| {
-            let handle = s.spawn(|| {
-                let ops = Waiting(ready_tx, go_rx);
-                let check = |file: &mut File| {
-                    let mut content = String::new();
-                    file.read_to_string(&mut content)?;
-                    assert_eq!(content, "replacement");
-                    anyhow::bail!("checked current file")
+        fs::remove_file(&fixture.path).unwrap();
+        let update = |_: &mut File| -> anyhow::Result<()> { panic!("missing target accepted") };
+        let result = if copy {
+            file_update::copy_and_replace(&fixture.path, update).map(|_| ())
+        } else {
+            file_update::with_file_lock(&fixture.path, update)
+        };
+        assert!(result.is_err());
+        assert_eq!(fs::read_dir(fixture.dir.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn callback_error_or_panic_cleans_up_without_retrying() {
+    for copy in [false, true] {
+        for panic in [false, true] {
+            let fixture = Fixture::new();
+            let calls = Cell::new(0);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let update = |file: &mut File| -> anyhow::Result<()> {
+                    calls.set(calls.get() + 1);
+                    fixture.locked();
+                    file.write_all(b"partial!")?;
+                    assert!(!panic, "callback panic");
+                    anyhow::bail!("callback failure")
                 };
                 if copy {
-                    copy_and_replace_using(&fixture.path, check, &ops).map(|_| ())
+                    file_update::copy_and_replace(&fixture.path, update).map(|_| ())
                 } else {
-                    with_file_lock_using(&fixture.path, check, &ops)
+                    file_update::with_file_lock(&fixture.path, update)
                 }
-            });
-            ready_rx.recv().unwrap();
-            file_update::with_file_lock(&fixture.path, |_| {
-                let replacement = fixture.dir.path().join("replacement");
-                fs::write(&replacement, b"replacement")?;
-                fs::rename(replacement, &fixture.path)?;
-                Ok(())
-            })
-            .unwrap();
-            go_tx.send(()).unwrap();
-            assert!(
-                handle
-                    .join()
-                    .unwrap()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("checked current file")
+            }));
+            if panic {
+                assert!(result.is_err());
+            } else {
+                assert!(
+                    result
+                        .unwrap()
+                        .unwrap_err()
+                        .to_string()
+                        .contains("callback failure")
+                );
+            }
+            assert_eq!(calls.get(), 1);
+            assert_eq!(
+                fs::read(&fixture.path).unwrap(),
+                if copy { b"original" } else { b"partial!" }
             );
-        });
-        fixture.clean();
+            fixture.clean();
+        }
     }
+}
+
+#[test]
+fn lock_removal_failure_is_reported_even_after_publication() {
+    let fixture = Fixture::new();
+    let error = file_update::copy_and_replace(&fixture.path, |file| {
+        file.write_all(b"updated!")?;
+        fs::remove_file(&fixture.lock)?;
+        fs::create_dir(&fixture.lock)?;
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("removing writer lock"));
+    assert_eq!(fs::read(&fixture.path).unwrap(), b"updated!");
+    assert!(!fixture.dir.path().join(".tmp.data").exists());
 }
 
 #[test]
 fn separate_targets_can_be_updated_while_another_target_is_locked() {
     let a = Fixture::new();
-    let b = Fixture::new();
+    let b = a.dir.path().join("other");
+    fs::write(&b, b"original").unwrap();
     file_update::with_file_lock(&a.path, |_| {
-        file_update::copy_and_replace(&b.path, |file| {
+        file_update::copy_and_replace(&b, |file| {
             file.write_all(b"other!!!")?;
             Ok(())
         })?;
         Ok(())
     })
     .unwrap();
-    assert_eq!(fs::read(&b.path).unwrap(), b"other!!!");
-}
-
-#[test]
-fn full_content_hash_detects_changes_with_the_same_size_and_mtime() {
-    let fixture = Fixture::new();
-    let times = fs::metadata(&fixture.path).unwrap();
-    let err = file_update::copy_and_replace(&fixture.path, |_| {
-        file_update::with_file_lock(&fixture.path, |file| {
-            file.write_all(b"changed!")?;
-            file.sync_all()?;
-            file.set_times(fs::FileTimes::new().set_modified(times.modified()?))?;
-            Ok(())
-        })?;
-        Ok(())
-    })
-    .unwrap_err();
-    assert!(err.to_string().contains("conflict"));
-    assert_eq!(
-        fs::metadata(&fixture.path).unwrap().modified().unwrap(),
-        times.modified().unwrap()
-    );
-    assert_eq!(fs::read(&fixture.path).unwrap(), b"changed!");
-    fixture.clean();
+    assert_eq!(fs::read(&b).unwrap(), b"other!!!");
+    assert_eq!(fs::read_dir(a.dir.path()).unwrap().count(), 2);
 }
 
 #[cfg(unix)]
@@ -426,9 +319,11 @@ fn symlinks_and_hardlinks_are_refused_without_touching_their_contents() {
         } else {
             std::os::unix::fs::symlink(&fixture.path, &alias).unwrap();
         }
-        let result = file_update::copy_and_replace(&alias, |_| panic!("invalid target accepted"));
-        assert!(result.is_err());
+        assert!(
+            file_update::copy_and_replace(&alias, |_| panic!("invalid target accepted")).is_err()
+        );
         assert_eq!(fs::read(&fixture.path).unwrap(), b"original");
+        assert_eq!(fs::read_dir(fixture.dir.path()).unwrap().count(), 2);
     }
 }
 
@@ -441,6 +336,10 @@ fn parent_directory_aliases_share_the_fixed_lock() {
     std::os::unix::fs::symlink(fixture.dir.path(), &alias).unwrap();
     file_update::with_file_lock(alias.join("data"), |_| {
         fixture.locked();
+        assert!(
+            file_update::copy_and_replace(&fixture.path, |_| panic!("alias bypassed lock"))
+                .is_err()
+        );
         Ok(())
     })
     .unwrap();
