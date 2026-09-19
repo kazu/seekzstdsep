@@ -33,6 +33,8 @@ tracing-log = "0.1"
 tracing-logfmt = "0.3"
 reflink-copy = "0.1.28"
 memchr = "2.7.6"
+fs2 = "0.4.3"
+sha2 = "0.10.9"
 
 [dev-dependencies]
 criterion = "0.5"
