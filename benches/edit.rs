@@ -231,5 +231,45 @@ fn append_to(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, copy, count, append_to);
+fn append_copy(c: &mut Criterion) {
+    let mut group = c.benchmark_group("append_copy");
+    for records in [3_000, RECORDS] {
+        let (dir, path) = fixture_of(records);
+        let target = dir.path().join("append-target.seek.zst");
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        group.throughput(Throughput::Bytes(bytes));
+        for copy in [false, true] {
+            let method = if copy { "replace" } else { "direct" };
+            group.bench_function(BenchmarkId::new(method, bytes), |b| {
+                b.iter_batched(
+                    || std::fs::copy(&path, &target).unwrap(),
+                    |_| {
+                        let append = |file: &mut File| {
+                            append_records(
+                                file,
+                                b"appended\n".as_slice(),
+                                SEPARATOR,
+                                OnMissingSeparator::Refuse,
+                                CompressionLevel::default(),
+                                None,
+                            )
+                        };
+                        if copy {
+                            assert_eq!(
+                                seekzstdsep::append_copy(&target, append).unwrap(),
+                                seekzstdsep::AppendMode::Replaced,
+                            );
+                        } else {
+                            seekzstdsep::with_file_lock(&target, append).unwrap();
+                        }
+                    },
+                    BatchSize::PerIteration,
+                )
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, copy, count, append_to, append_copy);
 criterion_main!(benches);

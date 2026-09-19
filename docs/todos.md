@@ -34,26 +34,13 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 - [x] Counting a frame's records holds the whole frame
 - [x] The nushell plugin cannot open a file that has no separator
 - [x] `RecordReader` cannot be asked to check the uniform count
+- [x] Library copy-and-replace append
 
 ### Concurrent append, and reading during an append
 
-`append` is a read-modify-write of the tail: read the seek table, decode the last data frame,
-`set_len` it away, write the replacement, write a new table. Two writers doing that at once corrupt
-each other, and no choice of parameter type prevents it — the seek table sits at the end and the
-last frame is partial, so appending is a rebuild of the tail rather than a write after it.
-
-Exclusive access is therefore required: a mutex within a process, `flock` across processes. `&mut
-File` states that requirement even though the borrow checker cannot enforce it across handles.
-
-Writing concurrently scales by giving each writer its own file and merging later, which is what
-segmented logs do. Merging without re-compressing needs every file aligned — `compress` then
-`truncate` to the last frame boundary is what provides that — and needs each writer's remainder
-carried into its next batch rather than left at the end of its own file, or it lands out of order in
-the merged result.
-
-Undecided: what a reader sees while an append runs. Frames before the last one do not move, so
-already-written records stay readable, but a reader that opens between the `set_len` and the table
-write finds no seek table, and one reading near the tail sees the frame replaced underneath it.
+- CLI append support (git_task 002).
+- Cooperating truncate and copy-range, including CLI support (git_task 003/004).
+- Plugin support.
 
 ### Separate metadata from lookup
 
@@ -193,4 +180,3 @@ Nothing is broken by it: the arithmetic that placed a range no longer wraps on s
 the read stops at the last record. What is left is that the same request is written two ways in
 one command line. `Option<u64>` on `CatArgs::cnt` makes them one, and is a change to the interface
 rather than a defect.
-

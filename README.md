@@ -91,6 +91,8 @@ let mut reader = RecordReader::open("events.jsonl.seek.zst".into(), b"\n").unwra
 reader.records_to(10_000, 3, &mut io::stdout()).unwrap();
 ```
 
+Use [`append_copy`](src/file_update.rs) to append through a private copy and replace the file.
+
 ## nushell plugin
 
 `nu_plugin_zstdsep/` reads the same files from nushell, keeping the file open as a value:
