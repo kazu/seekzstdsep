@@ -145,6 +145,59 @@ fn test_truncate_subcommand_exits_non_zero_on_a_refusal() {
     );
 }
 
+#[test]
+fn test_truncate_copy_preserves_readers_and_existing_boundary_behavior() {
+    use std::io::Read;
+    for (group, flags) in [
+        (b"rec1<>rec2<>".as_slice(), vec!["--separator", "<>"]),
+        (
+            b"rec1rec2".as_slice(),
+            vec!["--finder", "fixed", "--finder-arg", "4"],
+        ),
+    ] {
+        for keep in ["0", "1", "4", "8"] {
+            let dir = tempdir().unwrap();
+            let path = compress_frames(dir.path(), "copy", &vec![group.to_vec(); 3]);
+            let direct = dir.path().join("direct");
+            std::fs::copy(&path, &direct).unwrap();
+            let before = std::fs::read(&path).unwrap();
+            let mut old = File::open(&path).unwrap();
+            let run = |path: &Path, copy| {
+                let mut cmd = Command::new(BIN);
+                cmd.arg("truncate")
+                    .arg(path)
+                    .args(["--records", keep])
+                    .args(&flags);
+                if copy {
+                    cmd.arg("--copy");
+                }
+                cmd.output().unwrap()
+            };
+            let expected = run(&direct, false);
+            let actual = run(&path, true);
+            assert_eq!(
+                actual.status.success(),
+                expected.status.success(),
+                "{}",
+                String::from_utf8_lossy(&actual.stderr)
+            );
+            if !expected.status.success() {
+                assert_eq!(actual.stderr, expected.stderr);
+                assert_eq!(std::fs::read(&path).unwrap(), before);
+            }
+            let mut held = Vec::new();
+            old.read_to_end(&mut held).unwrap();
+            assert_eq!(held, before);
+            drop(old);
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                std::fs::read(&direct).unwrap()
+            );
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+        }
+    }
+}
+
 fn run_append(path: &Path, args: &[&str]) -> Output {
     Command::new(BIN)
         .args(["append", path.to_str().unwrap()])

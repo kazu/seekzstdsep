@@ -49,6 +49,9 @@ struct InspectArgs {
 
 #[derive(Args, Debug)]
 struct TruncateArgs {
+    /// Update a copy and replace FILE; fall back to locked direct truncate if copying fails
+    #[arg(long)]
+    copy: bool,
     #[arg(value_name = "FILE", required = true)]
     zstfile: PathBuf,
     /// Records to keep: the resulting length, not the number removed. Has to be a multiple of the
@@ -108,7 +111,7 @@ enum Commands {
     /// A frame's content checksum is checked only when something decodes all of it, which this
     /// does not: see `docs/bugs.md`.
     Cat(CatArgs),
-    /// Shorten a zst file to a record count, in place. Destructive.
+    /// Shorten a zst file to a record count (in place unless --copy is specified). Destructive.
     Truncate(TruncateArgs),
     /// Append records to a zst file (in place unless --copy is specified).
     Append(AppendArgs),
@@ -164,14 +167,23 @@ fn main() -> anyhow::Result<()> {
             run_compress(&args, io::stdin().lock(), io::stdout())?;
         }
         Commands::Truncate(args) => {
-            let mut file = File::options()
-                .read(true)
-                .write(true)
-                .open(&args.zstfile)
-                .with_context(|| format!("failed to open {}", args.zstfile.display()))?;
-            match args.boundary.boundary()? {
-                Boundary::Separator(sep) => truncate(&mut file, args.records, &sep)?,
-                Boundary::Finder(find) => truncate_records(&mut file, args.records, &*find)?,
+            let update = |file: &mut File| match args.boundary.boundary()? {
+                Boundary::Separator(sep) => truncate(file, args.records, &sep),
+                Boundary::Finder(find) => truncate_records(file, args.records, &*find),
+            };
+            if args.copy {
+                if copy_and_replace(&args.zstfile, update)? == CopyMode::Direct {
+                    tracing::warn!(
+                        "copy unavailable; truncated directly while holding the writer lock"
+                    );
+                }
+            } else {
+                let mut file = File::options()
+                    .read(true)
+                    .write(true)
+                    .open(&args.zstfile)
+                    .with_context(|| format!("failed to open {}", args.zstfile.display()))?;
+                update(&mut file)?;
             }
         }
         Commands::Append(args) => {

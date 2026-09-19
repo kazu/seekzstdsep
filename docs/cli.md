@@ -95,7 +95,7 @@ count is measured on the first and last few frames and assumed for the rest; pas
 
 ## Truncate
 
-Shortens the file in place to its first `--records` records, cutting at a frame boundary: the
+Shortens the file to its first `--records` records, cutting at a frame boundary: the
 count has to be a multiple of the records per frame, which `inspect` reports as `cnt_of_sep` of
 any frame but the last. Picking that number means knowing how many records the file holds:
 `inspect` reports the record count of every frame, and their sum is the record count of the file.
@@ -122,6 +122,22 @@ seekzstdsep truncate events.jsonl.seek.zst --records 10000
 
 The frames past the cut are dropped and nothing is re-encoded or rewritten before it. The seek
 table is rebuilt in full, so that part is linear in the number of frames.
+
+Add `--copy` to edit a private copy and replace the file, sharing the lock and conflict detection
+with `append --copy`. Existing readers retain the old file after replacement. If copying fails,
+truncate edits the original under lock and warns on stderr; that fallback does not protect readers.
+Other errors do not fall back. Without `--copy`, the existing in-place operation stays unlocked.
+Direct library writers can cooperate through `with_file_lock`; see
+[`copy_and_replace`](https://docs.rs/seekzstdsep/latest/seekzstdsep/fn.copy_and_replace.html)
+for filesystem and metadata requirements. The same command works in bash/zsh and nushell:
+
+```sh
+seekzstdsep truncate events.jsonl.seek.zst --records 10000 --copy
+```
+
+```nu
+seekzstdsep truncate events.jsonl.seek.zst --records 10000 --copy
+```
 
 Destructive — clone the file first if the original matters, which `cp --reflink=auto` does in about a
 millisecond where the filesystem supports it. The separator is validated against the file before

@@ -36,10 +36,11 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 - [x] `RecordReader` cannot be asked to check the uniform count
 - [x] Library copy-and-replace append
 - [x] CLI copy-and-replace append (`--copy`)
+- [x] `truncate --copy` through the existing editing callback (`copy_and_replace`)
 
 ### Concurrent append, and reading during an append
 
-- Cooperating truncate and copy-range, including CLI support (git_task 003/004).
+- Cooperating copy-range, including CLI support (git_task 004).
 - Plugin support.
 
 ### Separate metadata from lookup

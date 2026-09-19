@@ -50,6 +50,7 @@ pub enum CopyMode {
 /// let mode = copy_and_replace(&path, append)?;
 /// assert_eq!(mode, CopyMode::Replaced);
 /// with_file_lock(&path, append)?;
+/// copy_and_replace(&path, |file| seekzstdsep::truncate(file, 4, b"\n"))?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn copy_and_replace(

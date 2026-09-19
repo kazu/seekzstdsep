@@ -105,6 +105,40 @@ fn locked_direct_append_causes_an_older_copy_to_conflict() {
 }
 
 #[test]
+fn truncate_callback_detects_intervening_append_and_truncate() {
+    for direct in [false, true] {
+        for append in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = compress_fixture(dir.path());
+            let winner = |file: &mut File| {
+                if append {
+                    add(file, b"winner\n")
+                } else {
+                    seekzstdsep::truncate(file, 234, b"\n")
+                }
+            };
+            let error = copy_and_replace(&path, |file| {
+                if direct {
+                    with_file_lock(&path, winner)?;
+                } else {
+                    copy_and_replace(&path, winner)?;
+                }
+                seekzstdsep::truncate(file, 117, b"\n")
+            })
+            .unwrap_err();
+            assert!(error.to_string().contains("conflict"));
+            let expected = if append {
+                [fixture_records().concat(), b"winner\n".to_vec()].concat()
+            } else {
+                fixture_records_upto(234, true).concat()
+            };
+            assert_decompresses_to(&path, &expected);
+            assert_clean(&path);
+        }
+    }
+}
+
+#[test]
 fn failed_append_cleans_its_copy_without_changing_the_target() {
     let dir = tempfile::tempdir().unwrap();
     let path = compress_fixture(dir.path());
