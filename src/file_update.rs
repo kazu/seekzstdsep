@@ -1,13 +1,11 @@
 use std::{
     fs::{self, File, Metadata, OpenOptions},
-    io::{self, Seek, Write},
+    io::{self, Seek},
     num::NonZeroU64,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, bail};
-use fs2::FileExt;
-use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 /// How a [`copy_and_replace`] call published its result.
@@ -15,16 +13,16 @@ use tempfile::NamedTempFile;
 pub enum CopyMode {
     /// Replaced the target with a completed copy.
     Replaced,
-    /// Updated the original file directly under the writer lock.
+    /// Legacy direct-update mode; [`copy_and_replace`] no longer returns this variant.
     Direct,
 }
 
-/// Updates a private copy, then replaces `path` if its contents have not changed.
+/// Updates a private copy, then replaces `path` while holding its writer lock.
 ///
 /// The callback receives a read/write file at offset zero and must finish writing before
-/// returning. Only temporary-file creation or copy failure runs it on the original under lock
-/// ([`CopyMode::Direct`]); errors there may leave partial writes. Other errors do not fall
-/// back. A content conflict does not replace the target. The callback is never retried.
+/// returning. Creates `.tmp.<filename>` beside the target and refuses an existing temporary
+/// file. Copy or callback failure leaves the target unchanged; there is no direct-update
+/// fallback. Success returns [`CopyMode::Replaced`]. The callback is never retried.
 ///
 /// Uses the target and locking requirements of [`with_file_lock`]. On replacement, existing
 /// readers keep the old file and new readers see the completed file. Atomic replacement requires
@@ -66,30 +64,24 @@ pub fn copy_and_replace(
 /// Do not recursively lock the same target. All writers must cooperate through this function
 /// or [`copy_and_replace`]; existing `&mut File` operations do not lock themselves.
 ///
-/// Requires an existing writable regular file in a trusted directory and filesystem support
-/// for advisory locks. Rejects final-component symlinks and, on Unix, multiple hard links.
-/// The persistent lock is `.<filename>.seekzstdsep.lock` in the canonical parent directory;
-/// do not delete it or replace that directory while writers are using it.
+/// Requires an existing writable regular file in a trusted directory. Rejects final-component
+/// symlinks and, on Unix, multiple hard links. Exclusively creates `.lock.<filename>` in the
+/// canonical parent directory; an existing lock causes an immediate error. Removes its own
+/// lock on completion, including errors. A removal failure is reported as an error even if
+/// the update was published. Forced termination can leave a lock or temporary copy behind;
+/// remove these only after verifying that no writer is active. Do not replace the directory
+/// while writers are using it.
 ///
 /// See the [shared example](copy_and_replace#examples).
 pub fn with_file_lock<T>(
     path: impl AsRef<Path>,
     update: impl FnOnce(&mut File) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    with_file_lock_using(path.as_ref(), update, &System)
-}
-
-pub(crate) fn with_file_lock_using<T>(
-    path: &Path,
-    update: impl FnOnce(&mut File) -> anyhow::Result<T>,
-    ops: &impl FileOps,
-) -> anyhow::Result<T> {
-    let path = resolve_target(path)?;
-    let lock = open_lock(&path)?;
-    ops.lock(&lock)?;
-    let result = update(&mut open_current(&path)?)?;
-    ops.unlock(&lock)?;
-    Ok(result)
+    let path = resolve_target(path.as_ref())?;
+    let lock = create_sibling(&path, ".lock.").context("creating writer lock")?;
+    let result = (|| update(&mut open_current(&path)?))();
+    lock.close().context("removing writer lock")?;
+    result
 }
 
 pub(crate) fn copy_and_replace_using(
@@ -98,55 +90,22 @@ pub(crate) fn copy_and_replace_using(
     ops: &impl FileOps,
 ) -> anyhow::Result<CopyMode> {
     let path = resolve_target(path)?;
-    let lock = open_lock(&path)?;
-    ops.lock(&lock)?;
-    let mut original = open_current(&path)?;
-    let metadata = original.metadata()?;
-    let hash = ops.hash(&mut original)?;
-    let copy = match ops.create_copy(&path, &hash) {
-        Ok(mut temp) => match ops.copy(&mut original, temp.as_file_mut()) {
-            Ok(()) => Some(temp),
-            Err(_) => {
-                temp.close().context("removing failed update copy")?;
-                None
-            }
-        },
-        Err(_) => None,
-    };
-    let mut temp = match copy {
-        Some(temp) => temp,
-        None => {
-            original.rewind()?;
-            update(&mut original)?;
-            ops.unlock(&lock)?;
-            return Ok(CopyMode::Direct);
+    with_file_lock(&path, |original| {
+        let metadata = original.metadata()?;
+        let mut temp = ops.create_copy(&path)?;
+        let result = (|| {
+            ops.copy(original, temp.as_file_mut())?;
+            temp.as_file_mut().rewind()?;
+            update(temp.as_file_mut())?;
+            preserve_metadata(&temp, &metadata)?;
+            ops.replace(temp.path(), &path)?;
+            Ok(CopyMode::Replaced)
+        })();
+        if result.is_err() {
+            temp.close().context("removing update temporary file")?;
         }
-    };
-    drop(original);
-    let mut published = false;
-    let result = (|| {
-        ops.unlock(&lock)?;
-        temp.as_file_mut().rewind()?;
-        update(temp.as_file_mut())?;
-        preserve_metadata(&temp, &metadata)?;
-        ops.lock(&lock)?;
-        let mut current = open_current(&path)?;
-        if ops.hash(&mut current)? != hash {
-            bail!(
-                "update conflict: {} changed since it was copied",
-                path.display()
-            );
-        }
-        drop(current);
-        ops.replace(temp.path(), &path)?;
-        published = true;
-        ops.unlock(&lock)?;
-        Ok(CopyMode::Replaced)
-    })();
-    if !published {
-        temp.close().context("removing update temporary file")?;
-    }
-    result
+        result
+    })
 }
 
 fn resolve_target(path: &Path) -> anyhow::Result<PathBuf> {
@@ -158,33 +117,24 @@ fn resolve_target(path: &Path) -> anyhow::Result<PathBuf> {
     Ok(parent.canonicalize()?.join(name))
 }
 
-fn open_lock(path: &Path) -> anyhow::Result<File> {
-    let mut name = std::ffi::OsString::from(".");
-    name.push(path.file_name().context("target must name a file")?);
-    name.push(".seekzstdsep.lock");
-    let path = path.with_file_name(name);
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) => check_regular(&metadata)?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
-        Err(e) => return Err(e.into()),
-    }
-    Ok(OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)?)
+fn create_sibling(path: &Path, prefix: &str) -> io::Result<NamedTempFile> {
+    let mut name = std::ffi::OsString::from(prefix);
+    name.push(path.file_name().unwrap());
+    tempfile::Builder::new()
+        .prefix(&name)
+        .rand_bytes(0)
+        .tempfile_in(path.parent().unwrap())
 }
 
 fn check_regular(metadata: &Metadata) -> anyhow::Result<()> {
     if !metadata.file_type().is_file() {
-        bail!("target and lock must be regular files, not symlinks");
+        bail!("target must be a regular file, not a symlink");
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         if metadata.nlink() != 1 {
-            bail!("target and lock must not have multiple hard links");
+            bail!("target must not have multiple hard links");
         }
     }
     Ok(())
@@ -211,26 +161,8 @@ fn preserve_metadata(temp: &NamedTempFile, original: &Metadata) -> anyhow::Resul
 pub(crate) struct System;
 
 pub(crate) trait FileOps {
-    fn lock(&self, file: &File) -> io::Result<()> {
-        FileExt::lock_exclusive(file)
-    }
-
-    fn unlock(&self, file: &File) -> io::Result<()> {
-        FileExt::unlock(file)
-    }
-
-    fn hash(&self, file: &mut File) -> io::Result<String> {
-        file.rewind()?;
-        let mut hash = HashWriter(Sha256::new());
-        io::copy(file, &mut hash)?;
-        file.rewind()?;
-        Ok(format!("{:x}", hash.0.finalize()))
-    }
-
-    fn create_copy(&self, path: &Path, hash: &str) -> io::Result<NamedTempFile> {
-        tempfile::Builder::new()
-            .prefix(&format!(".seekzstdsep-{hash}-"))
-            .tempfile_in(path.parent().unwrap())
+    fn create_copy(&self, path: &Path) -> io::Result<NamedTempFile> {
+        create_sibling(path, ".tmp.")
     }
 
     fn reflink(&self, from: &File, to: &File) -> io::Result<()> {
@@ -259,16 +191,3 @@ pub(crate) trait FileOps {
 }
 
 impl FileOps for System {}
-
-struct HashWriter(Sha256);
-
-impl Write for HashWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.update(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
