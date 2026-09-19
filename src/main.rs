@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use seekzstdsep::cli::{BoundaryArgs, ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
 use seekzstdsep::find::Boundary;
 use seekzstdsep::{
-    AppendInput, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck, RecordReader,
-    append, append_frames_with, append_records_with,
+    AppendInput, AppendMode, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck,
+    RecordReader, append, append_copy, append_frames_with, append_records_with,
     seekzstdsep_lib::{inspect_records_with_opts, inspect_with_opts},
     truncate, truncate_records,
 };
@@ -61,6 +61,9 @@ struct TruncateArgs {
 
 #[derive(Args, Debug)]
 struct AppendArgs {
+    /// Update a copy and replace FILE; fall back to locked direct append if copying fails
+    #[arg(long)]
+    copy: bool,
     #[arg(value_name = "FILE", required = true)]
     zstfile: PathBuf,
     /// Records to append (default: stdin)
@@ -107,7 +110,7 @@ enum Commands {
     Cat(CatArgs),
     /// Shorten a zst file to a record count, in place. Destructive.
     Truncate(TruncateArgs),
-    /// Append records to a zst file, in place. Destructive.
+    /// Append records to a zst file (in place unless --copy is specified).
     Append(AppendArgs),
     /// Copy a record range out of a zst file into a second one. Reads the input only.
     CopyRange(CopyRangeArgs),
@@ -172,71 +175,83 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Append(args) => {
-            let mut file = File::options()
-                .read(true)
-                .write(true)
-                .open(&args.zstfile)
-                .with_context(|| format!("failed to open {}", args.zstfile.display()))?;
-            let opened = match args.input {
-                Some(ref path) => Some(
-                    File::open(path)
-                        .with_context(|| format!("failed to open {}", path.display()))?,
-                ),
-                None => None,
-            };
+            let update = |file: &mut File| -> anyhow::Result<()> {
+                let opened = match args.input {
+                    Some(ref path) => Some(
+                        File::open(path)
+                            .with_context(|| format!("failed to open {}", path.display()))?,
+                    ),
+                    None => None,
+                };
 
-            if args.insert_separator && !args.boundary.is_separator() {
-                anyhow::bail!(
-                    "--insert-separator writes a separator at the join, so it needs --finder sep"
-                );
-            }
-            let check = if args.check_input_frames {
-                RangeCheck::EveryFrame
-            } else {
-                RangeCheck::FirstFrame
-            };
-            let on_missing = if args.insert_separator {
-                OnMissingSeparator::Insert
-            } else {
-                OnMissingSeparator::Refuse
-            };
-            let level = args.level.unwrap_or(CompressionLevel::default());
-            let from = args.input_from.unwrap_or(0);
-            match args.boundary.boundary()? {
-                Boundary::Separator(sep) => {
-                    let input: AppendInput<Box<dyn Read>> = if args.input_seekable {
-                        AppendInput::Frames {
-                            input: opened.as_ref().expect("--input-seekable requires INPUT"),
-                            from,
-                            cnt: args.input_cnt,
-                            check,
-                        }
-                    } else {
-                        AppendInput::Records {
-                            data: records_input(opened),
-                            on_missing,
-                            level,
-                            records_per_frame: None,
-                        }
-                    };
-                    append(&mut file, input, &sep)?;
+                if args.insert_separator && !args.boundary.is_separator() {
+                    anyhow::bail!(
+                        "--insert-separator writes a separator at the join, so it needs --finder sep"
+                    );
                 }
-                Boundary::Finder(find) if args.input_seekable => append_frames_with(
-                    &mut file,
-                    opened.as_ref().expect("--input-seekable requires INPUT"),
-                    from,
-                    args.input_cnt,
-                    &*find,
-                    check,
-                )?,
-                Boundary::Finder(find) => append_records_with(
-                    &mut file,
-                    records_input(opened),
-                    &*find,
-                    on_missing,
-                    level,
-                    None,
-                )?,
+                let check = if args.check_input_frames {
+                    RangeCheck::EveryFrame
+                } else {
+                    RangeCheck::FirstFrame
+                };
+                let on_missing = if args.insert_separator {
+                    OnMissingSeparator::Insert
+                } else {
+                    OnMissingSeparator::Refuse
+                };
+                let level = args.level.unwrap_or(CompressionLevel::default());
+                let from = args.input_from.unwrap_or(0);
+                match args.boundary.boundary()? {
+                    Boundary::Separator(sep) => {
+                        let input: AppendInput<Box<dyn Read>> = if args.input_seekable {
+                            AppendInput::Frames {
+                                input: opened.as_ref().expect("--input-seekable requires INPUT"),
+                                from,
+                                cnt: args.input_cnt,
+                                check,
+                            }
+                        } else {
+                            AppendInput::Records {
+                                data: records_input(opened),
+                                on_missing,
+                                level,
+                                records_per_frame: None,
+                            }
+                        };
+                        append(file, input, &sep)?;
+                    }
+                    Boundary::Finder(find) if args.input_seekable => append_frames_with(
+                        file,
+                        opened.as_ref().expect("--input-seekable requires INPUT"),
+                        from,
+                        args.input_cnt,
+                        &*find,
+                        check,
+                    )?,
+                    Boundary::Finder(find) => append_records_with(
+                        file,
+                        records_input(opened),
+                        &*find,
+                        on_missing,
+                        level,
+                        None,
+                    )?,
+                }
+                Ok(())
+            };
+            if args.copy {
+                if append_copy(&args.zstfile, update)? == AppendMode::Direct {
+                    tracing::warn!(
+                        "copy unavailable; appended directly while holding the writer lock"
+                    );
+                }
+            } else {
+                let mut file = File::options()
+                    .read(true)
+                    .write(true)
+                    .open(&args.zstfile)
+                    .with_context(|| format!("failed to open {}", args.zstfile.display()))?;
+                update(&mut file)?;
             }
         }
         Commands::CopyRange(args) => {

@@ -35,10 +35,10 @@ Designed in `docs/design/2026-08-24-truncate-append-split-concat.md`. `split`, `
 - [x] The nushell plugin cannot open a file that has no separator
 - [x] `RecordReader` cannot be asked to check the uniform count
 - [x] Library copy-and-replace append
+- [x] CLI copy-and-replace append (`--copy`)
 
 ### Concurrent append, and reading during an append
 
-- CLI append support (git_task 002).
 - Cooperating truncate and copy-range, including CLI support (git_task 003/004).
 - Plugin support.
 
