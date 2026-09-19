@@ -82,7 +82,8 @@ not allowed to be short — and count separators with the candidate:
 
 **This needs `F >= 3`.** With `F == 2`, frame 1 is the legitimately short final frame and comparing
 it against frame 0 refuses a valid file. With `F < 3` only the zero case is detectable; that is a
-limit to accept, not to work around.
+limit of inferring the count. Raw-record append can instead receive an explicit count, as
+described by `append_records` in `src/edit.rs`; the CLI still uses inference.
 
 `truncate` and `append --input-seekable` additionally need the record count of the **last** data
 frame, which validation deliberately excludes. That is a second decompression. Destructive
@@ -189,8 +190,8 @@ Nothing is re-encoded, and nothing before `frame_end_comp(k-1)` is read or writt
 
 Cost: at most one frame decoded and re-encoded.
 
-A result of fewer than three frames cannot be validated again, so nothing here can be applied to it
-a second time. That is the `F >= 3` floor above, not a limit truncate adds.
+A result of fewer than three frames cannot use count inference again. Raw-record append can
+receive an explicit count; truncate retains the `F >= 3` floor above.
 
 Truncation cuts immediately after a separator, so the output always ends with one and a trailing
 fragment in the input is dropped. Truncating to the current record length is therefore not a no-op
@@ -202,7 +203,10 @@ on a file that ends in a fragment.
 append(f: &mut File, input: AppendInput<impl Read>, separator: &[u8]) -> Result<()>
 
 enum AppendInput<'a, R> {
-    Records { data: R, on_missing: OnMissingSeparator, level: i32 },
+    Records {
+        data: R, on_missing: OnMissingSeparator, level: i32,
+        records_per_frame: Option<usize>,
+    },
     Frames { input: &'a File, from: u64, cnt: Option<u64>, check: RangeCheck },
 }
 ```
@@ -211,7 +215,8 @@ enum AppendInput<'a, R> {
 point because it is one operation from outside, and `on_missing` sits inside `Records` because a
 byte copy writes nothing at the seam — the combination the CLI has to refuse is not representable.
 
-1. Validate the separator, obtaining `n`.
+1. Infer `n` when `records_per_frame` is `None`. Otherwise validate the supplied count against
+   the non-final frames checked by `append_records`; its rustdoc defines the scope.
 2. Decode the last data frame, which generally holds fewer than `n` records. If its last byte is
    not the separator, refuse, or insert one according to `on_missing`. This costs nothing extra;
    the frame is already decoded.
@@ -427,7 +432,9 @@ compression read. A dedicated parameter buys nothing.
   from or to a position that is not a frame boundary, reaching a short final frame without
   `--no-align`, and a separator that does not end frame 0; `append --input-seekable` with mismatched `n`, onto a target whose last frame is
   short, or onto a target ending in a fragment; `--insert-separator` with `--input-seekable`; any
-  operation on a file with fewer than three data frames.
+  count inference for destructive operations on a file with fewer than three frames.
+- **Explicit append count**: one and two frames, zero or mismatched counts, non-final fragments,
+  and trailing empty frames; refusal must leave the target unchanged.
 - **Nothing before the affected byte is touched.** Compare the prefix byte for byte against the
   original after every operation.
 - **Frame counts** after every operation: every frame carries data, and the count is the one the

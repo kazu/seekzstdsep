@@ -31,6 +31,7 @@ fn append_file(
             data,
             on_missing,
             level: 0,
+            records_per_frame: None,
         },
         separator,
     )
@@ -375,8 +376,7 @@ fn test_append_refuses_a_file_with_no_frames() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
     let out_path = empty_seek_table(temp_dir.path());
 
-    // Refused for holding fewer than three frames. Reaching that refusal is the point: addressing
-    // the last frame before validation subtracts one from zero.
+    // Reject before addressing the last frame would subtract one from zero.
     assert_refused(&out_path, b"appended\n", b"\n", OnMissingSeparator::Refuse);
 }
 
@@ -1073,6 +1073,7 @@ fn test_append_refuses_a_zstd_stream_that_arrives_a_byte_at_a_time() {
             data: OneByteAtATime(&compressed[..]),
             on_missing: OnMissingSeparator::Refuse,
             level: 0,
+            records_per_frame: None,
         },
         b"\n",
     )
@@ -1110,6 +1111,7 @@ fn test_append_level_reaches_the_encoder() {
                 data: added.as_slice(),
                 on_missing: OnMissingSeparator::Refuse,
                 level,
+                records_per_frame: None,
             },
             b"\n",
         )
