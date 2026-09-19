@@ -2,7 +2,7 @@
 //! [`copy_range`] derives a second one from it.
 //!
 //! The first two are destructive and rewrite nothing before the first byte they affect.
-//! These operations do not lock; see [`crate::append_copy`] for copy-and-replace append.
+//! These operations do not lock; see [`crate::copy_and_replace`] for copy-and-replace updates.
 //!
 //! Every operation checks the separator against the file first, since the file does not record
 //! which one it was built with and reading a record range by the wrong one addresses the wrong

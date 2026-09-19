@@ -10,20 +10,20 @@ use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
-/// How an [`append_copy`] call published its result.
+/// How a [`copy_and_replace`] call published its result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppendMode {
+pub enum CopyMode {
     /// Replaced the target with a completed copy.
     Replaced,
-    /// Appended directly to the original file.
+    /// Updated the original file directly under the writer lock.
     Direct,
 }
 
-/// Appends to a private copy, then replaces `path` if its contents have not changed.
+/// Updates a private copy, then replaces `path` if its contents have not changed.
 ///
 /// The callback receives a read/write file at offset zero and must finish writing before
 /// returning. Only temporary-file creation or copy failure runs it on the original under lock
-/// ([`AppendMode::Direct`]); errors there may leave partial writes. Other errors do not fall
+/// ([`CopyMode::Direct`]); errors there may leave partial writes. Other errors do not fall
 /// back. A content conflict does not replace the target. The callback is never retried.
 ///
 /// Uses the target and locking requirements of [`with_file_lock`]. On replacement, existing
@@ -36,7 +36,7 @@ pub enum AppendMode {
 /// # Examples
 ///
 /// ```
-/// use seekzstdsep::{append_copy, append_records, with_file_lock, AppendMode, OnMissingSeparator};
+/// use seekzstdsep::{copy_and_replace, append_records, with_file_lock, CopyMode, OnMissingSeparator};
 /// # let dir = tempfile::tempdir()?;
 /// # let path = dir.path().join("records.seek.zst");
 /// # let mut bytes = Vec::new();
@@ -47,30 +47,30 @@ pub enum AppendMode {
 /// let append = |file: &mut std::fs::File| {
 ///     append_records(file, &b"record 7\n"[..], b"\n", OnMissingSeparator::Refuse, 0, None)
 /// };
-/// let mode = append_copy(&path, append)?;
-/// assert_eq!(mode, AppendMode::Replaced);
+/// let mode = copy_and_replace(&path, append)?;
+/// assert_eq!(mode, CopyMode::Replaced);
 /// with_file_lock(&path, append)?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub fn append_copy(
+pub fn copy_and_replace(
     path: impl AsRef<Path>,
-    append: impl FnOnce(&mut File) -> anyhow::Result<()>,
-) -> anyhow::Result<AppendMode> {
-    append_copy_using(path.as_ref(), append, &System)
+    update: impl FnOnce(&mut File) -> anyhow::Result<()>,
+) -> anyhow::Result<CopyMode> {
+    copy_and_replace_using(path.as_ref(), update, &System)
 }
 
 /// Opens `path` read/write at offset zero after locking, and holds the lock through `update`.
 ///
 /// Use the supplied handle, not one opened before locking. Errors may leave partial writes.
 /// Do not recursively lock the same target. All writers must cooperate through this function
-/// or [`append_copy`]; existing `&mut File` operations do not lock themselves.
+/// or [`copy_and_replace`]; existing `&mut File` operations do not lock themselves.
 ///
 /// Requires an existing writable regular file in a trusted directory and filesystem support
 /// for advisory locks. Rejects final-component symlinks and, on Unix, multiple hard links.
 /// The persistent lock is `.<filename>.seekzstdsep.lock` in the canonical parent directory;
 /// do not delete it or replace that directory while writers are using it.
 ///
-/// See the [shared example](append_copy#examples).
+/// See the [shared example](copy_and_replace#examples).
 pub fn with_file_lock<T>(
     path: impl AsRef<Path>,
     update: impl FnOnce(&mut File) -> anyhow::Result<T>,
@@ -91,11 +91,11 @@ pub(crate) fn with_file_lock_using<T>(
     Ok(result)
 }
 
-pub(crate) fn append_copy_using(
+pub(crate) fn copy_and_replace_using(
     path: &Path,
-    append: impl FnOnce(&mut File) -> anyhow::Result<()>,
+    update: impl FnOnce(&mut File) -> anyhow::Result<()>,
     ops: &impl FileOps,
-) -> anyhow::Result<AppendMode> {
+) -> anyhow::Result<CopyMode> {
     let path = resolve_target(path)?;
     let lock = open_lock(&path)?;
     ops.lock(&lock)?;
@@ -106,7 +106,7 @@ pub(crate) fn append_copy_using(
         Ok(mut temp) => match ops.copy(&mut original, temp.as_file_mut()) {
             Ok(()) => Some(temp),
             Err(_) => {
-                temp.close().context("removing failed append copy")?;
+                temp.close().context("removing failed update copy")?;
                 None
             }
         },
@@ -116,9 +116,9 @@ pub(crate) fn append_copy_using(
         Some(temp) => temp,
         None => {
             original.rewind()?;
-            append(&mut original)?;
+            update(&mut original)?;
             ops.unlock(&lock)?;
-            return Ok(AppendMode::Direct);
+            return Ok(CopyMode::Direct);
         }
     };
     drop(original);
@@ -126,13 +126,13 @@ pub(crate) fn append_copy_using(
     let result = (|| {
         ops.unlock(&lock)?;
         temp.as_file_mut().rewind()?;
-        append(temp.as_file_mut())?;
+        update(temp.as_file_mut())?;
         preserve_metadata(&temp, &metadata)?;
         ops.lock(&lock)?;
         let mut current = open_current(&path)?;
         if ops.hash(&mut current)? != hash {
             bail!(
-                "append conflict: {} changed since it was copied",
+                "update conflict: {} changed since it was copied",
                 path.display()
             );
         }
@@ -140,10 +140,10 @@ pub(crate) fn append_copy_using(
         ops.replace(temp.path(), &path)?;
         published = true;
         ops.unlock(&lock)?;
-        Ok(AppendMode::Replaced)
+        Ok(CopyMode::Replaced)
     })();
     if !published {
-        temp.close().context("removing append temporary file")?;
+        temp.close().context("removing update temporary file")?;
     }
     result
 }

@@ -92,7 +92,7 @@ let mut reader = RecordReader::open("events.jsonl.seek.zst".into(), b"\n").unwra
 reader.records_to(10_000, 3, &mut io::stdout()).unwrap();
 ```
 
-コピー更新で追記するには [`append_copy`](src/file_update.rs) を使います。
+コピー上で編集して置換するには [`copy_and_replace`](src/file_update.rs) に編集関数を渡します。
 
 ## nushell plugin
 

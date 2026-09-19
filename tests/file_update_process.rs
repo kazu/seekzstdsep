@@ -1,5 +1,5 @@
 use fs2::FileExt;
-use seekzstdsep::{append_copy, with_file_lock};
+use seekzstdsep::{copy_and_replace, with_file_lock};
 use std::{
     fs::{self, File},
     io::{BufRead, BufReader, Read, Write},
@@ -59,7 +59,7 @@ fn another_process_is_excluded_and_exit_does_not_leave_a_stale_lock() {
         assert!(lock_path.is_file());
         FileExt::try_lock_exclusive(&lock).unwrap();
         FileExt::unlock(&lock).unwrap();
-        append_copy(&path, |file| {
+        copy_and_replace(&path, |file| {
             file.write_all(b"updated!")?;
             Ok(())
         })

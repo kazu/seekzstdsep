@@ -135,7 +135,7 @@ Add `--copy` to update a temporary copy and replace the file:
 seekzstdsep append events.jsonl.seek.zst more.jsonl --copy
 ```
 
-This uses [`append_copy`](https://docs.rs/seekzstdsep/latest/seekzstdsep/fn.append_copy.html),
+This uses [`copy_and_replace`](https://docs.rs/seekzstdsep/latest/seekzstdsep/fn.copy_and_replace.html),
 including its writer lock and conflict detection. If copying is unavailable, it falls back to
 locked in-place append and reports that on stderr. All append input options work with `--copy`.
 Without it, append keeps its existing unlocked, in-place behavior; concurrent writers must use

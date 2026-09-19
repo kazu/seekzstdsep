@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use seekzstdsep::cli::{BoundaryArgs, ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
 use seekzstdsep::find::Boundary;
 use seekzstdsep::{
-    AppendInput, AppendMode, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck,
-    RecordReader, append, append_copy, append_frames_with, append_records_with,
+    AppendInput, CompressionLevel, CopyMode, InspectOptions, OnMissingSeparator, RangeCheck,
+    RecordReader, append, append_frames_with, append_records_with, copy_and_replace,
     seekzstdsep_lib::{inspect_records_with_opts, inspect_with_opts},
     truncate, truncate_records,
 };
@@ -240,7 +240,7 @@ fn main() -> anyhow::Result<()> {
                 Ok(())
             };
             if args.copy {
-                if append_copy(&args.zstfile, update)? == AppendMode::Direct {
+                if copy_and_replace(&args.zstfile, update)? == CopyMode::Direct {
                     tracing::warn!(
                         "copy unavailable; appended directly while holding the writer lock"
                     );

@@ -256,8 +256,8 @@ fn append_copy(c: &mut Criterion) {
                         };
                         if copy {
                             assert_eq!(
-                                seekzstdsep::append_copy(&target, append).unwrap(),
-                                seekzstdsep::AppendMode::Replaced,
+                                seekzstdsep::copy_and_replace(&target, append).unwrap(),
+                                seekzstdsep::CopyMode::Replaced,
                             );
                         } else {
                             seekzstdsep::with_file_lock(&target, append).unwrap();
