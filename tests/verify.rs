@@ -432,6 +432,60 @@ fn the_iterator_is_spent_once_it_refuses() {
     );
 }
 
+#[test]
+fn reverse_iteration_verifies_each_frame_and_stops_both_ends_on_error() {
+    let dir = tempdir().unwrap();
+    let expected = fixture_records();
+    let path = compress_sizes(dir.path(), "reverse-valid", &[10, 10, 3]);
+    let got = judging(path)
+        .into_records()
+        .rev()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        got,
+        expected[..23].iter().rev().cloned().collect::<Vec<_>>()
+    );
+
+    for (path, message) in [
+        (drifting(dir.path()), "holds 4 records rather than 10"),
+        (
+            split_record(dir.path()),
+            "holds bytes after its last record",
+        ),
+        (
+            compress_sizes(dir.path(), "reverse-long-last", &[10, 11]),
+            "holds 11 records rather than 10",
+        ),
+    ] {
+        let mut records = judging(path).into_records();
+        let error = records
+            .by_ref()
+            .rev()
+            .find_map(Result::err)
+            .expect("invalid frame was accepted");
+        assert!(error.to_string().contains(message), "{error}");
+        assert!(records.next().is_none());
+        assert!(records.next_back().is_none());
+    }
+}
+
+#[test]
+fn mixed_iteration_checks_the_frame_where_both_ends_meet() {
+    let dir = tempdir().unwrap();
+    let path = compress_sizes(dir.path(), "reverse-meet", &[10, 4, 10]);
+    let mut records = judging(path).into_records();
+    for _ in 0..10 {
+        records.next().unwrap().unwrap();
+        records.next_back().unwrap().unwrap();
+    }
+    records.next().unwrap().unwrap();
+    let error = records.next_back().unwrap().unwrap_err();
+    assert!(error.to_string().contains("holds 4 records rather than 10"));
+    assert!(records.next().is_none());
+    assert!(records.next_back().is_none());
+}
+
 /// The skip runs out inside the short frame rather than reaching it, which is the other way into
 /// the count refusal.
 #[test]

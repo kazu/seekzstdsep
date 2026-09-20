@@ -140,6 +140,36 @@ fn reads_records_backwards_too() {
 }
 
 #[test]
+fn range_reads_resume_after_output_errors_and_before_reverse_iteration() {
+    let dir = tempdir().unwrap();
+    macro_rules! check {
+        ($reader:expr, $expected:expr) => {{
+            let mut reader = $reader;
+            let expected = $expected;
+            assert_eq!(reader.record(5).unwrap().unwrap(), expected[5]);
+            let mut short = &mut [0u8; 8][..];
+            assert!(reader.records_to(4, 9, &mut short).is_err());
+            assert_eq!(reader.record(6).unwrap().unwrap(), expected[6]);
+            for (from, count) in [(10, 10), (1, 4), (5, 9)] {
+                let mut written = Vec::new();
+                reader.records_to(from, count, &mut written).unwrap();
+                assert_eq!(written, expected[from..from + count].concat());
+            }
+            let got = reader
+                .into_records()
+                .rev()
+                .collect::<anyhow::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(got, expected.into_iter().rev().collect::<Vec<_>>());
+        }};
+    }
+    let (expected, reader) = open_large_frames(dir.path());
+    check!(reader, expected);
+    let (expected, reader) = open_large_frames(dir.path());
+    check!(reader.verifying(), expected);
+}
+
+#[test]
 fn an_index_past_the_last_record_is_none() {
     let dir = tempdir().expect("Failed to create temp dir");
     let mut reader = open_fixture(dir.path());
@@ -209,6 +239,137 @@ fn iterating_returns_every_record_in_order() {
         .expect("Failed to iterate records");
 
     assert_eq!(got, fixture_records());
+}
+
+#[test]
+fn iterating_backwards_returns_every_record() {
+    let dir = tempdir().unwrap();
+    let mut reader = open_fixture(dir.path());
+    reader.record(7).unwrap();
+    let got = reader
+        .into_records()
+        .rev()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(got, fixture_records().into_iter().rev().collect::<Vec<_>>());
+}
+
+#[test]
+fn either_end_meets_without_repeating_records() {
+    let dir = tempdir().unwrap();
+    for groups in [
+        vec![b"a\nb\nc\nd\ne\n".to_vec()],
+        vec![
+            b"a\nb\n".to_vec(),
+            Vec::new(),
+            b"fragment".to_vec(),
+            b"c\nd\ne\ntrailing".to_vec(),
+            Vec::new(),
+        ],
+    ] {
+        let path = compress_frames(dir.path(), "mixed-ends", &groups);
+        let expected = [b"a\n", b"b\n", b"c\n", b"d\n", b"e\n"];
+        for schedule in 0..1 << expected.len() {
+            let mut records = RecordReader::open(path.clone(), b"\n")
+                .unwrap()
+                .into_records();
+            let mut remaining = expected.iter();
+            for step in 0..expected.len() {
+                let (got, want) = if schedule & (1 << step) == 0 {
+                    (records.next(), remaining.next())
+                } else {
+                    (records.next_back(), remaining.next_back())
+                };
+                assert_eq!(got.unwrap().unwrap(), *want.unwrap(), "schedule {schedule}");
+            }
+            for _ in 0..2 {
+                assert!(records.next().is_none());
+                assert!(records.next_back().is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn reversing_crosses_windows_and_preserves_long_records() {
+    let dir = tempdir().unwrap();
+    let (expected, reader) = open_large_frames(dir.path());
+    let got = reader
+        .into_records()
+        .rev()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(got, expected.iter().rev().cloned().collect::<Vec<_>>());
+
+    let (_, reader) = open_large_frames(dir.path());
+    let mut records = reader.into_records();
+    let mut remaining = expected.iter();
+    for step in 0..expected.len() {
+        let (got, want) = if step % 3 == 0 {
+            (records.next(), remaining.next())
+        } else {
+            (records.next_back(), remaining.next_back())
+        };
+        assert_eq!(got.unwrap().unwrap(), *want.unwrap());
+    }
+    assert!(records.next_back().is_none());
+    assert!(records.next().is_none());
+}
+
+#[test]
+fn forward_runs_resume_after_reverse_reads_across_windows() {
+    let dir = tempdir().unwrap();
+    let (expected, reader) = open_large_frames(dir.path());
+    let mut remaining = expected.iter();
+    let mut records = reader.into_records();
+    for step in 0..expected.len() {
+        let (got, want) = if step % 7 < 4 {
+            (records.next(), remaining.next())
+        } else {
+            (records.next_back(), remaining.next_back())
+        };
+        assert_eq!(got.unwrap().unwrap(), *want.unwrap());
+    }
+    assert!(records.next().is_none());
+    assert!(records.next_back().is_none());
+}
+
+#[test]
+fn reversing_uses_forward_boundaries_for_overlapping_separators() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "overlapping",
+        &[b"aaaaxaa".to_vec(), b"aaayaaa".to_vec()],
+    );
+    let expected = [b"aa".as_slice(), b"aa", b"xaa", b"aa", b"ayaa"];
+    let got = RecordReader::open(path, b"aa")
+        .unwrap()
+        .into_records()
+        .rev()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(got, expected.into_iter().rev().collect::<Vec<_>>());
+}
+
+#[test]
+fn a_single_empty_record_is_returned_only_once_from_either_end() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(dir.path(), "single", &[b"\n".to_vec(), Vec::new()]);
+    for reverse in [false, true] {
+        let mut records = RecordReader::open(path.clone(), b"\n")
+            .unwrap()
+            .verifying()
+            .into_records();
+        let record = if reverse {
+            records.next_back()
+        } else {
+            records.next()
+        };
+        assert_eq!(record.unwrap().unwrap(), b"\n");
+        assert!(records.next_back().is_none());
+        assert!(records.next().is_none());
+    }
 }
 
 /// A file whose last record carries no separator ends in a fragment. It is not a whole record, so
