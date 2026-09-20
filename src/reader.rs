@@ -1050,6 +1050,17 @@ pub struct RecordIter<V: Verifier = NoVerify> {
     judge: V::Judge,
 }
 
+impl<V: Verifier> RecordIter<V> {
+    fn check_frame(&self, frame: usize) -> anyhow::Result<()> {
+        self.judge
+            .count(frame, || self.reader.walked())
+            .and_then(|()| {
+                self.judge
+                    .ends_whole(frame, || self.reader.remainder().is_empty())
+            })
+    }
+}
+
 impl<V: Verifier> Iterator for RecordIter<V> {
     type Item = anyhow::Result<Vec<u8>>;
 
@@ -1080,13 +1091,7 @@ impl<V: Verifier> Iterator for RecordIter<V> {
                 Ok(None) => {
                     // Only a fragment, or nothing, is left in this frame: judge what it turned out
                     // to hold, then drop it and move on as the frame-at-a-time iterator did.
-                    let checked = self
-                        .judge
-                        .count(self.frame, || self.reader.walked())
-                        .and_then(|()| {
-                            self.judge
-                                .ends_whole(self.frame, || self.reader.remainder().is_empty())
-                        });
+                    let checked = self.check_frame(self.frame);
                     if let Err(e) = checked {
                         self.frame = self.frames.len();
                         return Some(Err(e));
