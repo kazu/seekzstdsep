@@ -84,6 +84,44 @@ fn formats() -> Vec<Format> {
     ]
 }
 
+#[test]
+fn finder_records_can_be_taken_from_either_end() {
+    let dir = tempfile::tempdir().unwrap();
+    for format in formats() {
+        for len in [100, 70_000] {
+            let (expected, bytes) = body(&format, 9, len);
+            let path = compress(
+                dir.path(),
+                format.name,
+                &bytes,
+                len * 3,
+                (format.finder)(len),
+            );
+            let reader = RecordReader::open_with(path.clone(), (format.finder)(len)).unwrap();
+            let got = reader
+                .into_records()
+                .rev()
+                .collect::<anyhow::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(got, expected.iter().rev().cloned().collect::<Vec<_>>());
+
+            let reader = RecordReader::open_with(path, (format.finder)(len)).unwrap();
+            let mut records = reader.verifying().into_records();
+            let mut remaining = expected.iter();
+            for step in 0..expected.len() {
+                let (got, want) = if step % 2 == 0 {
+                    (records.next_back(), remaining.next_back())
+                } else {
+                    (records.next(), remaining.next())
+                };
+                assert_eq!(got.unwrap().unwrap(), *want.unwrap(), "{}", format.name);
+            }
+            assert!(records.next().is_none());
+            assert!(records.next_back().is_none());
+        }
+    }
+}
+
 // ------------------------------------------------------- fixtures
 
 /// `count` records of `len` bytes, and the bytes they make.
