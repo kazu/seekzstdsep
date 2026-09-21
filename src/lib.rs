@@ -24,6 +24,8 @@ pub use edit::append_frames;
 pub use edit::append_frames_with;
 pub use edit::append_records;
 pub use edit::append_records_with;
+pub use edit::append_records_with_finder_opts;
+pub use edit::append_records_with_opts;
 pub use edit::copy_range;
 pub use edit::copy_range_with;
 pub use edit::count_frames;
