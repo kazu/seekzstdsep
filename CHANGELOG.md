@@ -6,6 +6,13 @@ next release overwrites it. What belongs in a release note belongs in a commit m
 Only the crate's own tags (`v*`) mark a release here. The nushell plugin is versioned separately in
 `nu_plugin_zstdsep/`, and `nu_v.*` records which revision a nushell version takes.
 
+## [0.7.3] - 2026-09-21
+
+### Changed
+
+- reader: refactor frame checks into check_frame for reverse iteration
+- reader: add double-ended record iteration
+
 ## [0.7.2] - 2026-09-19
 
 ### Fixed
