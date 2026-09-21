@@ -3411,7 +3411,7 @@ dependencies = [
 
 [[package]]
 name = "nu_plugin_zstdsep"
-version = "0.7.4"
+version = "0.7.6"
 dependencies = [
  "anyhow",
  "nu-command",
@@ -4710,7 +4710,7 @@ dependencies = [
 
 [[package]]
 name = "seekzstdsep"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "clap",
