@@ -8,6 +8,9 @@
 //! frames onto an existing file rather than into a new one, so it reads against `copy_range/range`;
 //! `append/records` is the path that does re-encode, and is the cost `append/frames` exists to
 //! avoid.
+//! `append/records_trusted` and `append_copy_trusted/*` use the same fixtures and
+//! append payloads, but trust the known records-per-frame count and skip frame 0
+//! validation. Their separate calls keep the existing counting benchmarks intact.
 //!
 //!
 //! **Read both orders before believing a difference.** criterion measures the cases in a group one
@@ -25,7 +28,8 @@ use std::path::PathBuf;
 
 use seekzstdsep::{
     Alignment, CompressOptions, CompressionLevel, OnMissingSeparator, RangeCheck, SeparatorCheck,
-    append_frames, append_records, compress_to_seekable_zst_with_opts, copy_range, count_frames,
+    append_frames, append_records, append_records_with_opts, compress_to_seekable_zst_with_opts,
+    copy_range, count_frames,
 };
 use zeekstd::SeekTable;
 
@@ -208,6 +212,25 @@ fn append_to(c: &mut Criterion) {
         )
     });
 
+    group.bench_function("records_trusted", |b| {
+        b.iter_batched(
+            fresh,
+            |mut f| {
+                append_records_with_opts(
+                    &mut f,
+                    body.as_slice(),
+                    SEPARATOR,
+                    OnMissingSeparator::Refuse,
+                    CompressionLevel::default(),
+                    Some(RECORDS_PER_FRAME),
+                    true,
+                )
+                .expect("failed to append records with trusted count")
+            },
+            BatchSize::PerIteration,
+        )
+    });
+
     // The compressed bytes moved, which is the number `copy_range/range` reports as well.
     group.throughput(Throughput::Bytes(moved));
     group.bench_function("frames", |b| {
@@ -271,5 +294,53 @@ fn append_copy(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, copy, count, append_to, append_copy);
+fn append_copy_trusted(c: &mut Criterion) {
+    let mut group = c.benchmark_group("append_copy_trusted");
+    for records in [3_000, RECORDS] {
+        let (dir, path) = fixture_of(records);
+        let target = dir.path().join("append-target.seek.zst");
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        group.throughput(Throughput::Bytes(bytes));
+        for copy in [false, true] {
+            let method = if copy { "replace" } else { "direct" };
+            group.bench_function(BenchmarkId::new(method, bytes), |b| {
+                b.iter_batched(
+                    || std::fs::copy(&path, &target).unwrap(),
+                    |_| {
+                        let append = |file: &mut File| {
+                            append_records_with_opts(
+                                file,
+                                b"appended\n".as_slice(),
+                                SEPARATOR,
+                                OnMissingSeparator::Refuse,
+                                CompressionLevel::default(),
+                                Some(RECORDS_PER_FRAME),
+                                true,
+                            )
+                        };
+                        if copy {
+                            assert_eq!(
+                                seekzstdsep::copy_and_replace(&target, append).unwrap(),
+                                seekzstdsep::CopyMode::Replaced,
+                            );
+                        } else {
+                            seekzstdsep::with_file_lock(&target, append).unwrap();
+                        }
+                    },
+                    BatchSize::PerIteration,
+                )
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    copy,
+    count,
+    append_to,
+    append_copy,
+    append_copy_trusted
+);
 criterion_main!(benches);
