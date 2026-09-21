@@ -348,6 +348,7 @@ pub fn append_records(
 /// )?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
+#[inline(always)]
 pub fn append_records_with_opts(
     f: &mut File,
     data: impl Read,
@@ -425,6 +426,7 @@ pub fn append_records_with<F: Fn(&[u8]) -> Option<usize>>(
 /// )?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
+#[inline(always)]
 pub fn append_records_with_finder_opts<F: Fn(&[u8]) -> Option<usize>>(
     f: &mut File,
     data: impl Read,

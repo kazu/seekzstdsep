@@ -2,6 +2,8 @@
 
 Costs that are known and still present. Tick an item when it is gone.
 
+Unresolved: [the trusted-append option may affect existing append performance](#existing-append-performance-after-adding-the-trusted-count-option).
+
 Ordered by how much each one costs, worst first.
 
 - [ ] [Frame 0 is read on every call](#frame-0-is-read-on-every-call) — doubles the decoding per lookup
@@ -15,6 +17,45 @@ Ordered by how much each one costs, worst first.
 
 Numbers come from `docs/bench/`; the harness is in `bench/`. Instruction counts come from
 callgrind instead, over a fixture the section that quotes them describes.
+
+## Existing append performance after adding the trusted-count option
+
+Status on 2026-09-22: **a wall-clock regression remains possible; it has not been
+established or ruled out.** The `#[inline(always)]` attributes on
+`append_records_with_opts` and `append_records_with_finder_opts` are accepted as
+the current mitigation, not proof that elapsed-time performance is unchanged.
+
+Commit `9da297b` added the option to trust a supplied record count. Even callers
+that keep counting frame 0 now pass through the option-taking wrappers. Inlining
+lets those calls specialize on the constant `false` argument.
+
+Callgrind measured the existing counting path in `append/records` and the four
+`append_copy/{direct,replace}/{15125,981023}` cases. Compared with `4ab4cfc`, the
+option without forced inlining added 116–118 instructions per operation. With
+both inline attributes, the totals were 200 instructions lower for records and
+1,187–1,189 lower for the other cases. Three repetitions agreed exactly. These
+are user-space instruction counts, not elapsed time; the custom-finder path was
+not covered by these five cases.
+
+Repeated Criterion runs of both versions had large run-to-run variation and
+multimodal sample distributions. The latest run used 30 samples, a 1 s warmup,
+a minimum 2 s measurement, and three runs per version. It did not establish a
+consistent performance difference. There was no reliable elapsed-time comparison
+isolating the inline attributes themselves. Binaries, fixtures and measurement
+output were on local XFS, with CPU affinity set to CPU 2 and
+`CARGO_TARGET_DIR=/home/xtakei/.cargo/target`.
+
+Short CPU profiles also do not settle the question. For records, restricting the
+denominator to `append_records_inner` gave similar leading shares before and
+after: `validate_separator` about 40%, followed by `encode_frame` about 19–23%.
+Whole-benchmark profiles include fixture copying and file destruction, so those
+shares must not be mistaken for append-body costs. Other builds were running
+during profiling; the profiles were used to inspect function shares, not speed.
+
+Keep this issue open until repeatable measurements can distinguish a code
+regression from variation in the benchmark and its environment. Measure the
+trusted path separately; its speed cannot establish that the existing path has
+not regressed.
 
 ## Reading several frames rebuilt the decoder for each
 
