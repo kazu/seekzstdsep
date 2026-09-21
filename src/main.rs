@@ -8,7 +8,8 @@ use seekzstdsep::cli::{BoundaryArgs, ConvertArgs, CopyRangeArgs, run_compress, r
 use seekzstdsep::find::Boundary;
 use seekzstdsep::{
     AppendInput, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck, RecordReader,
-    append, append_frames_with, append_records_with, copy_and_replace,
+    append, append_frames_with, append_records_with_finder_opts, append_records_with_opts,
+    copy_and_replace,
     seekzstdsep_lib::{inspect_records_with_opts, inspect_with_opts},
     truncate, truncate_records,
 };
@@ -77,6 +78,17 @@ struct AppendArgs {
     /// Write a separator at the join when FILE ends in a fragment rather than in a record
     #[arg(long, conflicts_with = "input_seekable")]
     insert_separator: bool,
+    /// Records per frame for raw input (default: infer from existing frames)
+    #[arg(long, conflicts_with = "input_seekable")]
+    records_per_frame: Option<usize>,
+    /// Skip existing frame count validation. A wrong count breaks record-indexed access;
+    /// only the last data frame is checked against the supplied maximum
+    #[arg(
+        long,
+        requires = "records_per_frame",
+        conflicts_with = "input_seekable"
+    )]
+    trust_records_per_frame: bool,
     /// Treat INPUT as a seekable zst and copy its frames as bytes, decompressing neither file.
     /// Requires both files to hold the same number of records per frame, and FILE to end at a
     /// frame boundary
@@ -210,21 +222,21 @@ fn main() -> anyhow::Result<()> {
                 let level = args.level.unwrap_or(CompressionLevel::default());
                 let from = args.input_from.unwrap_or(0);
                 match args.boundary.boundary()? {
+                    Boundary::Separator(sep) if !args.input_seekable => append_records_with_opts(
+                        file,
+                        records_input(opened),
+                        &sep,
+                        on_missing,
+                        level,
+                        args.records_per_frame,
+                        args.trust_records_per_frame,
+                    )?,
                     Boundary::Separator(sep) => {
-                        let input: AppendInput<Box<dyn Read>> = if args.input_seekable {
-                            AppendInput::Frames {
-                                input: opened.as_ref().expect("--input-seekable requires INPUT"),
-                                from,
-                                cnt: args.input_cnt,
-                                check,
-                            }
-                        } else {
-                            AppendInput::Records {
-                                data: records_input(opened),
-                                on_missing,
-                                level,
-                                records_per_frame: None,
-                            }
+                        let input: AppendInput<Box<dyn Read>> = AppendInput::Frames {
+                            input: opened.as_ref().expect("--input-seekable requires INPUT"),
+                            from,
+                            cnt: args.input_cnt,
+                            check,
                         };
                         append(file, input, &sep)?;
                     }
@@ -236,13 +248,14 @@ fn main() -> anyhow::Result<()> {
                         &*find,
                         check,
                     )?,
-                    Boundary::Finder(find) => append_records_with(
+                    Boundary::Finder(find) => append_records_with_finder_opts(
                         file,
                         records_input(opened),
                         &*find,
                         on_missing,
                         level,
-                        None,
+                        args.records_per_frame,
+                        args.trust_records_per_frame,
                     )?,
                 }
                 Ok(())
