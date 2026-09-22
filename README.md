@@ -124,6 +124,7 @@ Pairs with it:
 
 - [nu_plugin_polars_dyn][polars-dyn] — ships a scan source that reads `.seek.zst` as a polars dataframe
 - [nu_plugin_flatbuffers][fbs] — turns the records `--finder flatbuffers` cuts into nushell values
+- [polars-logfmt][polars-logfmt] — reads logfmt logs, plain or `.seek.zst`, local or over SSH, into polars LazyFrames. Also usable as a scan source of nu_plugin_polars_dyn
 
 Built on:
 
@@ -159,6 +160,7 @@ MIT ([LICENSE](./LICENSE)).
 [bugs]: ./docs/bugs.md
 [polars-dyn]: https://github.com/kazu/nu_plugin_polars_dyn
 [fbs]: https://github.com/kazu/nu_plugin_flatbuffers
+[polars-logfmt]: https://github.com/kazu/polars-logfmt
 [zeekstd]: https://github.com/rorosen/zeekstd
 [zstd-rs]: https://github.com/gyscos/zstd-rs
 [gztool]: https://github.com/circulosmeos/gztool
