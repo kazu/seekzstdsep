@@ -3643,7 +3643,7 @@ dependencies = [
 
 [[package]]
 name = "nu_plugin_zstdsep"
-version = "0.7.9"
+version = "0.7.11"
 dependencies = [
  "anyhow",
  "nu-command",
