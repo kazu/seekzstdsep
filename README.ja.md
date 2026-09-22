@@ -125,6 +125,7 @@ CLI では `append` / `truncate` に `--copy` を付けます。
 
 - [nu_plugin_polars_dyn][polars-dyn] — `.seek.zst` を polars の dataframe として読む scan source を同梱
 - [nu_plugin_flatbuffers][fbs] — `--finder flatbuffers` が切るレコードを nushell の値に戻す
+- [polars-logfmt][polars-logfmt] — logfmt のログを、素のままでも `.seek.zst` でも、ローカルでも SSH 越しでも polars の LazyFrame として読む。nu_plugin_polars_dyn の scan source としても使える
 
 内部で使っているもの:
 
@@ -160,6 +161,7 @@ MIT ([LICENSE](./LICENSE))。
 [bugs]: ./docs/bugs.md
 [polars-dyn]: https://github.com/kazu/nu_plugin_polars_dyn
 [fbs]: https://github.com/kazu/nu_plugin_flatbuffers
+[polars-logfmt]: https://github.com/kazu/polars-logfmt
 [zeekstd]: https://github.com/rorosen/zeekstd
 [zstd-rs]: https://github.com/gyscos/zstd-rs
 [gztool]: https://github.com/circulosmeos/gztool
