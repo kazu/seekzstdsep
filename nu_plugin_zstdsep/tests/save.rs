@@ -528,3 +528,145 @@ fn insert_separator_needs_finder_sep() {
         "the refusal did not name the flag: {err:?}"
     );
 }
+
+/// `--trust-records-per-frame` skips counting the records of the frames already in the file.
+#[test]
+fn trusted_records_per_frame_appends_without_counting() {
+    let (_dir, path, mut nu) = target("lines.seek.zst");
+
+    eval(
+        &mut nu,
+        &format!("[a b c] | zstdsep save --records-per-frame 1 \"{path}\""),
+    )
+    .expect("Failed to save");
+    eval(
+        &mut nu,
+        &format!(
+            "[d e] | zstdsep save --append --records-per-frame 1 --trust-records-per-frame \"{path}\""
+        ),
+    )
+    .expect("Failed to append");
+
+    assert_eq!(records(&mut nu, &path), vec!["a", "b", "c", "d", "e"]);
+}
+
+#[test]
+fn trusted_records_per_frame_takes_the_finder_too() {
+    let (_dir, path, mut nu) = target("fixed.bin.seek.zst");
+    let flags = "--finder fixed --finder-arg 4 --records-per-frame 1";
+
+    eval(
+        &mut nu,
+        &format!("[aaaa bbbb cccc] | zstdsep save {flags} \"{path}\""),
+    )
+    .expect("Failed to save");
+    eval(
+        &mut nu,
+        &format!("[dddd] | zstdsep save --append {flags} --trust-records-per-frame \"{path}\""),
+    )
+    .expect("Failed to append");
+
+    assert_eq!(
+        records_with(&mut nu, &path, "--finder fixed --finder-arg 4"),
+        vec!["aaaa", "bbbb", "cccc", "dddd"]
+    );
+}
+
+/// Three frames of two records. A count of one is wrong for every one of them.
+fn two_per_frame_fixture() -> (TempDir, String, PluginTest) {
+    let (dir, path, mut nu) = target("lines.seek.zst");
+    eval(
+        &mut nu,
+        &format!("[a b c d e f] | zstdsep save --records-per-frame 2 \"{path}\""),
+    )
+    .expect("Failed to save");
+    (dir, path, nu)
+}
+
+/// Without trust, every existing frame is counted against the supplied number.
+#[test]
+fn a_wrong_records_per_frame_is_refused_unless_trusted() {
+    let (_dir, path, mut nu) = two_per_frame_fixture();
+
+    eval(
+        &mut nu,
+        &format!("[g] | zstdsep save --append --records-per-frame 1 \"{path}\""),
+    )
+    .expect_err("a count the frames do not hold was accepted");
+}
+
+/// With trust, the last data frame is still held to the supplied number.
+#[test]
+fn a_trusted_count_is_still_checked_against_the_last_frame() {
+    let (_dir, path, mut nu) = two_per_frame_fixture();
+
+    let err = eval(
+        &mut nu,
+        &format!(
+            "[g] | zstdsep save --append --records-per-frame 1 --trust-records-per-frame \"{path}\""
+        ),
+    )
+    .expect_err("a last frame larger than the trusted count was accepted");
+    assert!(
+        format!("{err:?}").contains("last data frame"),
+        "the refusal was not about the last frame: {err:?}"
+    );
+}
+
+#[test]
+fn trust_needs_append() {
+    let (_dir, path, mut nu) = target("lines.seek.zst");
+
+    let err = eval(
+        &mut nu,
+        &format!("[a b] | zstdsep save --records-per-frame 1 --trust-records-per-frame \"{path}\""),
+    )
+    .expect_err("--trust-records-per-frame was accepted without --append");
+    assert!(
+        err.to_string().contains("--append"),
+        "the refusal did not name --append: {err:?}"
+    );
+}
+
+#[test]
+fn trust_needs_records_per_frame() {
+    let (_dir, path, mut nu) = target("lines.seek.zst");
+    eval(
+        &mut nu,
+        &format!("[a b c] | zstdsep save --records-per-frame 1 \"{path}\""),
+    )
+    .expect("Failed to save");
+
+    let err = eval(
+        &mut nu,
+        &format!("[d] | zstdsep save --append --trust-records-per-frame \"{path}\""),
+    )
+    .expect_err("--trust-records-per-frame was accepted without --records-per-frame");
+    assert!(
+        err.to_string().contains("--records-per-frame"),
+        "the refusal did not name --records-per-frame: {err:?}"
+    );
+}
+
+#[test]
+fn append_refuses_a_records_per_frame_below_one() {
+    // Zero is the library's refusal, a negative count the plugin's: the library never sees one.
+    let (_dir, path, mut nu) = target("lines.seek.zst");
+    eval(
+        &mut nu,
+        &format!("[a b c] | zstdsep save --records-per-frame 1 \"{path}\""),
+    )
+    .expect("Failed to save");
+
+    for (n, why) in [("0", "greater than zero"), ("-1", "--records-per-frame")] {
+        let err = eval(
+            &mut nu,
+            &format!("[d] | zstdsep save --append --records-per-frame {n} \"{path}\""),
+        )
+        .expect_err("a records-per-frame below one was accepted");
+        assert!(
+            format!("{err:?}").contains(why),
+            "the refusal of {n} was not the expected one: {err:?}"
+        );
+    }
+}
