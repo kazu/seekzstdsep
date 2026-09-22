@@ -10,9 +10,10 @@ use nu_protocol::{
 };
 use seekzstdsep::find::Boundary;
 use seekzstdsep::{
-    CompressOptions, CompressionLevel, OnMissingSeparator, append_records, append_records_with,
-    compress_records_to_seekable_zst_with_opts, compress_to_seekable_zst_with_opts,
-    convert_records_to_seekable_zst_reader_with_opts, convert_to_seekable_zst_reader_with_opts,
+    CompressOptions, CompressionLevel, OnMissingSeparator, append_records_with_finder_opts,
+    append_records_with_opts, compress_records_to_seekable_zst_with_opts,
+    compress_to_seekable_zst_with_opts, convert_records_to_seekable_zst_reader_with_opts,
+    convert_to_seekable_zst_reader_with_opts,
 };
 use tempfile::spooled_tempfile;
 
@@ -100,6 +101,13 @@ impl PluginCommand for Save {
                 None,
             )
             .switch(
+                "trust-records-per-frame",
+                "with --append and --records-per-frame N, take N as what every existing frame \
+                 holds instead of counting them; only the last frame is checked. A wrong N \
+                 breaks reading records by index",
+                None,
+            )
+            .switch(
                 "no-check",
                 "leave the 32-bit content checksum out of every frame",
                 None,
@@ -150,6 +158,14 @@ impl PluginCommand for Save {
             (false, None) => source::inner_extension(&path),
         };
 
+        if !appending && call.has_flag("trust-records-per-frame")? {
+            return Err(ShellError::Generic(GenericError::new(
+                "--trust-records-per-frame needs --append",
+                "it is the frames already in the file whose count is trusted",
+                call.head,
+            ))
+            .into());
+        }
         if appending && call.has_flag("force")? {
             return Err(ShellError::Generic(GenericError::new(
                 "--append and --force cannot be given together",
@@ -196,13 +212,26 @@ impl PluginCommand for Save {
                 .open(&path)
                 .map_err(|e| io_failed(&path, &e, call))?;
             let level = CompressionLevel::default();
+            let (records_per_frame, trust) = append_count(call)?;
             match boundary {
-                Boundary::Separator(sep) => {
-                    append_records(&mut file, records, &sep, on_missing, level, None)
-                }
-                Boundary::Finder(find) => {
-                    append_records_with(&mut file, records, &*find, on_missing, level, None)
-                }
+                Boundary::Separator(sep) => append_records_with_opts(
+                    &mut file,
+                    records,
+                    &sep,
+                    on_missing,
+                    level,
+                    records_per_frame,
+                    trust,
+                ),
+                Boundary::Finder(find) => append_records_with_finder_opts(
+                    &mut file,
+                    records,
+                    &*find,
+                    on_missing,
+                    level,
+                    records_per_frame,
+                    trust,
+                ),
             }
             .map_err(|e| failed(&path, &e.to_string(), call))?;
         } else {
@@ -316,4 +345,30 @@ fn failed(path: &Path, why: &str, call: &EvaluatedCall) -> ShellError {
         why.to_string(),
         call.head,
     ))
+}
+
+/// The records per frame `--append` hands the library, and whether to trust it. What the library
+/// would refuse without naming a flag, and what it cannot see at all (a negative count), is refused
+/// here.
+fn append_count(call: &EvaluatedCall) -> Result<(Option<usize>, bool), ShellError> {
+    let trust = call.has_flag("trust-records-per-frame")?;
+    let records_per_frame = match call.get_flag::<i64>("records-per-frame")? {
+        Some(n) if n < 0 => {
+            return Err(ShellError::Generic(GenericError::new(
+                "--records-per-frame cannot be negative",
+                format!("{n} was given"),
+                call.head,
+            )));
+        }
+        Some(n) => Some(n as usize),
+        None if trust => {
+            return Err(ShellError::Generic(GenericError::new(
+                "--trust-records-per-frame needs --records-per-frame",
+                "it is that count which is trusted",
+                call.head,
+            )));
+        }
+        None => None,
+    };
+    Ok((records_per_frame, trust))
 }

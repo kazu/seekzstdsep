@@ -120,11 +120,16 @@ finder で書いたファイルは、同じ finder で読みます:
 
 フラグ: `--append`/`-a`、`--force`/`-f` (付けなければ既存ファイルは残します)、`--finder`、
 `--finder-arg`、`--separator`/`-s`、`--format`、`--raw`/`-r`、`--insert-separator`、それに圧縮器自身の `--frame-size`、
-`--records-per-frame`、`--limit-multiplier`、`--no-check`。
+`--records-per-frame`、`--limit-multiplier`、`--no-check`。`--append` ではさらに `--trust-records-per-frame`
+が使えます。
 
 `--append` はライブラリの `seekzstdsep append` そのもので、その 2 つの拒否も受け継ぎます。フレームが
 3 つ未満のファイル (セパレータを検証するには短すぎる) と、レコードの途中で終わっているファイル
 (`--insert-separator` が先に閉じます) です。
+
+`--append --records-per-frame N` は、フレーム 0 と末尾の 1 つ前のフレームが N レコードずつ持つことを
+数えて確かめてから足します。`--trust-records-per-frame` はその数え上げを省き、末尾のフレームだけを N 以下か
+確かめます。N が間違っていれば index でレコードを引く操作が壊れるので、N を保証できるときだけ使ってください。
 
 `to` コマンドがヘッダ行を書くフォーマットを append すると、ファイルの途中に 2 つ目のヘッダが入ります。
 nushell 自身の `save --append` も同じことをしますし、`to` コマンドにヘッダを書くかどうか尋ねる方法は
