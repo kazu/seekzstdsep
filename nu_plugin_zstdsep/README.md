@@ -100,11 +100,17 @@ separator gets one, so the file never ends mid-record.
 
 Flags: `--append`/`-a`, `--force`/`-f` (an existing file is kept otherwise), `--finder`,
 `--finder-arg`, `--separator`/`-s`, `--format`, `--raw`/`-r`, `--insert-separator`, and the compressor's own `--frame-size`,
-`--records-per-frame`, `--limit-multiplier`, `--no-check`.
+`--records-per-frame`, `--limit-multiplier`, `--no-check`. `--append` also takes
+`--trust-records-per-frame`.
 
 `--append` is the library's `seekzstdsep append`, and inherits its two refusals: a file of fewer
 than three frames, which is too short to validate the separator against, and a file that ends
 mid-record, which `--insert-separator` closes first.
+
+`--append --records-per-frame N` counts the records of frame 0 and of the frame before the last
+against N before adding to the file. `--trust-records-per-frame` skips that count and checks only
+that the last frame holds at most N. A wrong N breaks reading records by index, so use it only when
+N is known.
 
 Appending a format whose `to` command writes a header row puts a second header in the middle of
 the file — nushell's own `save --append` does the same, and there is no way to ask a `to` command
