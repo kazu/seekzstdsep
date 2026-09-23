@@ -17,7 +17,7 @@ use anyhow::Context;
 use memchr::memmem::Finder;
 use zeekstd::Decoder;
 
-use crate::find::BoxFinder;
+use crate::find::{self, BoxFinder};
 use crate::record;
 use crate::seekzstdsep_lib::{
     count_records_in_frame, read_records_in_frame, seek_table_decomp_frames,
@@ -29,14 +29,14 @@ use crate::seekzstdsep_lib::{
 /// the call that built it, and [`RecordReader::record`] leaves its window where the record ended
 /// for the next lookup to walk on from. Everything that reads the file another way takes the
 /// decoder back through [`Self::load_decoder`].
-struct Lookup {
-    window: record::Reader<Take<Decoder<'static, File>>>,
+struct Lookup<S> {
+    window: record::Reader<Take<Decoder<'static, S>>>,
     /// The frame the window is pointed at, or `None` once the decoder has moved since.
     frame: Option<usize>,
 }
 
-impl Lookup {
-    fn new(decoder: Decoder<'static, File>) -> Self {
+impl<S: Read + Seek> Lookup<S> {
+    fn new(decoder: Decoder<'static, S>) -> Self {
         Self {
             window: record::Reader::new(decoder.take(0)),
             frame: None,
@@ -45,7 +45,7 @@ impl Lookup {
 
     /// The decoder, for a caller that seeks it itself. What the window holds goes with it: after
     /// an arbitrary seek it no longer reads on from where it says it does.
-    fn load_decoder(&mut self) -> &mut Decoder<'static, File> {
+    fn load_decoder(&mut self) -> &mut Decoder<'static, S> {
         self.frame = None;
         self.window.source_mut().get_mut()
     }
@@ -93,6 +93,9 @@ struct RecordsRequest {
 /// Holds the decoder, the frame list and frame 0's separator count, plus the window
 /// [`Self::record`] last read through: consecutive indices in the same frame decode it once.
 ///
+/// `S` is the source the records are decoded from: a [`File`] for a reader opened on a path, and
+/// anything `Read + Seek` through [`Self::from_reader`].
+///
 /// # Examples
 ///
 /// ```
@@ -111,9 +114,9 @@ struct RecordsRequest {
 /// assert_eq!(reader.records(1, 2)?, b"record 2\nrecord 3\n");
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct RecordReader<V: Verifier = NoVerify> {
+pub struct RecordReader<V: Verifier = NoVerify, S = File> {
     label: String,
-    lookup: Lookup,
+    lookup: Lookup<S>,
     frames: Vec<(u64, u64)>,
     boundary: Boundary,
     /// Records in frame 0, taken as the record count of every frame. Never 0: every record range
@@ -485,14 +488,10 @@ impl RecordReader<NoVerify> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn from_file(path: PathBuf, file: File, separator: &[u8]) -> anyhow::Result<Self> {
-        record::check_separator(separator)?;
         Self::from_reader(
             file,
             &path.to_string_lossy(),
-            Boundary::Separator {
-                finder: Finder::new(separator).into_owned(),
-                separator: separator.to_vec(),
-            },
+            find::Boundary::Separator(separator.to_vec()),
         )
     }
 
@@ -523,13 +522,50 @@ impl RecordReader<NoVerify> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn from_file_with(path: PathBuf, file: File, find: BoxFinder) -> anyhow::Result<Self> {
-        Self::from_reader(file, &path.to_string_lossy(), Boundary::Finder(find))
+        Self::from_reader(file, &path.to_string_lossy(), find::Boundary::Finder(find))
     }
+}
 
-    /// The reader both entry points build, `label` being what a refusal names the source by. A
-    /// refusal names the separator where there is one, since passing the wrong one is what leaves
-    /// frame 0 holding no record.
-    fn from_reader(source: File, label: &str, boundary: Boundary) -> anyhow::Result<Self> {
+impl<S: Read + Seek> RecordReader<NoVerify, S> {
+    /// [`Self::open`] on any `Read + Seek` source, with the record boundary as either a separator
+    /// or a finder. `label` is what a refusal names the source by, as the path is for
+    /// [`Self::open`].
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::open`] refuses, bar the file not opening.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io::Cursor;
+    ///
+    /// use seekzstdsep::RecordReader;
+    /// use seekzstdsep::find::Boundary;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// let source = Cursor::new(compressed);
+    /// let boundary = Boundary::Separator(b"\n".to_vec());
+    /// let mut reader = RecordReader::from_reader(source, "in-memory", boundary)?;
+    ///
+    /// assert_eq!(reader.total_records()?, 3);
+    /// assert_eq!(reader.record(1)?.unwrap(), b"record 2\n");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn from_reader(source: S, label: &str, boundary: find::Boundary) -> anyhow::Result<Self> {
+        let boundary = match boundary {
+            find::Boundary::Separator(separator) => {
+                record::check_separator(&separator)?;
+                Boundary::Separator {
+                    finder: Finder::new(&separator).into_owned(),
+                    separator,
+                }
+            }
+            find::Boundary::Finder(find) => Boundary::Finder(find),
+        };
         let decoder = Decoder::new(source)
             .with_context(|| format!("failed to open {label} as a seekable zst"))?;
         let frames = seek_table_decomp_frames(&decoder)
@@ -586,7 +622,7 @@ impl RecordReader<NoVerify> {
     /// assert!(err.to_string().contains("frame 1"));
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn verifying(self) -> RecordReaderVerify {
+    pub fn verifying(self) -> RecordReader<AsRead, S> {
         let judge = FrameJudge::new(
             self.label.clone(),
             self.frames.len() - 1,
@@ -603,7 +639,7 @@ impl RecordReader<NoVerify> {
     }
 }
 
-impl<V: Verifier> RecordReader<V> {
+impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
     /// What a refusal names the source by: the path, for a reader opened on one.
     pub fn label(&self) -> &str {
         &self.label
@@ -738,7 +774,10 @@ impl<V: Verifier> RecordReader<V> {
     /// assert_eq!(all, b"record 1\nrecord 2\nrecord 3\n");
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn into_bytes(self) -> anyhow::Result<impl Read + Send + 'static> {
+    pub fn into_bytes(self) -> anyhow::Result<impl Read + Send + 'static>
+    where
+        S: Send + 'static,
+    {
         let mut decoder = self.lookup.window.into_source().into_inner();
         decoder.seek(SeekFrom::Start(0))?;
         Ok(decoder)
@@ -878,11 +917,11 @@ impl<V: Verifier> RecordReader<V> {
     }
 }
 
-impl RecordReader<AsRead> {
+impl<S: Read + Seek> RecordReader<AsRead, S> {
     /// [`RecordReader::into_records`], stopping at the first frame [`AsRead`] refuses — one
     /// holding a count other than frame 0's, or bytes after its last record.
     /// A reverse read checks the whole frame before returning any of its records.
-    pub fn into_records(self) -> RecordIter<AsRead> {
+    pub fn into_records(self) -> RecordIter<AsRead, S> {
         RecordIter {
             frames: self.frames,
             frame: 0,
@@ -896,7 +935,7 @@ impl RecordReader<AsRead> {
     }
 }
 
-impl RecordReader<NoVerify> {
+impl<S: Read + Seek> RecordReader<NoVerify, S> {
     /// Every whole record in the file, in order, decoding a window at a time.
     ///
     /// Scans rather than divides, so unlike [`Self::record`] it does not rest on the
@@ -926,7 +965,7 @@ impl RecordReader<NoVerify> {
     /// assert!(records.next().is_none());
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn into_records(self) -> RecordIter {
+    pub fn into_records(self) -> RecordIter<NoVerify, S> {
         RecordIter {
             frames: self.frames,
             frame: 0,
@@ -982,7 +1021,7 @@ impl RecordReader<NoVerify> {
     }
 }
 
-impl RecordReader<AsRead> {
+impl<S: Read + Seek> RecordReader<AsRead, S> {
     /// [`RecordReader::record`], refusing a frame the walk ran out in that holds a record count of
     /// its own.
     ///
@@ -1053,7 +1092,7 @@ impl RecordReader<AsRead> {
 /// assert_eq!(count, 3);
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct RecordIter<V: Verifier = NoVerify> {
+pub struct RecordIter<V: Verifier = NoVerify, S = File> {
     frames: Vec<(u64, u64)>,
     /// The frame being handed out, past the last one once the iterator is spent.
     frame: usize,
@@ -1064,11 +1103,11 @@ pub struct RecordIter<V: Verifier = NoVerify> {
     /// Exclusive back record index in the last remaining frame, once counted.
     back_left: Option<u64>,
     boundary: Boundary,
-    lookup: Lookup,
+    lookup: Lookup<S>,
     judge: V::Judge,
 }
 
-impl<V: Verifier> RecordIter<V> {
+impl<V: Verifier, S: Read + Seek> RecordIter<V, S> {
     fn check_frame(&self, frame: usize) -> anyhow::Result<()> {
         self.judge
             .count(frame, || self.lookup.window.walked())
@@ -1079,7 +1118,7 @@ impl<V: Verifier> RecordIter<V> {
     }
 }
 
-impl<V: Verifier> Iterator for RecordIter<V> {
+impl<V: Verifier, S: Read + Seek> Iterator for RecordIter<V, S> {
     type Item = anyhow::Result<Vec<u8>>;
 
     #[inline(always)]
@@ -1148,7 +1187,7 @@ impl<V: Verifier> Iterator for RecordIter<V> {
     }
 }
 
-impl<V: Verifier> DoubleEndedIterator for RecordIter<V> {
+impl<V: Verifier, S: Read + Seek> DoubleEndedIterator for RecordIter<V, S> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.armed {
             self.front_read = self.lookup.window.walked();

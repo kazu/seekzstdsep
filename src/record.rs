@@ -466,6 +466,8 @@ impl Watcher for Watch<'_> {
     ///
     /// A run holds the records that lie next to each other in the window, so one straddles an
     /// offset: the records before it are counted by scanning that much of the run again.
+    // Forced for the same reason as `Records::next`: left to LLVM it is not inlined into the walk.
+    #[inline(always)]
     fn saw<R: Read>(
         &mut self,
         reader: &Reader<R>,
@@ -508,6 +510,10 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>, W: Watcher> Iterator for Records<'_
     /// The next run, refilling the window until one turns up. `None` once the source is spent or
     /// the count asked for is reached. A watcher is told about the run before it goes out, and
     /// what it refuses comes back as the item's error.
+    // The reader's source is a type parameter, so every walk is instantiated in the caller's crate,
+    // where this has several callers and LLVM stops inlining it into `next_owned`. Forced: a call
+    // per record is what `into_records` pays otherwise. See the commit that added it for the numbers.
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         if self.left == Some(0) {
             return None;

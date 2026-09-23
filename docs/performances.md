@@ -141,7 +141,7 @@ carry.
 
 ## The seek table is read in full on every call
 
-`Decoder::new` in `RecordReader::from_file` (`src/reader.rs`), which a fresh reader builds one of per
+`Decoder::new` in `RecordReader::from_reader` (`src/reader.rs`), which a fresh reader builds one of per
 call, reads the entire seek table before anything else happens. Each entry is 8 bytes — 4 for the compressed size, 4 for the decompressed
 size, no checksum — plus 17 bytes of header and footer.
 
@@ -169,7 +169,7 @@ Does not vary with `--from`. Grows with the file.
 
 ## Frame 0 is read on every call
 
-`RecordReader::from_file` derives the records-per-frame invariant by reading frame 0 and counting
+`RecordReader::from_reader` derives the records-per-frame invariant by reading frame 0 and counting
 separators (`src/reader.rs`), and a caller that opens a reader per call pays it each time.
 
 On the benchmark fixture that is 65,579 bytes decoded, on top of the 65 kB of the frame actually
