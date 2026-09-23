@@ -217,7 +217,8 @@ Every entry point above has a twin that takes one in place of the separator:
 `RecordReader::open_with` and `from_file_with`, `count_records_in_frame`, `read_records_in_frame`,
 `count_records_in_buf`, `inspect_records_with_opts`, `truncate_records`, `append_records_with`,
 `append_frames_with` and `copy_range_with`. The separator forms are those, called with
-`find::by_separator`.
+`find::by_separator`. `RecordReader::from_reader` takes either as a `find::Boundary`, on any
+`Read + Seek` source.
 
 ```rust,no_run
 use seekzstdsep::find;

@@ -524,3 +524,154 @@ fn a_separator_that_occurs_nowhere_is_refused() {
         "the failure did not name the separator as the cause: {err}"
     );
 }
+
+/// The same bytes held in memory read as the file does: `from_reader` is what `open` is built on,
+/// with the source and its name handed in rather than a path.
+#[test]
+fn a_reader_over_any_source_reads_what_the_file_reader_does() {
+    use std::io::{Cursor, Read};
+
+    use seekzstdsep::find::Boundary;
+
+    let dir = tempdir().expect("Failed to create temp dir");
+    let path = compress_fixture(dir.path());
+    let bytes = std::fs::read(&path).expect("Failed to read the fixture");
+    let in_memory = || {
+        RecordReader::from_reader(
+            Cursor::new(bytes.clone()),
+            "in-memory",
+            Boundary::Separator(b"\n".to_vec()),
+        )
+        .expect("Failed to build the reader")
+    };
+    let on_file = || RecordReader::open(path.clone(), b"\n").expect("Failed to open the reader");
+
+    assert_eq!(in_memory().label(), "in-memory");
+    assert_eq!(on_file().label(), path.to_string_lossy());
+    assert_eq!(in_memory().separator(), on_file().separator());
+    assert_eq!(in_memory().frame_count(), on_file().frame_count());
+    assert_eq!(in_memory().total_records().unwrap(), FIXTURE_RECORDS);
+    for from in [0, 1, FIXTURE_RECORDS_PER_FRAME - 1, FIXTURE_RECORDS - 1] {
+        let (mut memory, mut file) = (in_memory(), on_file());
+        assert_eq!(memory.record(from).unwrap(), file.record(from).unwrap());
+        assert_eq!(
+            memory.records(from, 3).unwrap(),
+            file.records(from, 3).unwrap()
+        );
+        let (mut memory, mut file) = (in_memory().verifying(), on_file().verifying());
+        assert_eq!(memory.record(from).unwrap(), file.record(from).unwrap());
+        assert_eq!(
+            memory.records(from, 3).unwrap(),
+            file.records(from, 3).unwrap()
+        );
+    }
+    let all = |records: Vec<anyhow::Result<Vec<u8>>>| -> Vec<Vec<u8>> {
+        records.into_iter().map(Result::unwrap).collect()
+    };
+    assert_eq!(
+        all(in_memory().into_records().collect()),
+        all(on_file().into_records().collect())
+    );
+    assert_eq!(
+        all(in_memory().into_records().rev().collect()),
+        all(on_file().into_records().rev().collect())
+    );
+    let (mut memory, mut file) = (Vec::new(), Vec::new());
+    in_memory()
+        .into_bytes()
+        .unwrap()
+        .read_to_end(&mut memory)
+        .unwrap();
+    on_file()
+        .into_bytes()
+        .unwrap()
+        .read_to_end(&mut file)
+        .unwrap();
+    assert_eq!(memory, file);
+}
+
+/// A refusal names the source by the label it was built with, where the file reader names the path.
+#[test]
+fn a_refusal_names_the_source_by_its_label() {
+    use std::io::Cursor;
+
+    use seekzstdsep::find::Boundary;
+
+    let dir = tempdir().expect("Failed to create temp dir");
+    let groups = [b"a\nb\n".to_vec(), b"c\nd\ne\n".to_vec()];
+    let path = compress_frames(dir.path(), "uneven", &groups);
+    let bytes = std::fs::read(&path).expect("Failed to read the fixture");
+    let in_memory = |label: &str| {
+        RecordReader::from_reader(
+            Cursor::new(bytes.clone()),
+            label,
+            Boundary::Separator(b"\n".to_vec()),
+        )
+        .expect("Failed to build the reader")
+    };
+
+    let past_the_end = in_memory("in-memory").records(100, 1).unwrap_err();
+    assert!(
+        past_the_end
+            .to_string()
+            .ends_with("past the end of in-memory"),
+        "the refusal did not name the label: {past_the_end}"
+    );
+    let uneven = in_memory("uneven-frames")
+        .verifying()
+        .records(0, 5)
+        .unwrap_err();
+    assert!(
+        uneven
+            .to_string()
+            .contains("frame 1 of uneven-frames holds"),
+        "the refusal did not name the label: {uneven}"
+    );
+    let on_file = RecordReader::open(path.clone(), b"\n")
+        .unwrap()
+        .verifying()
+        .records(0, 5)
+        .unwrap_err();
+    assert!(
+        on_file
+            .to_string()
+            .contains(&format!("frame 1 of {} holds", path.display())),
+        "the refusal did not name the path: {on_file}"
+    );
+
+    let not_seekable = RecordReader::from_reader(
+        Cursor::new(Vec::new()),
+        "in-memory",
+        Boundary::Separator(b"\n".to_vec()),
+    )
+    .err()
+    .expect("an empty source was accepted");
+    assert!(
+        not_seekable
+            .to_string()
+            .contains("failed to open in-memory as a seekable zst"),
+        "the refusal did not name the label: {not_seekable}"
+    );
+    let no_record = RecordReader::from_reader(
+        Cursor::new(bytes.clone()),
+        "in-memory",
+        Boundary::Separator(b"ZZZZ".to_vec()),
+    )
+    .err()
+    .expect("a separator that occurs in no record was accepted");
+    assert!(
+        no_record.to_string().contains("frame 0 of in-memory"),
+        "the refusal did not name the label: {no_record}"
+    );
+    let empty = RecordReader::from_reader(
+        Cursor::new(bytes),
+        "in-memory",
+        Boundary::Separator(Vec::new()),
+    )
+    .err()
+    .expect("an empty separator was accepted");
+    let on_file = RecordReader::open(path, b"")
+        .err()
+        .expect("an empty separator was accepted");
+    assert_eq!(empty.to_string(), on_file.to_string());
+}
