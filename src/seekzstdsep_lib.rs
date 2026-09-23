@@ -1075,8 +1075,8 @@ pub fn records_between_by_separator_in_frame<'a>(
 /// # Errors
 ///
 /// The region holding fewer than `skip` records, and a read failing.
-pub fn read_records_in_frame<'a, F>(
-    decoder: &mut Decoder<'a, std::fs::File>,
+pub fn read_records_in_frame<'a, S: zeekstd::Seekable, F>(
+    decoder: &mut Decoder<'a, S>,
     start: u64,
     len: u64,
     skip: u64,
@@ -1222,8 +1222,8 @@ pub fn cnt_of_separetor_in_frame<'a>(
 /// # Errors
 ///
 /// A read failing.
-pub fn count_records_in_frame<'a, F>(
-    decoder: &mut Decoder<'a, std::fs::File>,
+pub fn count_records_in_frame<'a, S: zeekstd::Seekable, F>(
+    decoder: &mut Decoder<'a, S>,
     start: u64,
     len: u64,
     find: F,
@@ -1290,8 +1290,8 @@ pub fn old_cnt_of_separetor_in_frame_via_buf(
 }
 
 /// Returns each frame's `(decompressed_start, decompressed_length)`, or `None` if there are none.
-pub fn seek_table_decomp_frames<'a>(
-    decoder: &Decoder<'a, std::fs::File>,
+pub fn seek_table_decomp_frames<'a, S: zeekstd::Seekable>(
+    decoder: &Decoder<'a, S>,
 ) -> Option<Vec<(u64, u64)>> {
     let seek_table = decoder.seek_table();
     let n_u32 = seek_table.num_frames();
