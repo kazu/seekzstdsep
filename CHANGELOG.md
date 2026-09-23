@@ -6,6 +6,16 @@ next release overwrites it. What belongs in a release note belongs in a commit m
 Only the crate's own tags (`v*`) mark a release here. The nushell plugin is versioned separately in
 `nu_plugin_zstdsep/`, and `nu_v.*` records which revision a nushell version takes.
 
+## [0.8.0] - 2026-09-23
+
+### Changed
+
+- seekzstdsep: zstdsep: save: take --trust-records-per-frame on --append
+- nu_plugin_zstdsep: release 0.7.11
+- seekzstdsep: README: link polars-logfmt as a related project
+- seekzstdsep: reader: carry a label instead of the path, rename build to from_reader
+- seekzstdsep: reader: read records from any Read + Seek source
+
 ## [0.7.4] - 2026-09-21
 
 ### Changed
