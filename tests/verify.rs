@@ -644,12 +644,10 @@ fn the_unchecked_read_answers_with_the_wrong_records() {
 /// part of what it promises. A walk with no frame end to reach is watched against none of them,
 /// rather than dividing by zero or running off the frame list.
 mod watch_is_total {
-    use std::path::PathBuf;
-
     use seekzstdsep::{AsRead, Judge, Verifier};
 
     fn judge() -> <AsRead as Verifier>::Judge {
-        <AsRead as Verifier>::Judge::new(PathBuf::from("nowhere.seek.zst"), 0, 10)
+        <AsRead as Verifier>::Judge::new("nowhere.seek.zst".to_owned(), 0, 10)
     }
 
     #[test]
