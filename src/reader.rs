@@ -10,7 +10,7 @@
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Take, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use anyhow::Context;
@@ -112,12 +112,12 @@ struct RecordsRequest {
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub struct RecordReader<V: Verifier = NoVerify> {
-    path: PathBuf,
+    label: String,
     lookup: Lookup,
     frames: Vec<(u64, u64)>,
     boundary: Boundary,
     /// Records in frame 0, taken as the record count of every frame. Never 0: every record range
-    /// divides by it, and [`Self::from_file`] refuses a boundary that leaves it 0.
+    /// divides by it, and [`Self::from_reader`] refuses a boundary that leaves it 0.
     sep_cnt: usize,
     judge: V::Judge,
 }
@@ -268,7 +268,7 @@ impl Verifier for AsRead {
 /// calls it, so a read that keeps one does not go and count what it would have been asked about.
 pub trait Judge {
     /// Built from what a refusal has to name and hold every frame to.
-    fn new(path: PathBuf, last: usize, per_frame: u64) -> Self;
+    fn new(label: String, last: usize, per_frame: u64) -> Self;
 
     /// Refuses the frame at `i` for the records it turns out to hold.
     fn count(&self, i: usize, held: impl FnOnce() -> u64) -> anyhow::Result<()>;
@@ -279,7 +279,7 @@ pub trait Judge {
 
 impl Judge for () {
     #[inline]
-    fn new(_path: PathBuf, _last: usize, _per_frame: u64) -> Self {}
+    fn new(_label: String, _last: usize, _per_frame: u64) -> Self {}
 
     #[inline]
     fn count(&self, _i: usize, _held: impl FnOnce() -> u64) -> anyhow::Result<()> {
@@ -292,36 +292,36 @@ impl Judge for () {
     }
 }
 
-/// What [`AsRead`] holds to judge a frame: the file to name in a refusal, the last frame's index
+/// What [`AsRead`] holds to judge a frame: the source to name in a refusal, the last frame's index
 /// because only that one may hold fewer records, and the count every other frame has to hold.
 pub struct FrameJudge {
-    path: PathBuf,
+    label: String,
     last: usize,
     per_frame: u64,
 }
 
 impl Judge for FrameJudge {
-    fn new(path: PathBuf, last: usize, per_frame: u64) -> Self {
+    fn new(label: String, last: usize, per_frame: u64) -> Self {
         Self {
-            path,
+            label,
             last,
             per_frame,
         }
     }
 
     fn count(&self, i: usize, held: impl FnOnce() -> u64) -> anyhow::Result<()> {
-        verify_frame_count(&self.path, i, self.last, held(), self.per_frame)
+        verify_frame_count(&self.label, i, self.last, held(), self.per_frame)
     }
 
     fn ends_whole(&self, i: usize, ends_whole: impl FnOnce() -> bool) -> anyhow::Result<()> {
-        verify_frame_ends_whole(&self.path, i, self.last, ends_whole())
+        verify_frame_ends_whole(&self.label, i, self.last, ends_whole())
     }
 }
 
 /// Refuses frame `i` holding a count other than `per_frame`. Only the frame the file ends with may
 /// hold fewer.
 fn verify_frame_count(
-    path: &Path,
+    label: &str,
     i: usize,
     last: usize,
     held: u64,
@@ -329,10 +329,9 @@ fn verify_frame_count(
 ) -> anyhow::Result<()> {
     if held != per_frame && !(i == last && held < per_frame) {
         anyhow::bail!(
-            "frame {i} of {} holds {held} records rather than {per_frame}: a record index is \
+            "frame {i} of {label} holds {held} records rather than {per_frame}: a record index is \
              resolved by dividing it by the count frame 0 holds, so a frame holding another count \
-             is read at the wrong offsets",
-            path.display()
+             is read at the wrong offsets"
         );
     }
     Ok(())
@@ -368,16 +367,15 @@ fn watch_frames<J: Judge>(judge: &J, first: usize, ends: Vec<u64>) -> record::Wa
 
 /// Refuses frame `i` holding bytes after its last record. Only the frame the file ends with may.
 fn verify_frame_ends_whole(
-    path: &Path,
+    label: &str,
     i: usize,
     last: usize,
     ends_whole: bool,
 ) -> anyhow::Result<()> {
     if !ends_whole && i != last {
         anyhow::bail!(
-            "frame {i} of {} holds bytes after its last record: a record spans its end, so the \
-             frames do not divide the file into records and a count per frame does not place them",
-            path.display()
+            "frame {i} of {label} holds bytes after its last record: a record spans its end, so the \
+             frames do not divide the file into records and a count per frame does not place them"
         );
     }
     Ok(())
@@ -488,9 +486,9 @@ impl RecordReader<NoVerify> {
     /// ```
     pub fn from_file(path: PathBuf, file: File, separator: &[u8]) -> anyhow::Result<Self> {
         record::check_separator(separator)?;
-        Self::build(
-            path,
+        Self::from_reader(
             file,
+            &path.to_string_lossy(),
             Boundary::Separator {
                 finder: Finder::new(separator).into_owned(),
                 separator: separator.to_vec(),
@@ -525,18 +523,19 @@ impl RecordReader<NoVerify> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn from_file_with(path: PathBuf, file: File, find: BoxFinder) -> anyhow::Result<Self> {
-        Self::build(path, file, Boundary::Finder(find))
+        Self::from_reader(file, &path.to_string_lossy(), Boundary::Finder(find))
     }
 
-    /// The reader both entry points build. A refusal names the separator where there is one, since
-    /// passing the wrong one is what leaves frame 0 holding no record.
-    fn build(path: PathBuf, file: File, boundary: Boundary) -> anyhow::Result<Self> {
-        let decoder = Decoder::new(file)
-            .with_context(|| format!("failed to open {} as a seekable zst", path.display()))?;
+    /// The reader both entry points build, `label` being what a refusal names the source by. A
+    /// refusal names the separator where there is one, since passing the wrong one is what leaves
+    /// frame 0 holding no record.
+    fn from_reader(source: File, label: &str, boundary: Boundary) -> anyhow::Result<Self> {
+        let decoder = Decoder::new(source)
+            .with_context(|| format!("failed to open {label} as a seekable zst"))?;
         let frames = seek_table_decomp_frames(&decoder)
-            .ok_or_else(|| anyhow::anyhow!("no frames in {}", path.display()))?;
+            .ok_or_else(|| anyhow::anyhow!("no frames in {label}"))?;
         let mut reader = Self {
-            path,
+            label: label.to_owned(),
             lookup: Lookup::new(decoder),
             frames,
             boundary,
@@ -552,12 +551,11 @@ impl RecordReader<NoVerify> {
         )?);
         if reader.sep_cnt == 0 {
             if reader.boundary.separator().is_empty() {
-                anyhow::bail!("no record ends in frame 0 of {}", reader.path.display());
+                anyhow::bail!("no record ends in frame 0 of {label}");
             }
             anyhow::bail!(
-                "no record in frame 0 of {} ends with {:?}: a file does not record the separator \
-                 it was written with, so pass the one it was",
-                reader.path.display(),
+                "no record in frame 0 of {label} ends with {:?}: a file does not record the \
+                 separator it was written with, so pass the one it was",
                 String::from_utf8_lossy(reader.boundary.separator()),
             );
         }
@@ -590,12 +588,12 @@ impl RecordReader<NoVerify> {
     /// ```
     pub fn verifying(self) -> RecordReaderVerify {
         let judge = FrameJudge::new(
-            self.path.clone(),
+            self.label.clone(),
             self.frames.len() - 1,
             self.sep_cnt as u64,
         );
         RecordReader {
-            path: self.path,
+            label: self.label,
             lookup: self.lookup,
             frames: self.frames,
             boundary: self.boundary,
@@ -606,9 +604,9 @@ impl RecordReader<NoVerify> {
 }
 
 impl<V: Verifier> RecordReader<V> {
-    /// The file this reads from.
-    pub fn path(&self) -> &PathBuf {
-        &self.path
+    /// What a refusal names the source by: the path, for a reader opened on one.
+    pub fn label(&self) -> &str {
+        &self.label
     }
 
     /// The separator records are counted by, and an empty slice when the reader was opened with a
@@ -758,7 +756,7 @@ impl<V: Verifier> RecordReader<V> {
         if frame_idx >= self.frames.len() {
             return Err(anyhow::anyhow!(
                 "record {from} is past the end of {}",
-                self.path.display()
+                self.label
             ));
         }
         let idx_in_frame = from % self.sep_cnt;
