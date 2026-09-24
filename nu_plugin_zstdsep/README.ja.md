@@ -68,7 +68,7 @@ finder で書いたファイルは、同じ finder で読みます:
 渡し、それは値を 1 つ読んで止まるので、上のようにレコードごとにデコードしてください。nushell に
 `from flatbuffers` はありません。
 
-### `zstdsep open <path>`
+### `zstdsep open <path>...`
 
 データではなく**ハンドル**を返します。
 
@@ -80,6 +80,19 @@ finder で書いたファイルは、同じ finder で読みます:
 > $h                 # サマリ: path, finder, finder_arg, format, frames, records_per_frame, records
 > $h.records         # そのサマリの 1 フィールド
 ```
+
+複数のファイルを渡すとハンドルは 1 つで、インデックスは並べた順にレコードを 1 本に通した番号です。
+
+```text
+> let h = zstdsep open jan.jsonl.seek.zst feb.jsonl.seek.zst
+> $h.records         # 2 ファイルの合計
+> $h.path            # 2 要素のリスト。frames と records_per_frame も同じくファイルごと
+> $h.0               # jan の先頭。feb の先頭は jan の件数から
+```
+
+番号がどのファイルに落ちるかを引くにはファイルごとのレコード数が要ります。数えるのは最終フレームの
+解凍 1 つで、番号が落ちたファイルより後ろは数えません。`--finder` と `--format` はハンドル全体で
+共通です。
 
 フラグ: `--finder` と `--finder-arg` (レコードの終わり。上記)、`--separator` (デフォルトは改行 —
 ファイル自身はセパレータを記録していません)、`--format`、`--raw`、`--no-partial`。
@@ -170,9 +183,16 @@ nu nu_plugin_zstdsep/nu/install.nu --uninstall
 hook は `--finder` と `--finder-arg` を取り、`--separator` はありません。セパレータは
 `--finder-arg ";"` で、finder のデフォルトは `sep` です。
 
+`open a.seek.zst b.seek.zst` も `open *.seek.zst` も、builtin と同じように複数のファイルを取ります。
+glob を展開するのは hook で、展開結果が全部 `.seek.zst` なら plugin、どれもそうでなければ builtin、
+混ざっていればエラーです。展開して初めてどちらへ回すか決まるからで、builtin へ回すときは書かれた
+ままのパターンを渡します。
+
 制限が 2 つあります。autoload のファイルは REPL の起動時に読まれ、`nu script.nu` では読まれないので、
-スクリプトには自前の `use .../nu/zstdsep-hook.nu *` が要ります。もう 1 つ、ハンドルは 1 つのファイルに
-結びつくので、builtin なら連結していた `open a.seek.zst b.seek.zst` は拒否されます。
+スクリプトには自前の `use .../nu/zstdsep-hook.nu *` が要ります。もう 1 つ、クォートの区別が plugin 側では
+消えます。`open "*.json"` が `*.json` という名前のファイルを開くのは builtin へ回る場合だけで、これは
+書かれた値をそのまま builtin へ渡しているからです。plugin へ渡すのは展開後の名前なので、glob の文字を
+含む `.seek.zst` のファイル名は、クォートしても名前の中のパターンとして扱われます。
 
 `nu nu_plugin_zstdsep/tests/run-hook.nu` がテストを走らせます。専用のディレクトリに登録した plugin に
 対して実行されます。
