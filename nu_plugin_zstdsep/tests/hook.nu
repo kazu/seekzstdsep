@@ -24,6 +24,16 @@ assert equal (open plain.txt) "other\n"
 # A glob still globs: the parameter has to stay a glob to survive the forward to the builtin.
 assert equal (open *.json) [[a, b]; [1, 2]]
 
+# A name `glob` cannot parse is a legal file name, and the builtin opens it.
+"bracket\n" | save "a[b.txt"
+assert equal (open "a[b.txt") "bracket\n"
+
+# The builtin is handed the values the engine built, not the names they expanded to. Quoting is
+# carried in those values, so a quoted pattern still names the file of that name — `plain.json` is
+# there to be matched if it were expanded instead.
+"literal" | save "*.json"
+assert equal (open "*.json") "literal"
+
 # --- .seek.zst goes to the plugin --------------------------------------------
 
 [{a: 1}, {a: 2}, {a: 3}] | save records.jsonl.seek.zst
@@ -62,8 +72,24 @@ assert error {|| "x\n" | save --no-check plain2.txt }
 assert error {|| [{a: 1}] | save --progress progress.jsonl.seek.zst }
 assert error {|| [{a: 1}] | save --stderr err.txt stderr.jsonl.seek.zst }
 
-# A handle is one file's, so more than one of ours is refused rather than concatenated.
-assert error {|| open records.jsonl.seek.zst records.jsonl.seek.zst }
+# Ours and the builtin's in one call have no side to go to.
+assert error {|| open records.jsonl.seek.zst plain.txt }
+
+# --- several files are one handle --------------------------------------------
+
+[{a: 4}, {a: 5}] | save more.jsonl.seek.zst
+
+assert equal (open records.jsonl.seek.zst more.jsonl.seek.zst | describe) "zstdsep handle"
+assert equal (open records.jsonl.seek.zst more.jsonl.seek.zst).records 5
+assert equal (open records.jsonl.seek.zst more.jsonl.seek.zst).3.a 4
+assert equal (open records.jsonl.seek.zst more.jsonl.seek.zst --no-partial | get a) [1, 2, 3, 4, 5]
+
+# A glob is expanded by the hook, and the expansion is sorted, so `more` comes before `records`.
+assert equal (open *.jsonl.seek.zst --no-partial | get a) [4, 5, 1, 2, 3]
+assert equal (open *.jsonl.seek.zst).records 5
+
+# A pattern that names nothing is kept as written, so the plugin reports the file it cannot find.
+assert error {|| open nope.jsonl.seek.zst }
 
 # --- the plugin's own flags reach it -----------------------------------------
 

@@ -31,6 +31,10 @@ Each has a command below that reproduces the stated output. Ordered by damage, w
   Frames of 10, 15 and 10 hold 35 as well, and there `total_records` answers 30 — the five records
   in the middle are counted by neither.
 
+  A handle over several files (`zstdsep open a b`) turns a miscount into wrong records rather than
+  a wrong number: the count of each file is where the next one's indices start, so five uncounted
+  records in `a` shift every index of `b` by five.
+
   ```sh
   cargo test --test verify a_middle_frame_holding_more
   ```

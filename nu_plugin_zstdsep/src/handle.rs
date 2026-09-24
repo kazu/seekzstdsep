@@ -1,5 +1,5 @@
 //! The value `zstdsep open` hands back.
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use nu_protocol::{CustomValue, ShellError, Span, Value, shell_error::generic::GenericError};
 use serde::{Deserialize, Serialize};
@@ -10,45 +10,62 @@ use crate::source::{FinderSpec, Format, Source};
 /// a handle fails engine-side with a message that prints this name, so it has to identify itself.
 pub const TYPE_NAME: &str = "zstdsep handle";
 
-/// A file opened for lazy reading: an index into the plugin's state table, plus everything needed
+/// Files opened for lazy reading: an index into the plugin's state table, plus everything needed
 /// to rebuild that entry after the plugin has been garbage collected and restarted.
+///
+/// Several files are one handle rather than a handle each, because an index into it addresses the
+/// records of all of them in the order they were named. The finder and the format are one for the
+/// whole handle: a single run of indices only makes sense over records read the same way.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZstdsepHandle {
     /// Which entry of the plugin's state table this refers to.
     pub id: u64,
-    /// The file, as an absolute path.
-    pub path: PathBuf,
-    /// Where its records end.
+    /// The files, as absolute paths, in the order they were named. Never empty: `zstdsep open`
+    /// refuses a call that names no file.
+    pub paths: Vec<PathBuf>,
+    /// Where their records end.
     pub finder: FinderSpec,
-    /// The `from <name>` its records are parsed by, or `None` for raw strings.
+    /// The `from <name>` their records are parsed by, or `None` for raw strings.
     pub format: Option<String>,
 }
 
 impl ZstdsepHandle {
-    /// The handle for `source`, registered under `id`.
-    pub fn new(id: u64, source: &Source) -> Self {
+    /// The handle for `sources`, registered under `id`.
+    ///
+    /// The finder and the format are taken from the first source; `zstdsep open` builds them all
+    /// with the same ones.
+    pub fn new(id: u64, sources: &[Source]) -> Self {
+        let first = &sources[0];
         Self {
             id,
-            path: source.path.clone(),
-            finder: source.finder.clone(),
-            format: source.format.name().map(str::to_string),
+            paths: sources.iter().map(|s| s.path.clone()).collect(),
+            finder: first.finder.clone(),
+            format: first.format.name().map(str::to_string),
         }
     }
 
-    /// Whether this handle was made for `path` read with `finder`.
+    /// Whether this handle was made for `paths` read with `finder`.
     ///
-    /// What identifies a file to the plugin. The format is left out: it decides how a record is
+    /// What identifies an entry to the plugin. The format is left out: it decides how a record is
     /// turned into a value, not which bytes are read, so two handles that differ only there can
-    /// share one open file.
-    pub fn refers_to(&self, path: &Path, finder: &FinderSpec) -> bool {
-        self.path == path && &self.finder == finder
+    /// share one set of open files.
+    pub fn refers_to(&self, paths: &[PathBuf], finder: &FinderSpec) -> bool {
+        self.paths == paths && &self.finder == finder
     }
 
-    /// The file this refers to. Carried in the value rather than in the state table, so a cell
-    /// path that arrives after a restart can reopen it.
+    /// What a record of this handle is decoded by, whichever file it came out of.
+    ///
+    /// The finder and the format are the handle's, so decoding needs no file; the first one stands
+    /// for all of them.
     pub fn source(&self) -> Source {
+        self.source_of(self.paths[0].clone())
+    }
+
+    /// One of the files, ready to open. Carried in the value rather than in the state table, so a
+    /// cell path that arrives after a restart can reopen it.
+    pub fn source_of(&self, path: PathBuf) -> Source {
         Source {
-            path: self.path.clone(),
+            path,
             finder: self.finder.clone(),
             format: match &self.format {
                 None => Format::Raw,
