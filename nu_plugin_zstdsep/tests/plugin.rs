@@ -1,7 +1,7 @@
 //! What the plugin does when nushell drives it.
 mod common;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use common::{
     FIXED_LEN, RECORDS, RECORDS_PER_FRAME, compress_fixed_fixture, compress_fixture, eval, nu,
@@ -16,6 +16,38 @@ fn fixture(name: &str) -> (TempDir, String) {
     let dir = tempdir().expect("Failed to create temp dir");
     let path = compress_fixture(dir.path(), name);
     (dir, path.to_string_lossy().to_string())
+}
+
+/// The second fixture of [`fixture_pair`]: its records are numbered far enough from the first's
+/// that one of them says which file it came out of, and there are enough of them to fill three
+/// frames. Three, because `zstdsep inspect` subtracts three from the frame count and panics on a
+/// file that has fewer.
+const SECOND_FROM: usize = 1000;
+const SECOND_RECORDS: usize = 3 * RECORDS_PER_FRAME;
+
+/// Records of the same shape as [`common::fixture_body`], numbered from `from`, so that a record
+/// says which file it came out of.
+fn numbered_body(from: usize, count: usize) -> Vec<u8> {
+    (from..from + count)
+        .map(|i| format!("{{\"seq\":{i},\"lvl\":\"info\",\"msg\":\"m{i}\"}}\n"))
+        .collect::<String>()
+        .into_bytes()
+}
+
+/// Two fixtures: the usual one, and a shorter one numbered from [`SECOND_FROM`].
+fn fixture_pair() -> (TempDir, String, String) {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let first = compress_fixture(dir.path(), "a.jsonl.seek.zst");
+    let second = common::compress_body(
+        dir.path(),
+        "b.jsonl.seek.zst",
+        numbered_body(SECOND_FROM, SECOND_RECORDS),
+    );
+    (
+        dir,
+        first.to_string_lossy().to_string(),
+        second.to_string_lossy().to_string(),
+    )
 }
 
 #[test]
@@ -354,7 +386,7 @@ fn a_stream_reads_only_as_far_as_it_is_asked_to() {
 /// Ids repeat across plugin processes, so an entry found under a handle's id may belong to another
 /// file. Returning its records would be silent and wrong.
 #[test]
-fn a_handle_only_matches_the_file_it_was_made_for() {
+fn a_handle_only_matches_the_files_it_was_made_for() {
     let newline = FinderSpec {
         finder: "sep".to_string(),
         arg: Some("\n".to_string()),
@@ -363,20 +395,34 @@ fn a_handle_only_matches_the_file_it_was_made_for() {
         arg: Some(";".to_string()),
         ..newline.clone()
     };
+    let paths = |names: &[&str]| -> Vec<PathBuf> { names.iter().map(PathBuf::from).collect() };
     let handle = ZstdsepHandle {
         id: 0,
-        path: PathBuf::from("/tmp/a.jsonl.seek.zst"),
+        paths: paths(&["/tmp/a.jsonl.seek.zst", "/tmp/b.jsonl.seek.zst"]),
         finder: newline.clone(),
         format: Some("json".to_string()),
     };
 
-    assert!(handle.refers_to(Path::new("/tmp/a.jsonl.seek.zst"), &newline));
+    assert!(handle.refers_to(
+        &paths(&["/tmp/a.jsonl.seek.zst", "/tmp/b.jsonl.seek.zst"]),
+        &newline
+    ));
     assert!(
-        !handle.refers_to(Path::new("/tmp/b.jsonl.seek.zst"), &newline),
-        "another file matched"
+        !handle.refers_to(&paths(&["/tmp/a.jsonl.seek.zst"]), &newline),
+        "a prefix of the files matched"
     );
     assert!(
-        !handle.refers_to(Path::new("/tmp/a.jsonl.seek.zst"), &semicolon),
+        !handle.refers_to(
+            &paths(&["/tmp/b.jsonl.seek.zst", "/tmp/a.jsonl.seek.zst"]),
+            &newline
+        ),
+        "the same files in another order matched"
+    );
+    assert!(
+        !handle.refers_to(
+            &paths(&["/tmp/a.jsonl.seek.zst", "/tmp/b.jsonl.seek.zst"]),
+            &semicolon
+        ),
         "another separator matched"
     );
     // The format decides how a record becomes a value, not which bytes are read.
@@ -384,7 +430,298 @@ fn a_handle_only_matches_the_file_it_was_made_for() {
         format: None,
         ..handle.clone()
     };
-    assert!(raw.refers_to(Path::new("/tmp/a.jsonl.seek.zst"), &newline));
+    assert!(raw.refers_to(
+        &paths(&["/tmp/a.jsonl.seek.zst", "/tmp/b.jsonl.seek.zst"]),
+        &newline
+    ));
+}
+
+/// Several files are one handle, and an index runs across them in the order they were named.
+#[test]
+fn several_files_are_one_run_of_indices() {
+    let (_dir, a, b) = fixture_pair();
+    let mut nu = nu();
+
+    for (index, seq) in [
+        (0, 0),
+        (RECORDS - 1, RECORDS - 1),
+        (RECORDS, SECOND_FROM),
+        (
+            RECORDS + SECOND_RECORDS - 1,
+            SECOND_FROM + SECOND_RECORDS - 1,
+        ),
+    ] {
+        let got = eval(
+            &mut nu,
+            &format!("let h = zstdsep open \"{a}\" \"{b}\"; $h.{index}.seq"),
+        )
+        .unwrap_or_else(|e| panic!("Failed to read record {index}: {e}"))
+        .as_int()
+        .expect("seq is not an integer");
+        assert_eq!(got, seq as i64, "record {index} came out of the wrong file");
+    }
+
+    let records = eval(&mut nu, &format!("(zstdsep open \"{a}\" \"{b}\").records"))
+        .expect("Failed to read the summary")
+        .as_int()
+        .expect("records is not an integer");
+    assert_eq!(records, (RECORDS + SECOND_RECORDS) as i64);
+
+    let err = eval(
+        &mut nu,
+        &format!(
+            "(zstdsep open \"{a}\" \"{b}\").{}",
+            RECORDS + SECOND_RECORDS
+        ),
+    )
+    .expect_err("reading past the last record of the last file succeeded");
+    assert!(
+        err.to_string().to_lowercase().contains("row number"),
+        "the failure was not an out-of-range one: {err}"
+    );
+}
+
+/// Three files, so that the running count is carried across more than one boundary.
+#[test]
+fn an_index_crosses_more_than_one_boundary() {
+    let (dir, a, b) = fixture_pair();
+    let c = common::compress_body(
+        dir.path(),
+        "c.jsonl.seek.zst",
+        numbered_body(SECOND_FROM * 2, RECORDS_PER_FRAME),
+    );
+    let c = c.to_string_lossy().to_string();
+    let mut nu = nu();
+
+    let seq = eval(
+        &mut nu,
+        &format!(
+            "(zstdsep open \"{a}\" \"{b}\" \"{c}\").{}.seq",
+            RECORDS + SECOND_RECORDS + 1
+        ),
+    )
+    .expect("Failed to read a record of the third file")
+    .as_int()
+    .expect("seq is not an integer");
+
+    assert_eq!(seq, (SECOND_FROM * 2 + 1) as i64);
+}
+
+/// A call that names no file at all. The signature takes a rest and no required path, so that a
+/// spread call parses, and the refusal is the command's own.
+#[test]
+fn opening_nothing_is_refused() {
+    let mut nu = nu();
+
+    let err = eval(&mut nu, "zstdsep open").expect_err("opening no file succeeded");
+
+    assert!(
+        err.to_string().contains("no file to open"),
+        "the failure was not the empty call: {err}"
+    );
+}
+
+/// The format is the handle's, taken from the first file named. A second file of another inner
+/// extension is read as the first one's format rather than as its own.
+#[test]
+fn the_first_file_names_the_format() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let a = common::compress_body(dir.path(), "a.jsonl.seek.zst", numbered_body(0, 2));
+    let b = common::compress_body(dir.path(), "b.tsv.seek.zst", numbered_body(100, 2));
+    let mut nu = nu();
+
+    let format = eval(
+        &mut nu,
+        &format!(
+            "(zstdsep open \"{}\" \"{}\").format",
+            a.to_string_lossy(),
+            b.to_string_lossy()
+        ),
+    )
+    .expect("Failed to read the summary");
+    assert_eq!(format, Value::test_string("json"));
+
+    // The second file's records are json too, so they parse rather than arriving as strings.
+    let seq = eval(
+        &mut nu,
+        &format!(
+            "(zstdsep open \"{}\" \"{}\").2.seq",
+            a.to_string_lossy(),
+            b.to_string_lossy()
+        ),
+    )
+    .expect("Failed to read the first record of the second file")
+    .as_int()
+    .expect("seq is not an integer");
+    assert_eq!(seq, 100);
+}
+
+/// The summary's per-file fields become lists, and only those: the record count is the sequence's.
+#[test]
+fn the_summary_of_several_files_lists_them() {
+    let (_dir, a, b) = fixture_pair();
+    let mut nu = nu();
+
+    let paths = eval(&mut nu, &format!("(zstdsep open \"{a}\" \"{b}\").path"))
+        .expect("Failed to read the summary")
+        .into_list()
+        .expect("path is not a list");
+    assert_eq!(
+        paths
+            .iter()
+            .map(|v| v.clone().into_string().expect("not a string"))
+            .collect::<Vec<_>>(),
+        vec![a.clone(), b.clone()]
+    );
+
+    let frames = eval(&mut nu, &format!("(zstdsep open \"{a}\" \"{b}\").frames"))
+        .expect("Failed to read the summary")
+        .into_list()
+        .expect("frames is not a list");
+    assert_eq!(
+        frames
+            .iter()
+            .map(|v| v.as_int().expect("not an integer"))
+            .collect::<Vec<_>>(),
+        vec![
+            RECORDS.div_ceil(RECORDS_PER_FRAME) as i64,
+            SECOND_RECORDS.div_ceil(RECORDS_PER_FRAME) as i64
+        ]
+    );
+
+    // One file still summarises as one file's: the lists are what several of them add.
+    let one = eval(&mut nu, &format!("(zstdsep open \"{a}\").path"))
+        .expect("Failed to read the summary")
+        .into_string()
+        .expect("path is not a string");
+    assert_eq!(one, a);
+}
+
+#[test]
+fn no_partial_concatenates_the_files_in_order() {
+    let (_dir, a, b) = fixture_pair();
+    let mut nu = nu();
+
+    let seqs = eval(
+        &mut nu,
+        &format!("zstdsep open \"{a}\" \"{b}\" --no-partial | get seq"),
+    )
+    .expect("Failed to read the files")
+    .into_list()
+    .expect("the records are not a list");
+
+    let want: Vec<i64> = (0..RECORDS as i64)
+        .chain(SECOND_FROM as i64..(SECOND_FROM + SECOND_RECORDS) as i64)
+        .collect();
+    assert_eq!(
+        seqs.iter()
+            .map(|v| v.as_int().expect("seq is not an integer"))
+            .collect::<Vec<_>>(),
+        want
+    );
+
+    // Named the other way round, the records come the other way round.
+    let first = eval(
+        &mut nu,
+        &format!("zstdsep open \"{b}\" \"{a}\" --no-partial | first | get seq"),
+    )
+    .expect("Failed to read the files")
+    .as_int()
+    .expect("seq is not an integer");
+    assert_eq!(first, SECOND_FROM as i64);
+}
+
+/// `from <name>` is handed one stream over all of the files, so a format that parses a whole file
+/// sees one of them rather than one per file.
+#[test]
+fn a_stream_over_several_files_parses_as_one() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let a = common::compress_body(dir.path(), "a.tsv.seek.zst", b"a\tb\n1\t2\n".to_vec());
+    let b = common::compress_body(dir.path(), "b.tsv.seek.zst", b"3\t4\n".to_vec());
+    let mut nu = nu();
+
+    let value = eval(
+        &mut nu,
+        &format!(
+            "zstdsep open \"{}\" \"{}\" --no-partial | get 1.b",
+            a.to_string_lossy(),
+            b.to_string_lossy()
+        ),
+    )
+    .expect("Failed to read through `from tsv`")
+    .as_int()
+    .expect("b is not an integer");
+
+    assert_eq!(value, 4);
+}
+
+/// Counting a file decompresses its last frame, so a lookup that stops earlier must not count the
+/// files behind it. A byte flipped in the last frame of the second file is what makes the
+/// difference visible: reading a record out of the first file works, counting does not.
+#[test]
+fn the_files_after_the_index_are_not_counted() {
+    let (_dir, a, b) = fixture_pair();
+    let mut nu = nu();
+
+    let last_frame_start = eval(
+        &mut nu,
+        &format!("zstdsep inspect \"{b}\" | last 1 | get 0.comp_start"),
+    )
+    .expect("Failed to inspect")
+    .as_int()
+    .expect("comp_start is not an integer") as usize;
+    let mut bytes = std::fs::read(&b).expect("Failed to read the fixture");
+    bytes[last_frame_start] ^= 0xff;
+    std::fs::write(&b, &bytes).expect("Failed to write the fixture");
+
+    let seq = eval(
+        &mut nu,
+        &format!("(zstdsep open \"{a}\" \"{b}\").{}.seq", RECORDS - 1),
+    )
+    .expect("the last record of the first file was not readable")
+    .as_int()
+    .expect("seq is not an integer");
+    assert_eq!(seq, (RECORDS - 1) as i64);
+
+    // Only `records` counts, so the other fields of the summary answer over the same files.
+    let paths = eval(&mut nu, &format!("(zstdsep open \"{a}\" \"{b}\").path"))
+        .expect("reading a field that needs no count failed");
+    assert_eq!(
+        paths.into_list().expect("path is not a list").len(),
+        2,
+        "the summary did not answer for both files"
+    );
+
+    let counted = eval(&mut nu, &format!("(zstdsep open \"{a}\" \"{b}\").records"));
+    assert!(
+        counted.is_err(),
+        "the corrupted last frame was counted as if it were sound: {counted:?}"
+    );
+}
+
+/// Opening happens at the command the user typed, for every file named, so the one that failed is
+/// the one the message names.
+#[test]
+fn a_missing_file_among_several_is_named() {
+    let (dir, a, _b) = fixture_pair();
+    let missing = dir.path().join("nope.jsonl.seek.zst");
+    let mut nu = nu();
+
+    // Both routes open every file before reading any of it: the handle's, and the stream's.
+    for flags in ["", "--no-partial"] {
+        let err = eval(
+            &mut nu,
+            &format!(
+                "zstdsep open \"{a}\" \"{}\" {flags}",
+                missing.to_string_lossy()
+            ),
+        )
+        .expect_err("a missing file opened");
+        assert!(
+            err.to_string().contains("nope.jsonl.seek.zst"),
+            "the failure did not name the file that is missing: {err}"
+        );
+    }
 }
 
 /// A file does not record its own separator, so the wrong one is an ordinary mistake. It used to

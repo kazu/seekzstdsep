@@ -51,6 +51,8 @@ as a command of its own.
 - `zstdsep open <path> [--separator <sep>]` → handle custom value holding `{handle id, path,
   separator}`. The file does not record its separator, so the flag is required knowledge here,
   default `\n`.
+  *Widened: the command takes several paths and the handle holds the list, with one run of indices
+  over their records. The finder and the format stay the whole handle's.*
 - `zstdsep open --no-partial` → a plain list stream of records instead of a handle. Every builtin
   works on it at full-read cost; `first n` still stops early because the engine drops the stream.
   ~~`zstdsep cat` (handle in, stream out) is the same conversion chosen at pipe time.~~ *Dropped: it

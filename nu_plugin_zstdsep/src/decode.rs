@@ -4,6 +4,8 @@
 //! logfmt plugin brings logfmt and a format written later needs no change here. A cell path
 //! cannot: nushell runs custom value ops with no execution context, so there is no engine to ask.
 //! json is parsed in process for that reason — see [`crate::json`].
+use std::io::Read;
+
 use nu_plugin::{EngineInterface, EvaluatedCall};
 use nu_protocol::{
     ByteStream, ByteStreamType, ListStream, PipelineData, ShellError, Span, Value,
@@ -28,35 +30,46 @@ pub fn record(source: &Source, bytes: &[u8], span: Span) -> Result<Value, ShellE
     }
 }
 
-/// Every record of `source`, decompressing one frame at a time.
+/// Every record of `sources` in the order they were named, decompressing one frame at a time.
 ///
 /// The engine drops the stream when a command downstream stops reading, so `first 3` reads the
 /// first frame and no more.
+///
+/// Every file is opened before anything is read, so a file that cannot be opened is reported by
+/// the command the user typed rather than partway through the records.
 pub fn stream(
     engine: &EngineInterface,
-    source: &Source,
+    sources: &[Source],
     span: Span,
 ) -> Result<PipelineData, ShellError> {
-    let reader = source.open(span)?;
-    let name = match &source.format {
+    let readers = sources
+        .iter()
+        .map(|source| source.open(span))
+        .collect::<Result<Vec<_>, _>>()?;
+    let name = match &sources[0].format {
         Format::From(name) => name.clone(),
         // Parsed the same way a cell path parses it, so `$h.10` and `--no-partial | get 10` agree.
         Format::Raw | Format::Json => {
-            let source = source.clone();
-            let values = reader.into_records().map(move |result| {
-                match result
-                    .map_err(|e| {
-                        ShellError::Generic(GenericError::new(
-                            "cannot read a record",
-                            e.to_string(),
-                            span,
-                        ))
-                    })
-                    .and_then(|bytes| record(&source, &bytes, span))
-                {
-                    Ok(value) => value,
-                    Err(e) => Value::error(e, span),
-                }
+            // One source for all of them: a record is decoded by the finder and the format, and
+            // those are the same for every file of a handle.
+            let owned = sources[0].clone();
+            let values = readers.into_iter().flat_map(move |reader| {
+                let source = owned.clone();
+                reader.into_records().map(move |result| {
+                    match result
+                        .map_err(|e| {
+                            ShellError::Generic(GenericError::new(
+                                "cannot read a record",
+                                e.to_string(),
+                                span,
+                            ))
+                        })
+                        .and_then(|bytes| record(&source, &bytes, span))
+                    {
+                        Ok(value) => value,
+                        Err(e) => Value::error(e, span),
+                    }
+                })
             });
             return Ok(PipelineData::ListStream(
                 ListStream::new(values, span, engine.signals().clone()),
@@ -66,14 +79,24 @@ pub fn stream(
     };
 
     // The decoder is handed over whole rather than record by record: `from <name>` splits records
-    // itself, and a byte stream is what it reads fastest.
-    let bytes = reader.into_bytes().map_err(|e| {
-        ShellError::Generic(GenericError::new(
-            format!("cannot read {}", source.path.display()),
-            e.to_string(),
-            span,
-        ))
-    })?;
+    // itself, and a byte stream is what it reads fastest. Several files are one stream, which is
+    // what makes `from <name>` see one table rather than one per file.
+    // Folded rather than chained onto an `empty()`, so that one file is the decoder itself.
+    let mut bytes: Option<Box<dyn Read + Send>> = None;
+    for (reader, source) in readers.into_iter().zip(sources) {
+        let next = reader.into_bytes().map_err(|e| {
+            ShellError::Generic(GenericError::new(
+                format!("cannot read {}", source.path.display()),
+                e.to_string(),
+                span,
+            ))
+        })?;
+        bytes = Some(match bytes {
+            None => Box::new(next),
+            Some(bytes) => Box::new(bytes.chain(next)),
+        });
+    }
+    let bytes = bytes.expect("a handle is opened over at least one file");
     let input = PipelineData::ByteStream(
         ByteStream::read(
             bytes,

@@ -33,12 +33,14 @@ module zstdsep_hook {
         if ($finder | default $FINDER) == $FINDER { $arg | default $SEPARATOR } else { $arg }
     }
 
-    # Whether `path` belongs to the plugin, refusing a flag that went to the other side.
+    # Whether what was named belongs to the plugin, refusing a flag that went to the other side.
+    #
+    # `owned` is that decision, taken by the caller: `save` takes it from the one name it is given,
+    # `open` from every name its globs expanded to.
     #
     # `theirs` and `mine` name the flags only the builtin and only the plugin have, mapped to their
     # values: null for an unset named flag, false for an unset switch.
-    def routes [command: string, path: string, theirs: record, mine: record]: nothing -> bool {
-        let owned = ($path | str ends-with $MARKER)
+    def routes [command: string, owned: bool, theirs: record, mine: record]: nothing -> bool {
         let stray = (if $owned { $theirs } else { $mine }
             | transpose name value
             | where {|flag| $flag.value != null and $flag.value != false }
@@ -55,37 +57,66 @@ module zstdsep_hook {
         $owned
     }
 
-    # Open a file. A `.seek.zst` path returns a `zstdsep open` handle; anything else is the builtin.
+    # What a glob names, or the pattern itself when it names nothing.
+    #
+    # A pattern that matches no file is kept as written so that the builtin and the plugin each
+    # report the missing file themselves, which is what they do without the hook. A pattern `glob`
+    # refuses for any reason is kept the same way: the commonest is a name that is not a pattern at
+    # all (`a[b.json` is a legal file name and the builtin opens it), and whatever else `glob` may
+    # refuse, the name still reaches the side that will report it.
+    #
+    # Sorted, because the expansion order is the order the records come out in and a directory
+    # walk has none worth relying on.
+    def expand [pattern: string]: nothing -> list<string> {
+        let hits = (try { glob $pattern | sort } catch { [] })
+        if ($hits | is-empty) { [$pattern] } else { $hits }
+    }
+
+    # Open files. `.seek.zst` paths return one `zstdsep open` handle; anything else is the builtin.
+    #
+    # Globs are expanded here rather than in the plugin: the routing needs the names behind a
+    # pattern to decide which side it goes to, and expanding twice would be a second answer to the
+    # same question.
+    #
+    # Quoting is what a quoted pattern carries and a nu script cannot read: `open "*.json"` names
+    # the file `*.json` rather than the json files. The builtin still sees it, because it is handed
+    # `...$files` as the engine built them; the expansion is only how this command decides where to
+    # route. So what is lost is on the plugin's side, which is handed the expansion: a `.seek.zst`
+    # file whose name holds a glob character is opened as the pattern in its name, quoted or not.
     export def open [
-        ...files: glob          # the file(s) to open
+        ...files: glob          # the file(s) to open, globs expanded
         --raw(-r)               # open the file as raw binary
         --finder: string        # .seek.zst: record format, sep, fixed, flatbuffers or msgpack (default: sep)
         --finder-arg: string    # .seek.zst: the separator for sep (default: a newline), the length for fixed
         --format(-f): string    # .seek.zst: parse records with `from <format>` instead
         --no-partial            # .seek.zst: every record as a list stream instead of a handle
     ] {
-        let names = ($files | each {|file| $file | into string })
+        let names = ($files | each {|file| expand ($file | into string) } | flatten)
         let seekable = ($names | where {|name| $name | str ends-with $MARKER })
-        if ($seekable | is-not-empty) and ($names | length) > 1 {
+        # A mixed set has no side to go to: one call cannot both hand `--finder` to the plugin and
+        # read the other files without it.
+        if ($seekable | is-not-empty) and ($seekable | length) != ($names | length) {
+            let others = ($names | where {|name| not ($name | str ends-with $MARKER) })
             error make {
-                msg: $"one *($MARKER) file at a time: ($names | length) were named, and a handle is one file's"
+                msg: $"*($MARKER) files and others in one `open`: ($others | str join ', ') are not ours"
             }
         }
         let mine = { finder: $finder, finder-arg: $finder_arg, format: $format, no-partial: $no_partial }
-        if (routes "open" ($seekable | append "" | first) {} $mine) {
-            let path = ($seekable | first)
+        if (routes "open" ($seekable | is-not-empty) {} $mine) {
             let finder = ($finder | default $FINDER)
             let arg = (finder-arg $finder $finder_arg)
             if $format == null and $arg == null {
-                (zstdsep open $path --finder=$finder --raw=$raw --no-partial=$no_partial)
+                (zstdsep open ...$names --finder=$finder --raw=$raw --no-partial=$no_partial)
             } else if $format == null {
-                (zstdsep open $path --finder=$finder --finder-arg=$arg --raw=$raw --no-partial=$no_partial)
+                (zstdsep open ...$names --finder=$finder --finder-arg=$arg --raw=$raw --no-partial=$no_partial)
             } else if $arg == null {
-                (zstdsep open $path --finder=$finder --format=$format --raw=$raw --no-partial=$no_partial)
+                (zstdsep open ...$names --finder=$finder --format=$format --raw=$raw --no-partial=$no_partial)
             } else {
-                (zstdsep open $path --finder=$finder --finder-arg=$arg --format=$format --raw=$raw --no-partial=$no_partial)
+                (zstdsep open ...$names --finder=$finder --finder-arg=$arg --format=$format --raw=$raw --no-partial=$no_partial)
             }
         } else {
+            # The values as the engine built them, not the names they expanded to: that is what
+            # carries the quoting, and it is what keeps this call the builtin's own.
             core-open --raw=$raw ...$files
         }
     }
@@ -111,7 +142,7 @@ module zstdsep_hook {
         --limit-multiplier: int   # .seek.zst: how much of a frame the separator search may buffer
         --no-check                # .seek.zst: leave the content checksum out of every frame
     ] {
-        if (routes "save" $filename
+        if (routes "save" ($filename | into string | str ends-with $MARKER)
                 { stderr: $stderr, progress: $progress }
                 {
                     finder: $finder

@@ -67,7 +67,7 @@ Finding a record and decoding one are separate: a record comes back as bytes, an
 the caller's `from` command. `--format msgpack` hands the whole file to `from msgpack`, which
 reads one value and stops, so decode record by record as above. nushell has no `from flatbuffers`.
 
-### `zstdsep open <path>`
+### `zstdsep open <path>...`
 
 Returns a **handle**, not the data.
 
@@ -79,6 +79,19 @@ Returns a **handle**, not the data.
 > $h                 # the summary: path, finder, finder_arg, format, frames, records_per_frame, records
 > $h.records         # a field of that summary
 ```
+
+Several files are one handle, and an index runs across their records in the order they were named.
+
+```text
+> let h = zstdsep open jan.jsonl.seek.zst feb.jsonl.seek.zst
+> $h.records         # the two files together
+> $h.path            # a list of two; so are frames and records_per_frame
+> $h.0               # the first of jan; feb's first is at jan's record count
+```
+
+Finding which file an index falls in needs that file's record count, which costs one frame
+decompressed. The files after the one it falls in are not counted. `--finder` and `--format` are
+the whole handle's.
 
 Flags: `--finder` and `--finder-arg` (where a record ends, see above), `--separator` (default a
 newline — the file does not record its own), `--format`, `--raw`, `--no-partial`.
@@ -170,9 +183,16 @@ that survive the shadowing, and are the only way to read a `.seek.zst` file as b
 The hook takes `--finder` and `--finder-arg` and no `--separator`: a separator is
 `--finder-arg ";"`, with `sep` as the default finder.
 
+`open a.seek.zst b.seek.zst` and `open *.seek.zst` take several files, as the builtin does. The
+hook is what expands a glob: an expansion that is all `.seek.zst` goes to the plugin, one that is
+none of them to the builtin, and a mixed one is an error. Which side a pattern belongs to is only
+known once it is expanded, and the builtin is handed the pattern as it was written.
+
 Two limits. Autoload files are read when the REPL starts and never for `nu script.nu`, so a script
-needs a `use .../nu/zstdsep-hook.nu *` of its own. And a handle belongs to one file, so `open
-a.seek.zst b.seek.zst` is refused where the builtin would have concatenated them.
+needs a `use .../nu/zstdsep-hook.nu *` of its own. And the quoting distinction is lost on the
+plugin's side: `open "*.json"` still names the file `*.json`, because the builtin is handed the
+values the engine built, but what goes to the plugin is the expansion, so a `.seek.zst` file whose
+name holds a glob character is opened as the pattern in its name, quoted or not.
 
 `nu nu_plugin_zstdsep/tests/run-hook.nu` runs the tests, against a plugin registered in a directory
 of its own.

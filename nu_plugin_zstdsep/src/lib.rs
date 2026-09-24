@@ -35,13 +35,74 @@ use seekzstdsep::RecordReader;
 pub use handle::ZstdsepHandle;
 pub use source::FinderSpec;
 
-/// An open file, and which handle it belongs to.
+/// The open files behind one handle, and which handle they belong to.
 ///
-/// The reader alone would do if an id could only ever mean one file. It cannot: see [`State`].
-struct OpenFile {
-    reader: RecordReader,
-    path: PathBuf,
+/// The readers alone would do if an id could only ever mean one set of files. It cannot: see
+/// [`State`].
+///
+/// There is always at least one file: `zstdsep open` refuses a call that names none, and every
+/// entry is built from what one of its handles carries.
+struct OpenFiles {
+    readers: Vec<RecordReader>,
+    paths: Vec<PathBuf>,
     finder: source::FinderSpec,
+    /// How many records the files up to each one hold, for as many as have been counted.
+    ///
+    /// `counted[i]` is the total of files `0..=i`, so an index below it falls in file `i` or
+    /// earlier. Filled from the front as a lookup needs it and never shortened: counting a file
+    /// decompresses its last frame, and a read that stops in file 0 has no reason to pay for that
+    /// in the files behind it.
+    ///
+    /// A file's count is where the next file's indices start, so the known miscount of
+    /// `total_records` (`docs/bugs.md`) shifts every record behind it rather than only the total.
+    counted: Vec<usize>,
+}
+
+impl OpenFiles {
+    /// How many records the files up to and including `i` hold, counting the ones not counted yet.
+    fn counted_upto(&mut self, i: usize, span: nu_protocol::Span) -> Result<usize, ShellError> {
+        while self.counted.len() <= i {
+            let next = self.counted.len();
+            let records = total_records(&mut self.readers[next], span)?;
+            let before = self.counted.last().copied().unwrap_or(0);
+            self.counted.push(before + records);
+        }
+        Ok(self.counted[i])
+    }
+
+    /// The record at `index` of the files read as one sequence.
+    ///
+    /// The last file is read without being counted first: a record past its end is the end of the
+    /// sequence, which its own reader reports by returning nothing.
+    fn record(
+        &mut self,
+        index: usize,
+        span: nu_protocol::Span,
+    ) -> Result<Option<Vec<u8>>, ShellError> {
+        let last = self.readers.len() - 1;
+        let mut file = last;
+        let mut before = 0;
+        for i in 0..last {
+            let upto = self.counted_upto(i, span)?;
+            if index < upto {
+                file = i;
+                break;
+            }
+            before = upto;
+        }
+        self.readers[file].record(index - before).map_err(|e| {
+            ShellError::Generic(GenericError::new(
+                format!("cannot read record {index}"),
+                e.to_string(),
+                span,
+            ))
+        })
+    }
+
+    /// How many records all of the files hold together.
+    fn total(&mut self, span: nu_protocol::Span) -> Result<usize, ShellError> {
+        self.counted_upto(self.readers.len() - 1, span)
+    }
 }
 
 /// The open files, keyed by the id their handles carry.
@@ -56,7 +117,7 @@ struct OpenFile {
 /// repeat unlikely, and checking the entry against the handle makes one harmless.
 struct State {
     next_id: u64,
-    readers: HashMap<u64, OpenFile>,
+    readers: HashMap<u64, OpenFiles>,
 }
 
 impl Default for State {
@@ -77,59 +138,71 @@ pub struct ZstdsepPlugin {
 }
 
 impl ZstdsepPlugin {
-    /// Takes an open file into the table and returns the id its handle will carry.
-    fn register(&self, source: &source::Source, reader: RecordReader) -> Result<u64, ShellError> {
+    /// Takes the open files into the table and returns the id their handle will carry.
+    fn register(
+        &self,
+        sources: &[source::Source],
+        readers: Vec<RecordReader>,
+    ) -> Result<u64, ShellError> {
         let mut state = self.lock()?;
         let id = state.next_id;
         state.next_id += 1;
         state.readers.insert(
             id,
-            OpenFile {
-                reader,
-                path: source.path.clone(),
-                finder: source.finder.clone(),
+            OpenFiles {
+                readers,
+                paths: sources.iter().map(|s| s.path.clone()).collect(),
+                finder: sources[0].finder.clone(),
+                counted: Vec::new(),
             },
         );
         Ok(id)
     }
 
-    /// Runs `f` against the open file behind `handle`, opening it first if the table has none.
+    /// Runs `f` against the open files behind `handle`, opening them first if the table has none.
     ///
     /// The table is lost when the engine garbage collects the idle plugin process, and a cell path
     /// arriving afterwards has to work all the same. Everything needed to reopen travels in the
     /// handle, so the miss costs an open rather than an error.
     ///
-    /// An entry under the right id for the wrong file is the same miss: ids repeat across processes
-    /// (see [`State`]), and returning another file's records would be silent and wrong.
-    fn with_reader<T>(
+    /// An entry under the right id for the wrong files is the same miss: ids repeat across
+    /// processes (see [`State`]), and returning another file's records would be silent and wrong.
+    fn with_files<T>(
         &self,
         handle: &ZstdsepHandle,
         span: nu_protocol::Span,
-        f: impl FnOnce(&mut RecordReader) -> Result<T, ShellError>,
+        f: impl FnOnce(&mut OpenFiles) -> Result<T, ShellError>,
     ) -> Result<T, ShellError> {
         let mut state = self.lock()?;
         let open = match state.readers.entry(handle.id) {
             Entry::Occupied(entry) => {
                 let entry = entry.into_mut();
-                if !handle.refers_to(&entry.path, &entry.finder) {
+                if !handle.refers_to(&entry.paths, &entry.finder) {
                     *entry = open_for(handle, span)?;
                 }
                 entry
             }
             Entry::Vacant(entry) => entry.insert(open_for(handle, span)?),
         };
-        f(&mut open.reader)
+        f(open)
     }
 
-    /// What a handle says about its file: everything but the records.
+    /// What a handle says about its files: everything but the records.
+    ///
+    /// `records` costs one frame decompressed per file, and it is the only field that does, so a
+    /// caller that wants one of the others passes `with_records` false and pays for none of them.
     fn summary(
         &self,
         handle: &ZstdsepHandle,
+        with_records: bool,
         span: nu_protocol::Span,
     ) -> Result<Record, ShellError> {
-        self.with_reader(handle, span, |reader| {
-            Ok(record! {
-                "path" => Value::string(handle.path.to_string_lossy(), span),
+        self.with_files(handle, span, |open| {
+            let mut summary = record! {
+                "path" => per_file(
+                    handle.paths.iter().map(|p| Value::string(p.to_string_lossy(), span)),
+                    span,
+                ),
                 "finder" => Value::string(handle.finder.finder.clone(), span),
                 "finder_arg" => match &handle.finder.arg {
                     Some(arg) => Value::string(arg.clone(), span),
@@ -139,10 +212,21 @@ impl ZstdsepPlugin {
                     Some(name) => Value::string(name.clone(), span),
                     None => Value::nothing(span),
                 },
-                "frames" => Value::int(reader.frame_count() as i64, span),
-                "records_per_frame" => Value::int(reader.records_per_frame() as i64, span),
-                "records" => Value::int(total_records(reader, span)? as i64, span),
-            })
+                "frames" => per_file(
+                    open.readers.iter().map(|r| Value::int(r.frame_count() as i64, span)),
+                    span,
+                ),
+                "records_per_frame" => per_file(
+                    open.readers.iter().map(|r| Value::int(r.records_per_frame() as i64, span)),
+                    span,
+                ),
+            };
+            if with_records {
+                // One number, not one per file: the whole point of a handle over several files is
+                // that their records are one run of indices.
+                summary.push("records", Value::int(open.total(span)? as i64, span));
+            }
+            Ok(summary)
         })
     }
 
@@ -157,12 +241,30 @@ impl ZstdsepPlugin {
 }
 
 /// Opens what `handle` refers to, ready to go into the table under its id.
-fn open_for(handle: &ZstdsepHandle, span: nu_protocol::Span) -> Result<OpenFile, ShellError> {
-    Ok(OpenFile {
-        reader: handle.source().open(span)?,
-        path: handle.path.clone(),
+fn open_for(handle: &ZstdsepHandle, span: nu_protocol::Span) -> Result<OpenFiles, ShellError> {
+    let readers = handle
+        .paths
+        .iter()
+        .map(|path| handle.source_of(path.clone()).open(span))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(OpenFiles {
+        readers,
+        paths: handle.paths.clone(),
         finder: handle.finder.clone(),
+        counted: Vec::new(),
     })
+}
+
+/// A per-file field of the summary: the value itself for one file, a list of them for several.
+///
+/// A handle over one file is the common case and reads as one file's, so widening its summary to
+/// lists would be a change for everyone to pay for the files they do not open.
+fn per_file(values: impl Iterator<Item = Value>, span: nu_protocol::Span) -> Value {
+    let mut values: Vec<Value> = values.collect();
+    match values.len() {
+        1 => values.pop().expect("a length of one has an element"),
+        _ => Value::list(values, span),
+    }
 }
 
 /// How many records the file holds, which needs the last frame decompressed.
@@ -212,13 +314,16 @@ impl Plugin for ZstdsepPlugin {
     ) -> Result<Value, LabeledError> {
         let span = custom_value.span;
         let handle = handle_of(custom_value.item.as_ref())?;
-        Ok(Value::record(self.summary(handle, span)?, span))
+        Ok(Value::record(self.summary(handle, true, span)?, span))
     }
 
     /// `$h.records` and the like: a field of the summary, not of a record in the file.
     ///
     /// Indices address the file and names address the handle, which is the split the summary
     /// already draws. Without this the summary would only be reachable by displaying it.
+    ///
+    /// Only `records` is counted, and only when it is the field asked for: `$h.path` over a
+    /// hundred files would otherwise decompress a hundred last frames to answer with a path.
     fn custom_value_follow_path_string(
         &self,
         _engine: &EngineInterface,
@@ -229,7 +334,13 @@ impl Plugin for ZstdsepPlugin {
     ) -> Result<Value, LabeledError> {
         let span = custom_value.span;
         let handle = handle_of(custom_value.item.as_ref())?;
-        let summary = self.summary(handle, span)?;
+        // Case is folded here whether or not the caller folds it: the name that does not match
+        // then costs a count and still fails to find its column, which is the cheap way round.
+        let summary = self.summary(
+            handle,
+            column_name.item.eq_ignore_ascii_case("records"),
+            span,
+        )?;
         match summary.cased(casing).get(&column_name.item) {
             Some(value) => Ok(value.clone()),
             None if optional => Ok(Value::nothing(column_name.span)),
@@ -251,23 +362,14 @@ impl Plugin for ZstdsepPlugin {
     ) -> Result<Value, LabeledError> {
         let span = custom_value.span;
         let handle = handle_of(custom_value.item.as_ref())?;
-        let source = handle.source();
-        let bytes = self.with_reader(handle, span, |reader| {
-            reader.record(index.item).map_err(|e| {
-                ShellError::Generic(GenericError::new(
-                    format!("cannot read record {}", index.item),
-                    e.to_string(),
-                    index.span,
-                ))
-            })
-        })?;
+        let found = self.with_files(handle, span, |open| open.record(index.item, index.span))?;
 
-        match bytes {
-            Some(bytes) => Ok(decode::record(&source, &bytes, index.span)?),
+        match found {
+            Some(bytes) => Ok(decode::record(&handle.source(), &bytes, index.span)?),
             None if optional => Ok(Value::nothing(index.span)),
             None => Err(LabeledError::from(ShellError::AccessBeyondEnd {
                 max_idx: self
-                    .with_reader(handle, span, |reader| total_records(reader, span))
+                    .with_files(handle, span, |open| open.total(span))
                     .map(|n| n.saturating_sub(1))
                     .unwrap_or(0),
                 span: index.span,
