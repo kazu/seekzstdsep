@@ -483,6 +483,23 @@ fn read(c: &mut Criterion) {
                     })
                 },
             );
+
+            // The same range gathered into a `Vec` rather than written to a sink: the walk is the
+            // one above, and what this adds is the copy the caller is handed.
+            group.bench_with_input(BenchmarkId::new("records", cnt), &cnt, |b, &cnt| {
+                b.iter_with_setup(open, |mut reader| {
+                    for from in &froms {
+                        black_box(reader.records(black_box(*from), black_box(cnt)).unwrap());
+                    }
+                })
+            });
+            group.bench_with_input(BenchmarkId::new("records/as-read", cnt), &cnt, |b, &cnt| {
+                b.iter_with_setup(verify, |mut reader| {
+                    for from in &froms {
+                        black_box(reader.records(black_box(*from), black_box(cnt)).unwrap());
+                    }
+                })
+            });
         }
 
         group.bench_function("record", |b| {
@@ -501,6 +518,19 @@ fn read(c: &mut Criterion) {
             })
         });
 
+        // The last frame decoded to count what it holds: one call, and the window it counts
+        // through is the reader's own.
+        group.bench_function("total_records", |b| {
+            b.iter_with_setup(open, |mut reader| {
+                black_box(reader.total_records().unwrap());
+            })
+        });
+        group.bench_function("total_records/as-read", |b| {
+            b.iter_with_setup(verify, |mut reader| {
+                black_box(reader.total_records().unwrap());
+            })
+        });
+
         group.sample_size(20);
         group.bench_function("into_records", |b| {
             b.iter_with_setup(open, |reader| {
@@ -510,6 +540,42 @@ fn read(c: &mut Criterion) {
         group.bench_function("into_records/as-read", |b| {
             b.iter_with_setup(verify, |reader| {
                 black_box(reader.into_records().filter(|r| r.is_ok()).count())
+            })
+        });
+        group.finish();
+    }
+
+    {
+        // Filtering a whole file down to one record. The borrowed fold sees the window's own
+        // bytes; the owned iterator allocates a `Vec` for every record it walks past.
+        let mut group = c.benchmark_group("chain");
+        group.sample_size(20);
+        let needle = format!("\"seq\":{},", RECORDS - 1).into_bytes();
+        let finder = Finder::new(&needle);
+
+        let open = || RecordReader::open(path.clone(), SEPARATOR).expect("no reader");
+        group.bench_function("filter-one/fold_records", |b| {
+            b.iter_with_setup(open, |mut reader| {
+                black_box(
+                    reader
+                        .fold_records(0, RECORDS, Vec::new(), |mut kept, record| {
+                            if finder.find(record).is_some() {
+                                kept.extend_from_slice(record);
+                            }
+                            Ok(kept)
+                        })
+                        .unwrap(),
+                );
+            })
+        });
+        group.bench_function("filter-one/into_records", |b| {
+            b.iter_with_setup(open, |reader| {
+                black_box(
+                    reader
+                        .into_records()
+                        .filter_map(|record| record.ok())
+                        .find(|record| finder.find(record).is_some()),
+                );
             })
         });
         group.finish();

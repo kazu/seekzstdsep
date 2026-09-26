@@ -1090,7 +1090,7 @@ where
     let mut out = Vec::new();
     reader
         .records(find)
-        .skip_records(skip)?
+        .skip_records(skip)
         .take_records(cnt)
         .write_to(&mut out)?;
     Ok(out)

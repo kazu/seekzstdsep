@@ -570,7 +570,7 @@ fn test_a_flipped_byte_in_a_frame_is_caught() {
 }
 
 #[test]
-fn test_a_flipped_byte_goes_unnoticed_without_a_checksum() {
+fn test_a_flipped_byte_without_a_checksum_can_be_caught_by_record_boundaries() {
     let dir = tempdir().expect("Failed to create temp dir");
     let body = incompressible_records(CORRUPT_RECORDS, CORRUPT_RECORD_LEN);
     let out_path = compress_body_with_checksum(dir.path(), "random", &body, false);
@@ -578,12 +578,15 @@ fn test_a_flipped_byte_goes_unnoticed_without_a_checksum() {
 
     let got = RecordReader::open(out_path, b"\n")
         .expect("Failed to open reader")
-        .records(0, CORRUPT_RECORDS)
-        .expect("Failed to cat data");
-    assert_ne!(
-        got, body,
-        "the corruption did not reach the data, so this proves nothing about the checksum"
-    );
+        .records(0, CORRUPT_RECORDS);
+    match got {
+        Ok(got) => assert_ne!(got, body, "the corruption did not reach the data"),
+        Err(err) => assert!(
+            err.to_string()
+                .contains("incomplete record at nonfinal frame boundary"),
+            "unexpected failure without a checksum: {err}"
+        ),
+    }
 }
 
 #[test]

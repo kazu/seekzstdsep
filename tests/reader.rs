@@ -259,16 +259,19 @@ fn either_end_meets_without_repeating_records() {
     let dir = tempdir().unwrap();
     for groups in [
         vec![b"a\nb\nc\nd\ne\n".to_vec()],
+        // Frames of two records, the last holding one and the fragment the file ends in: what the
+        // compressor writes, so the two directions meet across frames rather than inside one.
         vec![
             b"a\nb\n".to_vec(),
-            Vec::new(),
-            b"fragment".to_vec(),
-            b"c\nd\ne\ntrailing".to_vec(),
-            Vec::new(),
+            b"c\nd\n".to_vec(),
+            b"e\ntrailing".to_vec(),
         ],
     ] {
         let path = compress_frames(dir.path(), "mixed-ends", &groups);
-        let expected = [b"a\n", b"b\n", b"c\n", b"d\n", b"e\n"];
+        let mut expected: Vec<&[u8]> = vec![b"a\n", b"b\n", b"c\n", b"d\n", b"e\n"];
+        if groups.len() > 1 {
+            expected.push(b"trailing");
+        }
         for schedule in 0..1 << expected.len() {
             let mut records = RecordReader::open(path.clone(), b"\n")
                 .unwrap()
@@ -342,7 +345,7 @@ fn reversing_uses_forward_boundaries_for_overlapping_separators() {
         "overlapping",
         &[b"aaaaxaa".to_vec(), b"aaayaaa".to_vec()],
     );
-    let expected = [b"aa".as_slice(), b"aa", b"xaa", b"aa", b"ayaa"];
+    let expected = [b"aa".as_slice(), b"aa", b"xaa", b"aa", b"ayaa", b"a"];
     let got = RecordReader::open(path, b"aa")
         .unwrap()
         .into_records()
@@ -372,10 +375,9 @@ fn a_single_empty_record_is_returned_only_once_from_either_end() {
     }
 }
 
-/// A file whose last record carries no separator ends in a fragment. It is not a whole record, so
-/// neither the iterator nor `record` hands it out.
+/// A nonempty final fragment is the file's final record, without a separator.
 #[test]
-fn a_trailing_fragment_is_not_a_record() {
+fn a_trailing_fragment_is_the_final_record() {
     let dir = tempdir().expect("Failed to create temp dir");
     let records = fixture_records_upto(FIXTURE_RECORDS_PER_FRAME + 5, false);
     let out_path = compress_body(dir.path(), "fragment", &records.concat());
@@ -383,21 +385,21 @@ fn a_trailing_fragment_is_not_a_record() {
     let whole = records.len() - 1;
     let mut reader =
         RecordReader::open(out_path.clone(), b"\n").expect("Failed to open the reader");
-    assert!(
-        reader
-            .record(whole)
-            .expect("Failed to read a record")
-            .is_none(),
-        "the fragment after the last separator was returned as record {whole}"
+    assert_eq!(
+        reader.record(whole).expect("Failed to read a record"),
+        Some(records[whole].clone())
     );
-    assert_eq!(reader.total_records().expect("Failed to count"), whole);
+    assert_eq!(
+        reader.total_records().expect("Failed to count"),
+        records.len()
+    );
 
     let reader = RecordReader::open(out_path, b"\n").expect("Failed to open the reader");
     let got: Vec<Vec<u8>> = reader
         .into_records()
         .collect::<anyhow::Result<Vec<_>>>()
         .expect("Failed to iterate records");
-    assert_eq!(got, records[..whole]);
+    assert_eq!(got, records);
 }
 
 #[test]

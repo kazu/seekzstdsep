@@ -29,6 +29,7 @@ fn another_process_is_rejected_and_only_forced_exit_leaves_a_lock() {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "lock_child", "--nocapture"])
             .env("SEEKZSTDSEP_LOCK_TEST_TARGET", &path)
+            .env_remove("RUST_TEST_THREADS")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

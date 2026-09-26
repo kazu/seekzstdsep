@@ -4,7 +4,8 @@ mod common;
 use std::path::PathBuf;
 
 use common::{
-    FIXED_LEN, RECORDS, RECORDS_PER_FRAME, compress_fixed_fixture, compress_fixture, eval, nu,
+    FIXED_LEN, RECORDS, RECORDS_PER_FRAME, compress_body, compress_fixed_fixture, compress_fixture,
+    eval, nu,
 };
 use nu_plugin_zstdsep::{FinderSpec, ZstdsepHandle};
 use nu_protocol::{ShellError, Value};
@@ -345,10 +346,20 @@ fn a_format_with_no_from_command_says_so() {
 }
 
 /// A byte flipped in the last frame is only found by a read that reaches it. `first 1` succeeding
-/// while `length` fails is what "one frame at a time" looks like from the outside.
+/// while asking for the last row fails is what "as far as it is asked to" looks like from outside.
 #[test]
 fn a_stream_reads_only_as_far_as_it_is_asked_to() {
-    let (_dir, path) = fixture("events.jsonl.seek.zst");
+    // A read decodes a window at a time, so the file has to hold more than one window for reaching
+    // its last frame to take reading on: 2000 records of about 40 bytes against a 32 KiB window.
+    const STREAM_RECORDS: usize = 2000;
+    let dir = tempdir().expect("Failed to create temp dir");
+    let path = compress_body(
+        dir.path(),
+        "stream.jsonl.seek.zst",
+        numbered_body(0, STREAM_RECORDS),
+    )
+    .to_string_lossy()
+    .to_string();
     let mut nu = nu();
 
     let last_frame_start = eval(
@@ -372,14 +383,17 @@ fn a_stream_reads_only_as_far_as_it_is_asked_to() {
         "the first record was not readable: {first:?}"
     );
 
-    let all = eval(
+    let last = eval(
         &mut nu,
-        &format!("zstdsep open \"{path}\" --no-partial | length"),
-    )
-    .expect("reading the whole file returned no value");
+        &format!("zstdsep open \"{path}\" --no-partial | last 1 | get 0.seq"),
+    );
     assert!(
-        all.as_int().is_err() || all.as_int().unwrap() < RECORDS as i64,
-        "the corrupted last frame was read as if it were sound: {all:?}"
+        match &last {
+            Err(_) => true,
+            Ok(value) =>
+                value.as_int().is_err() || value.as_int().unwrap() != (STREAM_RECORDS - 1) as i64,
+        },
+        "the corrupted last frame was read as if it were sound: {last:?}"
     );
 }
 

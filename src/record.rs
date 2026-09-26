@@ -161,6 +161,11 @@ pub struct Reader<R> {
 /// The window a [`Reader`] reads through, and where it is up to.
 struct Window<R> {
     source: R,
+    /// Absolute decompressed position of the first byte in `buf`.
+    offset: u64,
+    /// Nonfinal frame ends. An unfinished record must not cross one.
+    frame_ends: Vec<u64>,
+    next_frame_end: usize,
     /// What the source reads into, [`READ_FRAME_BUF_SIZE`] until a record longer than that grows
     /// it.
     buf: Vec<u8>,
@@ -206,6 +211,9 @@ impl<R: Read> Reader<R> {
         Self {
             window: RefCell::new(Window {
                 source,
+                offset: 0,
+                frame_ends: Vec::new(),
+                next_frame_end: 0,
                 buf: vec![0u8; READ_FRAME_BUF_SIZE],
                 filled: 0,
                 pos: 0,
@@ -247,6 +255,21 @@ impl<R: Read> Reader<R> {
         })
     }
 
+    /// Consume a nonempty unterminated record only after the span reached EOF.
+    fn final_record(&self) -> Option<Run> {
+        let mut window = self.window.borrow_mut();
+        if !window.eof || window.pos == window.filled {
+            return None;
+        }
+        let run = Run {
+            start: window.pos,
+            len: window.filled - window.pos,
+            count: 1,
+        };
+        window.pos = window.filled;
+        Some(run)
+    }
+
     /// Puts the walk on record `index`, counted from where the window was last pointed, and
     /// returns how many records it still has to pass to reach it.
     ///
@@ -275,12 +298,29 @@ impl<R: Read> Reader<R> {
             reader: self,
             find,
             left: None,
+            skip: 0,
+            skip_whole: false,
             watch: Unwatched,
         }
     }
 }
 
 impl<S: Read + Seek> Reader<Take<S>> {
+    pub(crate) fn with_frame_ends(mut self, frames: &[(u64, u64)]) -> Self {
+        self.window.get_mut().frame_ends = frames
+            .iter()
+            .take(frames.len().saturating_sub(1))
+            .map(|(start, len)| start + len)
+            .collect();
+        self
+    }
+
+    pub(crate) fn without_frame_ends(&mut self) {
+        let window = self.window.get_mut();
+        window.frame_ends.clear();
+        window.next_frame_end = 0;
+    }
+
     /// Points the window at the decompressed bytes in `[start, start + len)`, dropping what it
     /// holds of wherever it was pointed before.
     pub(crate) fn seek_to(&mut self, start: u64, len: u64) -> anyhow::Result<()> {
@@ -288,6 +328,8 @@ impl<S: Read + Seek> Reader<Take<S>> {
         window.source.get_mut().seek(SeekFrom::Start(start))?;
         window.source.set_limit(len);
         window.clear();
+        window.offset = start;
+        window.next_frame_end = window.frame_ends.partition_point(|end| *end <= start);
         Ok(())
     }
 }
@@ -347,15 +389,36 @@ impl<R: Read> Window<R> {
         if self.eof {
             return Ok(false);
         }
+        let loaded_end = self.offset + self.filled as u64;
+        while self
+            .frame_ends
+            .get(self.next_frame_end)
+            .is_some_and(|end| *end == loaded_end)
+        {
+            if self.pos != self.filled {
+                anyhow::bail!("incomplete record at nonfinal frame boundary");
+            }
+            self.next_frame_end += 1;
+        }
         if self.pos > 0 {
             self.buf.copy_within(self.pos..self.filled, 0);
             self.filled -= self.pos;
+            self.offset += self.pos as u64;
             self.pos = 0;
             // What the slide drops is gone for good: the source cannot be read backwards. The
             // record now at the front is the one the walk is on, unless the slide cut one in two.
             self.front = self.on_boundary.then_some(self.walked);
         }
-        let read = self.source.read(&mut self.buf[self.filled..])?;
+        let available = self.buf.len() - self.filled;
+        let until_frame_end = self
+            .frame_ends
+            .get(self.next_frame_end)
+            .map_or(available, |end| {
+                (*end - loaded_end).min(available as u64) as usize
+            });
+        let read = self
+            .source
+            .read(&mut self.buf[self.filled..self.filled + until_frame_end])?;
         self.filled += read;
         if read == 0 {
             self.eof = true;
@@ -374,7 +437,190 @@ pub(crate) struct Records<'a, R, F, W = Unwatched> {
     find: F,
     /// Records still wanted, or `None` for all of them.
     left: Option<u64>,
+    /// Records to walk past before the first one handed out, walked at the first evaluation rather
+    /// than when the chain is built.
+    skip: u64,
+    /// Whether the source ending inside that skip is an error rather than a walk that hands out
+    /// nothing.
+    skip_whole: bool,
     watch: W,
+}
+
+/// The same window walk, with one record in each item. The caller may include
+/// an unterminated final record only when this span reaches the final frame.
+pub(crate) struct RecordUnits<'a, R, F, W = Unwatched> {
+    reader: &'a Reader<R>,
+    find: F,
+    cursor: RecordUnitCursor<W>,
+}
+
+/// State of the one record-unit walk, independent of who owns its reader. Borrowed `RecordUnits`
+/// and the owned `RecordIter` both advance this cursor; neither needs a self-reference.
+pub(crate) struct RecordUnitCursor<W> {
+    watch: W,
+    skip: u64,
+    skip_whole: bool,
+    spent: bool,
+    emitted: usize,
+    include_final_record: bool,
+    reject_final_fragment: bool,
+}
+
+impl<W: Watcher> RecordUnitCursor<W> {
+    pub(crate) fn new(watch: W, skip: u64) -> Self {
+        Self {
+            watch,
+            skip,
+            skip_whole: true,
+            spent: false,
+            emitted: 0,
+            include_final_record: false,
+            reject_final_fragment: false,
+        }
+    }
+
+    pub(crate) fn including_final_record(mut self) -> Self {
+        self.include_final_record = true;
+        self
+    }
+
+    pub(crate) fn rejecting_final_fragment(mut self) -> Self {
+        self.reject_final_fragment = true;
+        self
+    }
+
+    pub(crate) fn prepare<R: Read>(
+        &mut self,
+        reader: &Reader<R>,
+        find: &impl Fn(&[u8]) -> Option<usize>,
+    ) -> anyhow::Result<()> {
+        if self.skip == 0 {
+            return Ok(());
+        }
+        let mut records = Records {
+            reader,
+            find,
+            left: None,
+            skip: std::mem::take(&mut self.skip),
+            skip_whole: self.skip_whole,
+            watch: &mut self.watch,
+        };
+        if !records.pass_skip()? {
+            self.spent = true;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish<R: Read>(
+        &mut self,
+        reader: &Reader<R>,
+        requested: usize,
+    ) -> anyhow::Result<()> {
+        if self.emitted < requested && W::WATCHES {
+            self.watch.spent(reader)?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub(crate) fn next<R: Read>(
+        &mut self,
+        reader: &Reader<R>,
+        find: impl Fn(&[u8]) -> Option<usize>,
+    ) -> Option<anyhow::Result<Run>> {
+        self.next_run(reader, &find, 1)
+    }
+
+    #[inline(always)]
+    fn next_run<R: Read>(
+        &mut self,
+        reader: &Reader<R>,
+        find: &impl Fn(&[u8]) -> Option<usize>,
+        limit: usize,
+    ) -> Option<anyhow::Result<Run>> {
+        if self.spent || limit == 0 {
+            return None;
+        }
+        if let Err(error) = self.prepare(reader, find) {
+            self.spent = true;
+            return Some(Err(error));
+        }
+        if self.spent {
+            return None;
+        }
+        let mut records = Records {
+            reader,
+            find,
+            left: Some(limit as u64),
+            skip: 0,
+            skip_whole: true,
+            watch: &mut self.watch,
+        };
+        match records.next() {
+            Some(Ok(run)) => {
+                self.emitted += run.count as usize;
+                Some(Ok(run))
+            }
+            Some(Err(error)) => {
+                self.spent = true;
+                Some(Err(error))
+            }
+            None => {
+                self.spent = true;
+                if self.reject_final_fragment && !reader.remainder().is_empty() {
+                    return Some(Err(anyhow::anyhow!("incomplete final record")));
+                }
+                if self.include_final_record {
+                    let tail = reader.final_record();
+                    if tail.is_some() {
+                        self.emitted += 1;
+                    }
+                    tail.map(Ok)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+impl<R: Read, F: Fn(&[u8]) -> Option<usize>, W: Watcher> RecordUnits<'_, R, F, W> {
+    pub(crate) fn including_final_record(mut self) -> Self {
+        self.cursor = self.cursor.including_final_record();
+        self
+    }
+
+    pub(crate) fn rejecting_final_fragment(mut self) -> Self {
+        self.cursor = self.cursor.rejecting_final_fragment();
+        self
+    }
+
+    pub(crate) fn prepare(&mut self) -> anyhow::Result<()> {
+        self.cursor.prepare(self.reader, &self.find)
+    }
+
+    /// Consume up to `requested` records through the same cursor as `Iterator::next`, combining
+    /// adjacent items into a single write without changing positioning, boundary, or watch rules.
+    pub(crate) fn write_to(
+        &mut self,
+        requested: usize,
+        dst: &mut impl Write,
+    ) -> anyhow::Result<()> {
+        while self.cursor.emitted < requested {
+            let Some(run) =
+                self.cursor
+                    .next_run(self.reader, &self.find, requested - self.cursor.emitted)
+            else {
+                break;
+            };
+            dst.write_all(&self.reader.bytes(&run?))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(&mut self, requested: usize) -> anyhow::Result<()> {
+        self.cursor.finish(self.reader, requested)
+    }
 }
 
 /// What a walk tells as it hands out runs.
@@ -421,6 +667,28 @@ impl Watcher for Unwatched {
     #[inline]
     fn spent<R: Read>(&mut self, _reader: &Reader<R>) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+/// Lends a watcher to a walk, for a caller whose watcher has to outlive the walk it is lent to:
+/// one watching a span that is walked a record at a time reports the same offsets to it that one
+/// walk of the whole span would.
+impl<W: Watcher> Watcher for &mut W {
+    const WATCHES: bool = W::WATCHES;
+
+    #[inline(always)]
+    fn saw<R: Read>(
+        &mut self,
+        reader: &Reader<R>,
+        run: &Run,
+        find: &impl Fn(&[u8]) -> Option<usize>,
+    ) -> anyhow::Result<()> {
+        (*self).saw(reader, run, find)
+    }
+
+    #[inline(always)]
+    fn spent<R: Read>(&mut self, reader: &Reader<R>) -> anyhow::Result<()> {
+        (*self).spent(reader)
     }
 }
 
@@ -558,61 +826,96 @@ impl<'a, R: Read, F: Fn(&[u8]) -> Option<usize>> Records<'a, R, F> {
             reader: self.reader,
             find: self.find,
             left: self.left,
+            skip: self.skip,
+            skip_whole: self.skip_whole,
             watch,
         }
     }
 }
 
-impl<R: Read, F: Fn(&[u8]) -> Option<usize>, W: Watcher> Records<'_, R, F, W> {
+impl<'a, R: Read, F: Fn(&[u8]) -> Option<usize>, W: Watcher> Records<'a, R, F, W> {
+    pub(crate) fn into_units(self) -> RecordUnits<'a, R, F, W> {
+        RecordUnits {
+            reader: self.reader,
+            find: self.find,
+            cursor: RecordUnitCursor {
+                watch: self.watch,
+                skip: self.skip,
+                skip_whole: self.skip_whole,
+                spent: false,
+                emitted: 0,
+                include_final_record: false,
+                reject_final_fragment: false,
+            },
+        }
+    }
+
     /// At most `n` records in all. [`Iterator::take`] counts runs, which is not the same question.
     pub(crate) fn take_records(mut self, n: u64) -> Self {
         self.left = Some(n);
         self
     }
 
-    /// Past the first `n` records, and how many there were to pass. Fewer than `n` means the
-    /// source ended first, which is not an error to every caller — but a watcher is told where the
-    /// walk stopped, since that offset is one it will never reach.
-    ///
-    /// # Errors
-    ///
-    /// A read failing, or a watcher refusing where the walk stopped.
-    pub(crate) fn skip_up_to(mut self, n: u64) -> anyhow::Result<(Self, u64)> {
-        if n == 0 {
-            return Ok((self, 0));
-        }
-        let wanted = self.left;
-        self.left = Some(n);
-        let skipped = self
-            .by_ref()
-            .try_fold(0u64, |skipped, run| run.map(|run| skipped + run.count))?;
-        if W::WATCHES && skipped < n {
-            self.watch.spent(self.reader)?;
-        }
-        self.left = wanted;
-        Ok((self, skipped))
+    /// Past the first `n` records, however few there turn out to be — the source ending first is
+    /// not an error to every caller. Nothing is read here: the walk happens at the first
+    /// evaluation, and a watcher is told where it stopped, since that offset is one it will never
+    /// reach.
+    pub(crate) fn skip_up_to(mut self, n: u64) -> Self {
+        self.skip = n;
+        self.skip_whole = false;
+        self
     }
 
-    /// Past the first `n` records.
+    /// Past the first `n` records, the source ending inside them being an error. Read at the first
+    /// evaluation, as [`Self::skip_up_to`] is.
+    pub(crate) fn skip_records(mut self, n: u64) -> Self {
+        self.skip = n;
+        self.skip_whole = true;
+        self
+    }
+
+    /// Walks past the records the chain was told to skip, `false` saying the source ended inside
+    /// them and left nothing to hand out.
     ///
     /// # Errors
     ///
-    /// The source ending before `n` of them, or a read failing. A watcher sees the walk run out
-    /// first, so what it refuses there is what a caller gets rather than the shortfall.
-    pub(crate) fn skip_records(self, n: u64) -> anyhow::Result<Self> {
-        let (records, skipped) = self.skip_up_to(n)?;
-        if skipped < n {
-            return Err(anyhow::anyhow!("No separator found in frame"));
+    /// A read failing, a watcher refusing where the walk stopped, or the source ending inside a
+    /// skip that has to land. A watcher sees the walk run out first, so what it refuses there is
+    /// what a caller gets rather than the shortfall.
+    #[inline(always)]
+    fn pass_skip(&mut self) -> anyhow::Result<bool> {
+        let n = self.skip;
+        if n == 0 {
+            return Ok(true);
         }
-        Ok(records)
+        self.skip = 0;
+        let wanted = self.left;
+        self.left = Some(n);
+        let walked = self
+            .by_ref()
+            .try_fold(0u64, |skipped, run| run.map(|run| skipped + run.count));
+        self.left = wanted;
+        if walked? < n {
+            if W::WATCHES {
+                self.watch.spent(self.reader)?;
+            }
+            if self.skip_whole {
+                return Err(anyhow::anyhow!("No separator found in frame"));
+            }
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// How many records there are.
     ///
     /// # Errors
     ///
-    /// A read failing.
+    /// A read failing, or what [`Self::pass_skip`] raises.
     pub(crate) fn count_records(mut self) -> anyhow::Result<usize> {
+        if !self.pass_skip()? {
+            return Ok(0);
+        }
         let count = self.try_fold(0u64, |count, run| run.map(|run| count + run.count))?;
         Ok(count as usize)
     }
@@ -627,6 +930,9 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>, W: Watcher> Records<'_, R, F, W> {
     ///
     /// A read failing, `dst` refusing bytes, or a watcher refusing what the walk passed.
     pub(crate) fn write_to(mut self, dst: &mut impl Write) -> anyhow::Result<()> {
+        if !self.pass_skip()? {
+            return Ok(());
+        }
         let reader = self.reader;
         self.by_ref().try_for_each(|run| -> anyhow::Result<()> {
             dst.write_all(&reader.bytes(&run?))?;
@@ -640,22 +946,13 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>, W: Watcher> Records<'_, R, F, W> {
         }
         Ok(())
     }
+}
 
-    /// The first one, owned, for a caller that outlives the window.
-    ///
-    /// # Errors
-    ///
-    /// A read failing.
-    pub(crate) fn next_owned(mut self) -> anyhow::Result<Option<Vec<u8>>> {
-        self.left = Some(1);
-        let record = match self.next().transpose()? {
-            Some(run) => Some(self.reader.bytes(&run).to_vec()),
-            None => None,
-        };
-        // A trailing fragment is not a record: only a run that ended one leaves `left` short.
-        Ok(match self.left {
-            Some(0) => record,
-            _ => None,
-        })
+impl<R: Read, F: Fn(&[u8]) -> Option<usize>, W: Watcher> Iterator for RecordUnits<'_, R, F, W> {
+    type Item = anyhow::Result<Run>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.cursor.next(self.reader, &self.find)
     }
 }

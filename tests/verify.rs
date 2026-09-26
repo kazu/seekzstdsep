@@ -380,7 +380,7 @@ fn a_drifting_file_of_fixed_width_records_is_refused() {
 /// The file every compressor writes: the last frame holds what was left over, and what follows its
 /// last record goes out with a read that runs past the end.
 #[test]
-fn a_file_ending_in_a_fragment_is_read_to_its_last_whole_record() {
+fn a_file_ending_in_a_fragment_returns_its_final_record() {
     let dir = tempdir().expect("Failed to create temp dir");
     let records = fixture_records();
     let mut tail = records[20..23].concat();
@@ -389,7 +389,7 @@ fn a_file_ending_in_a_fragment_is_read_to_its_last_whole_record() {
     let path = compress_frames(dir.path(), "tail-fragment", &groups);
 
     let mut reader = judging(path.clone());
-    assert_eq!(reader.total_records().expect("Failed to count records"), 23);
+    assert_eq!(reader.total_records().expect("Failed to count records"), 24);
     assert_eq!(
         reader
             .records(8, 6)
@@ -411,7 +411,9 @@ fn a_file_ending_in_a_fragment_is_read_to_its_last_whole_record() {
         .into_records()
         .collect::<anyhow::Result<Vec<_>>>()
         .expect("Failed to walk the records");
-    assert_eq!(walked, records[..23].to_vec());
+    let mut expected = records[..23].to_vec();
+    expected.push(b"an input that ended mid-record".to_vec());
+    assert_eq!(walked, expected);
 }
 
 /// A refusal is the end of the walk: the iterator does not hand out the same error for ever.
@@ -541,12 +543,14 @@ fn a_frame_holding_bytes_after_its_last_record_is_refused() {
         Some(records[20].len() - 40)
     );
 
-    // Both walks join the two halves, so the bytes are there either way; the refusal is about the
-    // file, not about what the read could return.
-    let trusted = plain(path)
+    // The default path now also refuses an incomplete record at a nonfinal frame boundary.
+    let err = plain(path)
         .records(0, 25)
-        .expect("a read under the default was refused");
-    assert_eq!(trusted, records[..25].concat());
+        .expect_err("a split record was accepted without verification");
+    assert!(
+        err.to_string()
+            .contains("incomplete record at nonfinal frame boundary")
+    );
 }
 
 /// A refusal comes after the records the walk had already written, since this writes as it walks.

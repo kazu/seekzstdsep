@@ -444,7 +444,7 @@ fn test_copy_range_takes_flatbuffers_frames_as_they_are() {
 // ------------------------------------------------------- what a broken or wrong length does
 
 #[test]
-fn test_a_length_that_runs_past_its_frame_leaves_the_records_before_it() {
+fn test_a_length_that_runs_past_its_final_frame_is_an_error() {
     let dir = tempfile::tempdir().expect("no temp dir");
     let whole: Vec<Vec<u8>> = (0..8).map(|seq| le32_record(seq, RECORD_LEN)).collect();
 
@@ -461,14 +461,27 @@ fn test_a_length_that_runs_past_its_frame_leaves_the_records_before_it() {
         &[whole[0..3].concat(), whole[3..6].concat(), last],
     );
 
-    let walked: Vec<Vec<u8>> = RecordReader::open_with(path, Box::new(find::by_le32_prefix))
+    let mut ranged = RecordReader::open_with(path.clone(), Box::new(find::by_le32_prefix))
+        .expect("failed to open");
+    assert!(ranged.records(0, 100).is_err());
+    let mut written = Vec::new();
+    assert!(ranged.records_to(0, 100, &mut written).is_err());
+    assert!(ranged.total_records().is_err());
+    assert!(ranged.record(8).is_err());
+
+    let walked = RecordReader::open_with(path.clone(), Box::new(find::by_le32_prefix))
         .expect("failed to open")
         .into_records()
-        .collect::<anyhow::Result<_>>()
-        .expect("failed to walk");
-    assert_eq!(
-        walked, whole,
-        "the whole records of every frame, and the fragment dropped"
+        .collect::<anyhow::Result<Vec<Vec<u8>>>>();
+    assert!(walked.is_err());
+    let mut reverse = RecordReader::open_with(path, Box::new(find::by_le32_prefix))
+        .expect("failed to open")
+        .into_records();
+    assert!(
+        reverse
+            .next_back()
+            .expect("final frame is nonempty")
+            .is_err()
     );
 }
 

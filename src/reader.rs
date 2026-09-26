@@ -8,6 +8,8 @@
 //! compressed without it is read at the wrong offsets, and says so only under
 //! [`RecordReaderVerify`]. See `docs/format.md`.
 use std::{
+    borrow::Borrow,
+    cell::Ref,
     fs::File,
     io::{Read, Seek, SeekFrom, Take, Write},
     path::PathBuf,
@@ -19,9 +21,7 @@ use zeekstd::Decoder;
 
 use crate::find::{self, BoxFinder};
 use crate::record;
-use crate::seekzstdsep_lib::{
-    count_records_in_frame, read_records_in_frame, seek_table_decomp_frames,
-};
+use crate::seekzstdsep_lib::{count_records_in_frame, seek_table_decomp_frames};
 
 /// The decoder, and the window records are read through.
 ///
@@ -36,9 +36,9 @@ struct Lookup<S> {
 }
 
 impl<S: Read + Seek> Lookup<S> {
-    fn new(decoder: Decoder<'static, S>) -> Self {
+    fn new(decoder: Decoder<'static, S>, frames: &[(u64, u64)]) -> Self {
         Self {
-            window: record::Reader::new(decoder.take(0)),
+            window: record::Reader::new(decoder.take(0)).with_frame_ends(frames),
             frame: None,
         }
     }
@@ -88,6 +88,71 @@ struct RecordsRequest {
     skip: u64,
 }
 
+/// What a read of `cnt` records from `from` has to ask for, `label` naming the file in a refusal.
+///
+/// A `cnt` of [`usize::MAX`] asks for the rest of the file, which is what an iterator with no
+/// count to stop at reads.
+///
+/// # Errors
+///
+/// `from` being past the last frame.
+fn records_request(
+    frames: &[(u64, u64)],
+    per_frame: usize,
+    label: &str,
+    from: usize,
+    cnt: usize,
+) -> anyhow::Result<RecordsRequest> {
+    let total_sep_cnt = per_frame * frames.len();
+    let mut frame_idx = frames.len().saturating_mul(from) / total_sep_cnt;
+    // The final frame may contain one unterminated record after all its separators.
+    if frame_idx == frames.len() && from == total_sep_cnt {
+        frame_idx -= 1;
+    }
+    if frame_idx >= frames.len() {
+        return Err(anyhow::anyhow!("record {from} is past the end of {label}"));
+    }
+    let idx_in_frame = from - frame_idx * per_frame;
+    let start = frames[frame_idx].0;
+
+    let end = from.saturating_add(cnt).saturating_add(1);
+    let end_frame_idx = (frames.len().saturating_mul(end) / total_sep_cnt).min(frames.len() - 1);
+    let len = frames[end_frame_idx].0 + frames[end_frame_idx].1 - start;
+    Ok(RecordsRequest {
+        start,
+        len,
+        skip: idx_in_frame as u64,
+    })
+}
+
+/// Points `window` at the bytes `req` asks for and answers what watches the walk of them, the read
+/// having been placed by record `from`.
+///
+/// Takes the reader's parts one by one: the watcher borrows the judge for as long as the walk it
+/// is handed to, while the window is pointed through a borrow of its own.
+fn place_span<'j, V: Verifier, S: Read + Seek>(
+    lookup: &mut Lookup<S>,
+    judge: &'j V::Judge,
+    frames: &[(u64, u64)],
+    per_frame: usize,
+    from: usize,
+    req: &RecordsRequest,
+) -> anyhow::Result<V::Watch<'j>> {
+    let watch = V::watch(judge, frames, per_frame, from, req.start, req.len);
+    point_window(&mut lookup.frame, &mut lookup.window, req)?;
+    Ok(watch)
+}
+
+#[inline(always)]
+fn point_window<S: Read + Seek>(
+    frame: &mut Option<usize>,
+    window: &mut record::Reader<Take<Decoder<'static, S>>>,
+    req: &RecordsRequest,
+) -> anyhow::Result<()> {
+    *frame = None;
+    window.seek_to(req.start, req.len)
+}
+
 /// A compressed file held open for reading records by index.
 ///
 /// Holds the decoder, the frame list and frame 0's separator count, plus the window
@@ -125,6 +190,57 @@ pub struct RecordReader<V: Verifier = NoVerify, S = File> {
     judge: V::Judge,
 }
 
+/// A borrowed, forward-only iterator over records in a reader's reusable window.
+///
+/// Each item is a borrow guard. Drop it before asking for the next record; copy only records
+/// that must outlive the current item. Construction performs no read.
+pub struct BorrowedRecordIter<'a, V: Verifier, S = File> {
+    window: Option<&'a mut record::Reader<Take<Decoder<'static, S>>>>,
+    shared: Option<&'a record::Reader<Take<Decoder<'static, S>>>>,
+    frame: &'a mut Option<usize>,
+    frames: &'a [(u64, u64)],
+    boundary: &'a Boundary,
+    judge: &'a V::Judge,
+    per_frame: usize,
+    label: &'a str,
+    from: usize,
+    units: Option<
+        record::RecordUnits<
+            'a,
+            Take<Decoder<'static, S>>,
+            Box<dyn Fn(&[u8]) -> Option<usize> + 'a>,
+            V::Watch<'a>,
+        >,
+    >,
+    spent: bool,
+}
+
+/// Terminal operations for a fallible iterator of borrowed record bytes.
+///
+/// Standard `Iterator` adapters such as `filter`, `map`, and `take` remain the adapters used
+/// between the source and these terminal operations.
+pub trait RecordChainExt<'a>: Iterator<Item = anyhow::Result<Ref<'a, [u8]>>> + Sized {
+    /// Write each record directly from the window to `dst`.
+    #[inline(always)]
+    fn write_to(mut self, dst: &mut impl Write) -> anyhow::Result<()> {
+        self.try_for_each(|record| {
+            dst.write_all(&record?)?;
+            Ok(())
+        })
+    }
+
+    /// Concatenate the records into one owned byte vector.
+    #[inline(always)]
+    fn to_vec(mut self) -> anyhow::Result<Vec<u8>> {
+        self.try_fold(Vec::new(), |mut bytes, record| {
+            bytes.extend_from_slice(&record?);
+            Ok(bytes)
+        })
+    }
+}
+
+impl<'a, I> RecordChainExt<'a> for I where I: Iterator<Item = anyhow::Result<Ref<'a, [u8]>>> {}
+
 /// A [`RecordReader`] that judges the frames it walks. [`RecordReader::verifying`] is how one is
 /// made.
 pub type RecordReaderVerify = RecordReader<AsRead>;
@@ -142,6 +258,10 @@ enum Boundary {
 }
 
 impl Boundary {
+    fn tail_is_record(&self) -> bool {
+        matches!(self, Self::Separator { .. })
+    }
+
     /// The separator it was built from, and an empty slice for a finder.
     fn separator(&self) -> &[u8] {
         match self {
@@ -190,6 +310,18 @@ pub trait Verifier {
         len: u64,
     ) -> Self::Watch<'j>;
 
+    /// [`Self::watch`] for a read that keeps its watcher rather than watching one call with it:
+    /// what it hands over is the watcher's own copy of the judge, so the reader keeps judging
+    /// after it.
+    fn watch_owned(
+        judge: &Self::Judge,
+        frames: &[(u64, u64)],
+        per_frame: usize,
+        from: usize,
+        start: u64,
+        len: u64,
+    ) -> Self::Watch<'static>;
+
     /// What to watch a walk with that has no frame end to report — one that stops inside a frame,
     /// and is judged where it stops rather than as it goes.
     ///
@@ -227,6 +359,18 @@ impl Verifier for NoVerify {
     }
 
     #[inline]
+    fn watch_owned(
+        _judge: &(),
+        _frames: &[(u64, u64)],
+        _per_frame: usize,
+        _from: usize,
+        _start: u64,
+        _len: u64,
+    ) -> record::Unwatched {
+        record::Unwatched
+    }
+
+    #[inline]
     fn watch_nothing<'j>() -> Self::Watch<'j> {
         record::Unwatched
     }
@@ -245,17 +389,18 @@ impl Verifier for AsRead {
         start: u64,
         len: u64,
     ) -> record::Watch<'j> {
-        // A file with no records to a frame, or a read placed past the last frame, has no frame
-        // end for the walk to reach. A reader never asks either — its count is never 0 and a read
-        // past the end is refused before it walks — but this is reachable from outside the crate.
-        if per_frame == 0 {
-            return record::Watch::nothing();
-        }
-        let first = from / per_frame;
-        if first >= frames.len() {
-            return record::Watch::nothing();
-        }
-        watch_frames(judge, first, frame_ends_from(frames, first, start, len))
+        watch_span::<FrameJudge>(judge, frames, per_frame, from, start, len)
+    }
+
+    fn watch_owned(
+        judge: &FrameJudge,
+        frames: &[(u64, u64)],
+        per_frame: usize,
+        from: usize,
+        start: u64,
+        len: u64,
+    ) -> record::Watch<'static> {
+        watch_span::<FrameJudge>(judge.clone(), frames, per_frame, from, start, len)
     }
 
     fn watch_nothing<'j>() -> record::Watch<'j> {
@@ -297,6 +442,9 @@ impl Judge for () {
 
 /// What [`AsRead`] holds to judge a frame: the source to name in a refusal, the last frame's index
 /// because only that one may hold fewer records, and the count every other frame has to hold.
+///
+/// Cloned by a read that hands a copy to the watcher it keeps, the reader holding on to its own.
+#[derive(Clone)]
 pub struct FrameJudge {
     label: String,
     last: usize,
@@ -357,10 +505,41 @@ fn frame_ends_from(frames: &[(u64, u64)], first: usize, start: u64, len: u64) ->
         .collect()
 }
 
+/// What watches the walk of `[start, start + len)`, the read having been placed by record `from`
+/// of a file holding `per_frame` records to a frame.
+///
+/// The body of [`AsRead::watch`] and [`AsRead::watch_owned`], which differ only in whether the
+/// judge is borrowed from the reader or is the watcher's own copy.
+fn watch_span<'j, J: Judge>(
+    judge: impl Borrow<J> + 'j,
+    frames: &[(u64, u64)],
+    per_frame: usize,
+    from: usize,
+    start: u64,
+    len: u64,
+) -> record::Watch<'j> {
+    // A file with no records to a frame, or a read placed past the last frame, has no frame
+    // end for the walk to reach. A reader never asks either — its count is never 0 and a read
+    // past the end is refused before it walks — but this is reachable from outside the crate.
+    if per_frame == 0 {
+        return record::Watch::nothing();
+    }
+    let first = from / per_frame;
+    if first >= frames.len() {
+        return record::Watch::nothing();
+    }
+    watch_frames::<J>(judge, first, frame_ends_from(frames, first, start, len))
+}
+
 /// What judges the frames a read walks past, frame `first` being the one the walk starts in.
-fn watch_frames<J: Judge>(judge: &J, first: usize, ends: Vec<u64>) -> record::Watch<'_> {
+fn watch_frames<'j, J: Judge>(
+    judge: impl Borrow<J> + 'j,
+    first: usize,
+    ends: Vec<u64>,
+) -> record::Watch<'j> {
     let mut walked = 0;
     record::Watch::new(ends, move |i, before, ends_whole| {
+        let judge = judge.borrow();
         let frame = first + i;
         judge.count(frame, || before - walked)?;
         walked = before;
@@ -404,6 +583,160 @@ macro_rules! with_find {
             }
         }
     };
+}
+
+/// Whether the metadata's first index beyond all full frames names a real final record.
+/// This is only needed at that boundary; ordinary positioning remains lazy.
+fn final_slot_is_tail<S: Read + Seek>(
+    window: &mut record::Reader<Take<Decoder<'static, S>>>,
+    frames: &[(u64, u64)],
+    boundary: &Boundary,
+    per_frame: usize,
+) -> anyhow::Result<bool> {
+    if !boundary.tail_is_record() {
+        return Ok(false);
+    }
+    let (start, len) = *frames.last().expect("reader has at least one frame");
+    window.seek_to(start, len)?;
+    let whole = with_find!(boundary, |find| window
+        .records(|data: &[u8]| find(data))
+        .count_records())?;
+    Ok(whole == per_frame && !window.remainder().is_empty())
+}
+
+/// Resolve and position a record iterator's forward span. Both borrowed and owned adapters use
+/// this path, including the exceptional final unterminated record slot.
+fn position_iter_span<S: Read + Seek>(
+    frame: &mut Option<usize>,
+    window: &mut record::Reader<Take<Decoder<'static, S>>>,
+    frames: &[(u64, u64)],
+    boundary: &Boundary,
+    per_frame: usize,
+    label: &str,
+    from: usize,
+) -> anyhow::Result<RecordsRequest> {
+    if from == per_frame * frames.len() && !final_slot_is_tail(window, frames, boundary, per_frame)?
+    {
+        anyhow::bail!("record {from} is past the end of {label}");
+    }
+    let req = records_request(frames, per_frame, label, from, usize::MAX)?;
+    point_window(frame, window, &req)?;
+    Ok(req)
+}
+
+macro_rules! with_units {
+    ($reader:expr, $from:expr, $cnt:expr, |$units:ident, $window:ident| $body:expr) => {{
+        let reader = $reader;
+        let req = reader.records_request($from, $cnt)?;
+        let watch = place_span::<V, S>(
+            &mut reader.lookup,
+            &reader.judge,
+            &reader.frames,
+            reader.sep_cnt,
+            $from,
+            &req,
+        )?;
+        let $window = &reader.lookup.window;
+        with_find!(&reader.boundary, |find| {
+            let mut $units = $window
+                .records(|data: &[u8]| find(data))
+                .watching(watch)
+                .skip_records(req.skip)
+                .into_units();
+            let final_end = reader.frames.last().expect("reader has a frame");
+            if req.start + req.len == final_end.0 + final_end.1 {
+                $units = if reader.boundary.tail_is_record() {
+                    $units.including_final_record()
+                } else {
+                    $units.rejecting_final_fragment()
+                };
+            }
+            $units.prepare()?;
+            $body
+        })
+    }};
+}
+
+impl<'a, V: Verifier, S: Read + Seek> BorrowedRecordIter<'a, V, S> {
+    fn arm(&mut self) -> anyhow::Result<()> {
+        let req = position_iter_span(
+            self.frame,
+            self.window
+                .as_deref_mut()
+                .expect("unarmed iterator has a window"),
+            self.frames,
+            self.boundary,
+            self.per_frame,
+            self.label,
+            self.from,
+        )?;
+        let watch = V::watch(
+            self.judge,
+            self.frames,
+            self.per_frame,
+            self.from,
+            req.start,
+            req.len,
+        );
+        let window = self.window.take().expect("unarmed iterator has a window");
+        let shared: &'a record::Reader<_> = window;
+        let boundary = self.boundary;
+        let find: Box<dyn Fn(&[u8]) -> Option<usize> + 'a> = Box::new(move |data| match boundary {
+            Boundary::Separator { finder, .. } => {
+                finder.find(data).map(|at| at + finder.needle().len())
+            }
+            Boundary::Finder(boxed) => boxed(data),
+        });
+        let mut units = shared
+            .records(find)
+            .watching(watch)
+            .skip_records(req.skip)
+            .into_units();
+        units = if self.boundary.tail_is_record() {
+            units.including_final_record()
+        } else {
+            units.rejecting_final_fragment()
+        };
+        units.prepare()?;
+        self.shared = Some(shared);
+        self.units = Some(units);
+        Ok(())
+    }
+}
+
+impl<'a, V: Verifier, S: Read + Seek> Iterator for BorrowedRecordIter<'a, V, S> {
+    type Item = anyhow::Result<Ref<'a, [u8]>>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.spent {
+            return None;
+        }
+        if self.units.is_none() {
+            if let Err(error) = self.arm() {
+                self.spent = true;
+                return Some(Err(error));
+            }
+        }
+        let units = self.units.as_mut().expect("armed iterator has units");
+        match units.next() {
+            Some(Ok(run)) => Some(Ok(self
+                .shared
+                .expect("armed iterator has a window")
+                .bytes(&run))),
+            Some(Err(error)) => {
+                self.spent = true;
+                Some(Err(error))
+            }
+            None => {
+                self.spent = true;
+                match units.finish(usize::MAX) {
+                    Ok(()) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            }
+        }
+    }
 }
 
 impl RecordReader<NoVerify> {
@@ -572,7 +905,7 @@ impl<S: Read + Seek> RecordReader<NoVerify, S> {
             .ok_or_else(|| anyhow::anyhow!("no frames in {label}"))?;
         let mut reader = Self {
             label: label.to_owned(),
-            lookup: Lookup::new(decoder),
+            lookup: Lookup::new(decoder, &frames),
             frames,
             boundary,
             sep_cnt: 0,
@@ -623,6 +956,10 @@ impl<S: Read + Seek> RecordReader<NoVerify, S> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn verifying(self) -> RecordReader<AsRead, S> {
+        let mut lookup = self.lookup;
+        // The verifying watcher reports frame count and fragments with its historical errors.
+        // The lightweight boundary guard is for unverified reads only.
+        lookup.window.without_frame_ends();
         let judge = FrameJudge::new(
             self.label.clone(),
             self.frames.len() - 1,
@@ -630,7 +967,7 @@ impl<S: Read + Seek> RecordReader<NoVerify, S> {
         );
         RecordReader {
             label: self.label,
-            lookup: self.lookup,
+            lookup,
             frames: self.frames,
             boundary: self.boundary,
             sep_cnt: self.sep_cnt,
@@ -715,8 +1052,8 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
         self.sep_cnt
     }
 
-    /// How many whole records the file holds. Decompresses the last frame to count it, since the
-    /// invariant says nothing about how full it is.
+    /// How many records the file holds, including a nonempty unterminated final record.
+    /// Decompresses only the last frame to count its records.
     ///
     /// # Examples
     ///
@@ -739,12 +1076,22 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
     pub fn total_records(&mut self) -> anyhow::Result<usize> {
         let last = self.frames.len() - 1;
         let (start, len) = self.frames[last];
-        let in_last = with_find!(&self.boundary, |find| count_records_in_frame(
-            self.lookup.load_decoder(),
-            start,
-            len,
-            find
-        )?);
+        self.lookup.frame = None;
+        self.lookup.window.seek_to(start, len)?;
+        let include_tail = self.boundary.tail_is_record();
+        let in_last = with_find!(&self.boundary, |find| {
+            let mut units = self
+                .lookup
+                .window
+                .records(|data: &[u8]| find(data))
+                .into_units();
+            if include_tail {
+                units = units.including_final_record();
+            } else {
+                units = units.rejecting_final_fragment();
+            }
+            units.try_fold(0usize, |count, record| record.map(|_| count + 1))
+        })?;
         Ok(self.sep_cnt * last + in_last)
     }
 
@@ -790,26 +1137,49 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
     ///
     /// `from` being past the last frame.
     fn records_request(&self, from: usize, cnt: usize) -> anyhow::Result<RecordsRequest> {
-        let total_sep_cnt = self.sep_cnt * self.frames.len();
-        let frame_idx = self.frames.len().saturating_mul(from) / total_sep_cnt;
-        if frame_idx >= self.frames.len() {
-            return Err(anyhow::anyhow!(
-                "record {from} is past the end of {}",
-                self.label
-            ));
-        }
-        let idx_in_frame = from % self.sep_cnt;
-        let start = self.frames[frame_idx].0;
+        records_request(&self.frames, self.sep_cnt, &self.label, from, cnt)
+    }
 
-        let end = from.saturating_add(cnt).saturating_add(1);
-        let end_frame_idx =
-            (self.frames.len().saturating_mul(end) / total_sep_cnt).min(self.frames.len() - 1);
-        let len = self.frames[end_frame_idx].0 + self.frames[end_frame_idx].1 - start;
-        Ok(RecordsRequest {
-            start,
-            len,
-            skip: idx_in_frame as u64,
-        })
+    /// Borrow records starting at `from` through the standard iterator adapters.
+    ///
+    /// No read is performed until the iterator is advanced. A record borrow guard must be
+    /// dropped before the next item is requested; copy a record to keep it longer.
+    ///
+    /// A prebuilt finder can be reused across records without copying rejected records.
+    /// Keep errors in the chain so `collect` can report them:
+    ///
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-filter.seek.zst");
+    /// # let mut compressed = Vec::new();
+    /// # seekzstdsep::convert_to_seekable_zst_reader(&b"error one\nok\nerror two\n"[..], &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// # let mut reader = seekzstdsep::RecordReader::open(path, b"\n")?;
+    /// let finder = memchr::memmem::Finder::new(b"error");
+    /// let kept: Vec<Vec<u8>> = reader
+    ///     .records_from(0)
+    ///     .filter(|item| item.as_ref().map_or(true, |record| finder.find(&record[..]).is_some()))
+    ///     .map(|item| item.map(|record| record.to_vec()))
+    ///     .take(10)
+    ///     .collect::<anyhow::Result<_>>()?;
+    /// # assert_eq!(kept, [b"error one\n".to_vec(), b"error two\n".to_vec()]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn records_from(&mut self, from: usize) -> BorrowedRecordIter<'_, V, S> {
+        BorrowedRecordIter {
+            window: Some(&mut self.lookup.window),
+            shared: None,
+            frame: &mut self.lookup.frame,
+            frames: &self.frames,
+            boundary: &self.boundary,
+            judge: &self.judge,
+            per_frame: self.sep_cnt,
+            label: &self.label,
+            from,
+            units: None,
+            spent: false,
+        }
     }
 
     /// `cnt` records from `from`, or fewer when the file holds fewer, gathered into a `Vec`.
@@ -841,22 +1211,9 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn records(&mut self, from: usize, cnt: usize) -> anyhow::Result<Vec<u8>> {
-        // A whole-span read has no walk to watch, so the verifying one takes the route that has
-        // one and gathers what it writes. The other arm is not compiled for either.
-        if V::VERIFIES {
-            let mut out = Vec::new();
-            self.records_to(from, cnt, &mut out)?;
-            return Ok(out);
-        }
-        let req = self.records_request(from, cnt)?;
-        with_find!(&self.boundary, |find| read_records_in_frame(
-            self.lookup.load_decoder(),
-            req.start,
-            req.len,
-            req.skip,
-            cnt as u64,
-            find,
-        ))
+        let mut out = Vec::new();
+        self.records_to(from, cnt, &mut out)?;
+        Ok(out)
     }
 
     /// [`Self::records`] into `dst`: the same `cnt` records from `from`, written as they are
@@ -895,54 +1252,60 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
         cnt: usize,
         dst: &mut impl Write,
     ) -> anyhow::Result<()> {
-        let req = self.records_request(from, cnt)?;
-        let watch = V::watch(
-            &self.judge,
-            &self.frames,
-            self.sep_cnt,
-            from,
-            req.start,
-            req.len,
-        );
-        self.lookup.frame = None;
-        self.lookup.window.seek_to(req.start, req.len)?;
-        with_find!(&self.boundary, |find| self
-            .lookup
-            .window
-            .records(|data| find(data))
-            .watching(watch)
-            .skip_records(req.skip)?
-            .take_records(cnt as u64)
-            .write_to(dst))
-    }
-}
-
-impl<S: Read + Seek> RecordReader<AsRead, S> {
-    /// [`RecordReader::into_records`], stopping at the first frame [`AsRead`] refuses — one
-    /// holding a count other than frame 0's, or bytes after its last record.
-    /// A reverse read checks the whole frame before returning any of its records.
-    pub fn into_records(self) -> RecordIter<AsRead, S> {
-        RecordIter {
-            frames: self.frames,
-            frame: 0,
-            armed: false,
-            front_read: 0,
-            back_left: None,
-            boundary: self.boundary,
-            lookup: self.lookup,
-            judge: self.judge,
+        if from == self.sep_cnt * self.frames.len() {
+            self.lookup.frame = None;
+            if !final_slot_is_tail(
+                &mut self.lookup.window,
+                &self.frames,
+                &self.boundary,
+                self.sep_cnt,
+            )? {
+                anyhow::bail!("record {from} is past the end of {}", self.label);
+            }
         }
+        with_units!(self, from, cnt, |units, _window| {
+            units.write_to(cnt, dst)?;
+            units.finish(cnt)?;
+            Ok::<(), anyhow::Error>(())
+        })
+    }
+
+    /// Folds records borrowed from the read window. The caller copies only records it keeps.
+    ///
+    /// # Errors
+    ///
+    /// The read starting past the last record, a frame not decompressing, or `f` refusing a
+    /// record. Under [`RecordReaderVerify`], also a frame the walk leaves behind that it refuses.
+    pub fn fold_records<B>(
+        &mut self,
+        from: usize,
+        cnt: usize,
+        init: B,
+        mut f: impl FnMut(B, &[u8]) -> anyhow::Result<B>,
+    ) -> anyhow::Result<B> {
+        with_units!(self, from, cnt, |units, window| {
+            let value = units
+                .by_ref()
+                .take(cnt)
+                .try_fold(init, |acc, run| f(acc, &window.bytes(&run?)))?;
+            units.finish(cnt)?;
+            Ok(value)
+        })
     }
 }
 
-impl<S: Read + Seek> RecordReader<NoVerify, S> {
-    /// Every whole record in the file, in order, decoding a window at a time.
+impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
+    /// Every record in the file, in order, decoding a window at a time.
     ///
     /// Scans rather than divides, so unlike [`Self::record`] it does not rest on the
-    /// same-count-per-frame invariant. What follows the last separator of a frame is dropped: the
-    /// compressor cuts frames at separator boundaries, so only the end of the file can hold one.
+    /// same-count-per-frame invariant. Nonempty bytes after the last separator are the final
+    /// record, returned without a trailing separator.
     /// [`DoubleEndedIterator::next_back`] reads from the end; the two directions consume the
     /// same remaining records without overlap. See [`RecordIter`] for reverse reading costs.
+    ///
+    /// Under [`RecordReaderVerify`] it stops at the first frame [`AsRead`] refuses — one holding a
+    /// count other than frame 0's, or bytes after its last record. A reverse read checks the whole
+    /// frame before returning any of its records.
     ///
     /// # Examples
     ///
@@ -965,22 +1328,62 @@ impl<S: Read + Seek> RecordReader<NoVerify, S> {
     /// assert!(records.next().is_none());
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn into_records(self) -> RecordIter<NoVerify, S> {
+    pub fn into_records(self) -> RecordIter<V, S> {
+        self.into_records_from(0)
+    }
+
+    /// [`Self::into_records`] beginning at record `from` rather than at the first one.
+    ///
+    /// The records before it are not decoded: `from` places the read the way
+    /// [`Self::records`] does, so the frames before the one holding it are never read. How many to
+    /// take is [`Iterator::take`]'s question, which is why there is no count here.
+    ///
+    /// Nothing is read until the first record is asked for, so a `from` past the last record comes
+    /// back as that call's error rather than here.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seekzstdsep::RecordReader;
+    ///
+    /// # use seekzstdsep::convert_to_seekable_zst_reader;
+    /// # let path = std::env::temp_dir().join("seekzstdsep-doc-into-records-from.seek.zst");
+    /// # let input: &[u8] = b"record 1\nrecord 2\nrecord 3\nrecord 4\n";
+    /// # let mut compressed = Vec::new();
+    /// # convert_to_seekable_zst_reader(input, &mut compressed, 64 * 1024, true, b"\n", None)?;
+    /// # std::fs::write(&path, compressed)?;
+    /// let reader = RecordReader::open(path, b"\n")?;
+    ///
+    /// let records: Vec<_> = reader
+    ///     .into_records_from(2)
+    ///     .take(1)
+    ///     .collect::<anyhow::Result<_>>()?;
+    ///
+    /// assert_eq!(records, vec![b"record 3\n".to_vec()]);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn into_records_from(self, from: usize) -> RecordIter<V, S> {
         RecordIter {
+            back_frame: self.frames.len() - 1,
             frames: self.frames,
-            frame: 0,
-            armed: false,
-            front_read: 0,
+            per_frame: self.sep_cnt,
+            label: self.label,
+            front: from,
             back_left: None,
+            armed: false,
+            spent: false,
             boundary: self.boundary,
             lookup: self.lookup,
-            judge: (),
+            judge: self.judge,
+            cursor: None,
         }
     }
-    /// Record `index`, or `None` when the file holds no such whole record.
+}
+
+impl<S: Read + Seek> RecordReader<NoVerify, S> {
+    /// Record `index`, or `None` when the file holds no such record.
     ///
-    /// The returned bytes carry the separator, as [`Self::records`] does. A trailing fragment with
-    /// no separator after it is not a record and is not returned.
+    /// The returned bytes carry the separator, except for a nonempty unterminated final record.
     ///
     /// What is held is one window, not the frame the record is in: the walk is left where the
     /// record ended, and the next index in the same frame goes on from there. See
@@ -1004,19 +1407,45 @@ impl<S: Read + Seek> RecordReader<NoVerify, S> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn record(&mut self, index: usize) -> anyhow::Result<Option<Vec<u8>>> {
-        let frame = index / self.sep_cnt;
+        let mut frame = index / self.sep_cnt;
+        if frame == self.frames.len() && index == self.sep_cnt * self.frames.len() {
+            self.lookup.frame = None;
+            if !final_slot_is_tail(
+                &mut self.lookup.window,
+                &self.frames,
+                &self.boundary,
+                self.sep_cnt,
+            )? {
+                return Ok(None);
+            }
+            frame -= 1;
+        }
         if frame >= self.frames.len() {
             return Ok(None);
         }
-        let in_frame = (index % self.sep_cnt) as u64;
+        let in_frame = (index - frame * self.sep_cnt) as u64;
         let region = self.frames[frame];
         let skip = self.lookup.walk_to(frame, region, in_frame)?;
+        // A skip the frame runs out inside leaves nothing to hand back, which is what the walk
+        // ending before a whole record says as well.
         with_find!(&self.boundary, |find| {
-            let (records, skipped) = self.lookup.window.records(find).skip_up_to(skip)?;
-            if skipped < skip {
-                return Ok(None);
+            let mut units = self
+                .lookup
+                .window
+                .records(find)
+                .skip_up_to(skip)
+                .into_units();
+            if frame == self.frames.len() - 1 {
+                units = if self.boundary.tail_is_record() {
+                    units.including_final_record()
+                } else {
+                    units.rejecting_final_fragment()
+                };
             }
-            records.next_owned()
+            units
+                .next()
+                .transpose()
+                .map(|run| run.map(|run| self.lookup.window.bytes(&run).to_vec()))
         })
     }
 }
@@ -1030,25 +1459,44 @@ impl<S: Read + Seek> RecordReader<AsRead, S> {
     /// A frame the walk ran out in that holds a count other than frame 0's — where
     /// [`RecordReader::record`] answers `None`.
     pub fn record(&mut self, index: usize) -> anyhow::Result<Option<Vec<u8>>> {
-        let frame = index / self.sep_cnt;
+        let mut frame = index / self.sep_cnt;
+        if frame == self.frames.len() && index == self.sep_cnt * self.frames.len() {
+            self.lookup.frame = None;
+            if !final_slot_is_tail(
+                &mut self.lookup.window,
+                &self.frames,
+                &self.boundary,
+                self.sep_cnt,
+            )? {
+                return Ok(None);
+            }
+            frame -= 1;
+        }
         if frame >= self.frames.len() {
             return Ok(None);
         }
-        let in_frame = (index % self.sep_cnt) as u64;
+        let in_frame = (index - frame * self.sep_cnt) as u64;
         let region = self.frames[frame];
         let skip = self.lookup.walk_to(frame, region, in_frame)?;
         with_find!(&self.boundary, |find| {
-            let (records, skipped) = self
+            let mut units = self
                 .lookup
                 .window
                 .records(find)
                 .watching(record::Watch::nothing())
-                .skip_up_to(skip)?;
-            if skipped < skip {
-                self.verify_walked_frame(frame)?;
-                return Ok(None);
+                .skip_up_to(skip)
+                .into_units();
+            if frame == self.frames.len() - 1 {
+                units = if self.boundary.tail_is_record() {
+                    units.including_final_record()
+                } else {
+                    units.rejecting_final_fragment()
+                };
             }
-            let record = records.next_owned()?;
+            let record = units
+                .next()
+                .transpose()?
+                .map(|run| self.lookup.window.bytes(&run).to_vec());
             if record.is_none() {
                 self.verify_walked_frame(frame)?;
             }
@@ -1062,14 +1510,16 @@ impl<S: Read + Seek> RecordReader<AsRead, S> {
     }
 }
 
-/// Every whole record of a [`RecordReader`], from either end. Made by [`RecordReader::into_records`].
+/// Every record of a [`RecordReader`], from either end. Made by [`RecordReader::into_records`].
 ///
-/// Decodes each frame through the record stream's fixed window, so no frame has to fit in
-/// memory — only the record being handed out does.
+/// Reads forward as a range read does: one seek, and the rest of the file decoded through the
+/// record stream's fixed window, so no frame has to fit in memory — only the record being handed
+/// out does. The frames it crosses are judged as it crosses them, by what watches a range read.
 ///
 /// A reverse read first scans the frame to count its records. Records still in the window reuse
-/// those bytes; reaching an earlier record outside it decodes from that frame's start again.
-/// Either direction stops permanently after an error, or when the remaining records run out.
+/// those bytes; reaching an earlier record outside it decodes from that frame's start again, and
+/// leaves the forward read to seek again when it resumes. Either direction stops permanently after
+/// an error, or when the remaining records run out.
 ///
 /// # Examples
 ///
@@ -1094,27 +1544,102 @@ impl<S: Read + Seek> RecordReader<AsRead, S> {
 /// ```
 pub struct RecordIter<V: Verifier = NoVerify, S = File> {
     frames: Vec<(u64, u64)>,
-    /// The frame being handed out, past the last one once the iterator is spent.
-    frame: usize,
-    /// Whether the window is positioned at the next forward record.
-    armed: bool,
-    /// Forward position saved while the window is used by a reverse read.
-    front_read: u64,
-    /// Exclusive back record index in the last remaining frame, once counted.
+    /// Records to a frame, which every frame but the last one holds.
+    per_frame: usize,
+    /// The file, to name in a refusal.
+    label: String,
+    /// The record handed out next going forward.
+    front: usize,
+    /// The frame a reverse read is in.
+    back_frame: usize,
+    /// Records of `back_frame` a reverse read has not handed out, once that frame is counted.
     back_left: Option<u64>,
+    /// Whether the window is pointed at the span `front` begins.
+    armed: bool,
+    /// Set once a read failed or a frame was refused: nothing more is handed out.
+    spent: bool,
     boundary: Boundary,
     lookup: Lookup<S>,
     judge: V::Judge,
+    /// The same record-unit cursor as the borrowed Iterator, held next to its owned reader.
+    cursor: Option<record::RecordUnitCursor<V::Watch<'static>>>,
 }
 
 impl<V: Verifier, S: Read + Seek> RecordIter<V, S> {
-    fn check_frame(&self, frame: usize) -> anyhow::Result<()> {
-        self.judge
-            .count(frame, || self.lookup.window.walked())
-            .and_then(|()| {
-                self.judge
-                    .ends_whole(frame, || self.lookup.window.remainder().is_empty())
-            })
+    /// Points the window at the records from `front` on and builds what watches that walk. A
+    /// reverse read moves the window, so this runs again when the forward read resumes.
+    ///
+    /// # Errors
+    ///
+    /// `front` being past the last record, or a frame not decompressing.
+    fn arm(&mut self) -> anyhow::Result<()> {
+        let req = position_iter_span(
+            &mut self.lookup.frame,
+            &mut self.lookup.window,
+            &self.frames,
+            &self.boundary,
+            self.per_frame,
+            &self.label,
+            self.front,
+        )?;
+        let watch = V::watch_owned(
+            &self.judge,
+            &self.frames,
+            self.per_frame,
+            self.front,
+            req.start,
+            req.len,
+        );
+        let cursor = record::RecordUnitCursor::new(watch, req.skip);
+        self.cursor = Some(if self.boundary.tail_is_record() {
+            cursor.including_final_record()
+        } else {
+            cursor.rejecting_final_fragment()
+        });
+        self.armed = true;
+        Ok(())
+    }
+
+    /// How many records frame `frame` holds, judged as a range read judges a frame it walks past.
+    ///
+    /// # Errors
+    ///
+    /// The frame not decompressing, or being refused for what it holds.
+    fn count_frame(&mut self, frame: usize) -> anyhow::Result<u64> {
+        let region = self.frames[frame];
+        self.lookup.walk_to(frame, region, 0)?;
+        let mut watch = V::watch(
+            &self.judge,
+            &self.frames,
+            self.per_frame,
+            frame * self.per_frame,
+            region.0,
+            region.1,
+        );
+        let count = with_find!(&self.boundary, |find| {
+            let mut units = self
+                .lookup
+                .window
+                .records(|data: &[u8]| find(data))
+                .watching(&mut watch)
+                .into_units();
+            if frame == self.frames.len() - 1 {
+                units = if self.boundary.tail_is_record() {
+                    units.including_final_record()
+                } else {
+                    units.rejecting_final_fragment()
+                };
+            }
+            let count = units
+                .by_ref()
+                .try_fold(0u64, |count, record| record.map(|_| count + 1))?;
+            units.finish(usize::MAX)?;
+            Ok::<u64, anyhow::Error>(count)
+        })?;
+        // Counting consumes the final unterminated record too, so the next reverse lookup must
+        // start from the frame rather than treating the count's EOF position as its first record.
+        self.lookup.frame = None;
+        Ok(count)
     }
 }
 
@@ -1123,118 +1648,131 @@ impl<V: Verifier, S: Read + Seek> Iterator for RecordIter<V, S> {
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if !self.armed {
-                if self.frame >= self.frames.len() {
-                    return None;
-                }
-                let positioned = (|| {
-                    let skip = self.lookup.walk_to(
-                        self.frame,
-                        self.frames[self.frame],
-                        self.front_read,
-                    )?;
-                    with_find!(&self.boundary, |find| self
-                        .lookup
-                        .window
-                        .records(|data| find(data))
-                        .watching(V::watch_nothing())
-                        .skip_up_to(skip)
-                        .map(|_| ()))?;
-                    Ok::<_, anyhow::Error>(())
-                })();
-                if let Err(error) = positioned {
-                    self.frame = self.frames.len();
-                    return Some(Err(error));
-                }
-                self.armed = true;
+        if self.spent || self.met_the_reverse_read() {
+            return None;
+        }
+        if !self.armed {
+            if let Err(error) = self.arm() {
+                self.spent = true;
+                return Some(Err(error));
             }
-            if let Some(back) = self.back_left {
-                if self.frame + 1 == self.frames.len() && back == self.lookup.window.walked() {
-                    self.frame = self.frames.len();
-                    self.armed = false;
-                    return None;
+        }
+        let cursor = self.cursor.as_mut().expect("armed iterator has a cursor");
+        match with_find!(&self.boundary, |find| {
+            cursor
+                .next(&self.lookup.window, |data: &[u8]| find(data))
+                .transpose()
+                .map(|run| run.map(|run| self.lookup.window.bytes(&run).to_vec()))
+        }) {
+            Ok(Some(record)) => {
+                self.front += 1;
+                Some(Ok(record))
+            }
+            Ok(None) => {
+                // Nothing whole is left in the span: what the walk stopped in is judged where it
+                // stopped, as it is for a range read that stops short.
+                self.spent = true;
+                match cursor.finish(&self.lookup.window, usize::MAX) {
+                    Ok(()) => None,
+                    Err(error) => Some(Err(error)),
                 }
             }
-            match with_find!(&self.boundary, |find| self
-                .lookup
-                .window
-                .records(find)
-                .watching(V::watch_nothing())
-                .next_owned())
-            {
-                Ok(Some(item)) => return Some(Ok(item)),
-                Err(e) => {
-                    self.frame = self.frames.len();
-                    self.armed = false;
-                    return Some(Err(e));
-                }
-                Ok(None) => {
-                    // Only a fragment, or nothing, is left in this frame: judge what it turned out
-                    // to hold, then drop it and move on as the frame-at-a-time iterator did.
-                    let checked = self.check_frame(self.frame);
-                    if let Err(e) = checked {
-                        self.frame = self.frames.len();
-                        self.armed = false;
-                        return Some(Err(e));
-                    }
-                    self.frame += 1;
-                    self.armed = false;
-                    self.front_read = 0;
-                }
+            Err(error) => {
+                self.spent = true;
+                Some(Err(error))
             }
         }
     }
 }
 
+impl<V: Verifier, S: Read + Seek> RecordIter<V, S> {
+    /// Whether the forward read has reached the record a reverse read handed out last.
+    fn met_the_reverse_read(&self) -> bool {
+        self.back_left
+            .is_some_and(|left| self.front >= self.back_frame * self.per_frame + left as usize)
+    }
+}
+
 impl<V: Verifier, S: Read + Seek> DoubleEndedIterator for RecordIter<V, S> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.armed {
-            self.front_read = self.lookup.window.walked();
-            self.armed = false;
-        }
+        // The window is about to be pointed at the frame this reads from, which is not where the
+        // forward read left it.
+        self.armed = false;
         loop {
-            if self.frame >= self.frames.len() {
+            if self.spent {
                 return None;
             }
-            let frame = self.frames.len() - 1;
-            let item = (|| {
-                let left = match self.back_left {
-                    Some(left) => left,
-                    None => {
-                        self.lookup.walk_to(frame, self.frames[frame], 0)?;
-                        let count = with_find!(&self.boundary, |find| self
-                            .lookup
-                            .window
-                            .records(|data| find(data))
-                            .watching(V::watch_nothing())
-                            .count_records())?;
-                        self.check_frame(frame)?;
-                        count as u64
+            let left = match self.back_left {
+                Some(left) => left,
+                None => match self.count_frame(self.back_frame) {
+                    Ok(count) => {
+                        if self.back_frame == self.frames.len() - 1
+                            && self.front > self.back_frame * self.per_frame + count as usize
+                        {
+                            // Use the forward walk for the error itself, so both directions
+                            // report the same failure for this invalid starting position.
+                            return self.next();
+                        }
+                        self.back_left = Some(count);
+                        count
                     }
-                };
-                if left == 0 || (self.frame == frame && left == self.front_read) {
-                    self.frames.pop();
-                    self.back_left = None;
-                    return Ok(None);
+                    Err(error) => {
+                        self.spent = true;
+                        return Some(Err(error));
+                    }
+                },
+            };
+            if left == 0 {
+                // Nothing left in this frame: on to the one before it, which is counted for the
+                // reason this one was.
+                if self.back_frame == 0 {
+                    self.spent = true;
+                    return None;
                 }
-                let index = left - 1;
-                let skip = self.lookup.walk_to(frame, self.frames[frame], index)?;
-                let record = with_find!(&self.boundary, |find| self
-                    .lookup
-                    .window
-                    .records(|data| find(data))
-                    .watching(V::watch_nothing())
-                    .skip_records(skip)?
-                    .next_owned())?;
-                self.back_left = Some(index);
-                Ok(record)
+                self.back_frame -= 1;
+                self.back_left = None;
+                continue;
+            }
+            let index = left - 1;
+            // The two directions meet: the forward read has already handed out this record.
+            if (self.back_frame * self.per_frame + index as usize) < self.front {
+                self.spent = true;
+                return None;
+            }
+            let item = (|| {
+                let skip =
+                    self.lookup
+                        .walk_to(self.back_frame, self.frames[self.back_frame], index)?;
+                let final_frame =
+                    self.boundary.tail_is_record() && self.back_frame == self.frames.len() - 1;
+                with_find!(&self.boundary, |find| {
+                    let mut units = self
+                        .lookup
+                        .window
+                        .records(|data: &[u8]| find(data))
+                        .watching(V::watch_nothing())
+                        .skip_records(skip)
+                        .into_units();
+                    if final_frame {
+                        units = units.including_final_record();
+                    }
+                    units
+                        .next()
+                        .transpose()
+                        .map(|run| run.map(|run| self.lookup.window.bytes(&run).to_vec()))
+                })
             })();
             match item {
-                Ok(Some(record)) => return Some(Ok(record)),
-                Ok(None) => continue,
+                Ok(Some(record)) => {
+                    self.back_left = Some(index);
+                    return Some(Ok(record));
+                }
+                Ok(None) => {
+                    self.back_left = Some(index);
+                    continue;
+                }
                 Err(error) => {
-                    self.frame = self.frames.len();
+                    self.spent = true;
                     return Some(Err(error));
                 }
             }
