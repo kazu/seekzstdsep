@@ -30,17 +30,20 @@ nushell it runs under; build it against the same release.
 
 ### Which nushell a revision supports
 
-The current revision targets **nushell 0.115**. One build serves one nushell minor: the `Hello`
+The current revision targets **nushell 0.116**. One build serves one nushell minor: the `Hello`
 handshake compares both sides with a semver caret, and under `0.y.z` that requires `y` to match, so
-a plugin built against 0.115 is refused by 0.114 and by 0.116.
+a plugin built against 0.116 is refused by 0.115 and by 0.117.
 
 Which revision to check out for a given nushell is recorded in git tags named `nu_v.<version>`. A
 port is bracketed by two of them, cut on the commits either side of it: `nu_v.0.114` is the last
-commit that builds against 0.114, `nu_v.0.115` the first that builds against 0.115:
+commit that builds against 0.114, `nu_v.0.115` the first that builds against 0.115, and
+`nu_v.0.116` the first that builds against 0.116. The commit immediately before `nu_v.0.116`
+is the last 0.115-compatible revision:
 
 ```sh
 git tag -l 'nu_v*'
 git checkout nu_v.0.114     # the newest revision that still speaks nushell 0.114
+git checkout 'nu_v.0.116^'  # the newest revision that still speaks nushell 0.115
 ```
 
 A tag that has a successor therefore bounds that nushell's stretch of history from above. The

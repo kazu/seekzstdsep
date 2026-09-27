@@ -6,10 +6,8 @@
 
 **Reads any record out of a compressed file without decompressing what comes before it.**
 
-| branch | nushell | tag |
-| --- | --- | --- |
-| `master` | 0.115 | `nu_v.0.115` |
-| `0.114/nu` | 0.114 | `nu_v.0.114` |
+`master` is the sole release branch and targets nushell 0.116. Historical plugin compatibility is
+marked by `nu_v.*` tags.
 
 JSONL, CSV, TSV, logfmt — anything whose records are delimited by a fixed string. It ships as a
 command line tool and as a Rust library.

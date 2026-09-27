@@ -2,14 +2,15 @@
 # real nushell and need `nu` on PATH, so they live in their own target and CI job.
 #
 # Release:
-#   make release V=0.5.0 P_NEW=0.3.1 P_OLD=0.3.0
-# V is the crate, P_NEW the plugin on $(MASTER), P_OLD the plugin on $(NU_OLD).
+#   make release V=0.5.0 P=0.3.1
+# V is the crate and P is the plugin, both released from $(MASTER).
 # The plugin alone, with the crate left at the version it has:
-#   make release-plugin P_NEW=0.3.1 P_OLD=0.3.0
+#   make release-plugin P=0.3.1
 
 REMOTE ?= gh
 MASTER ?= master
-NU_OLD ?= 0.114/nu
+RUSTUP_TOOLCHAIN ?= 1.96.1
+export RUSTUP_TOOLCHAIN
 
 .PHONY: ci hook changelog set-version tag push-release release release-plugin
 
@@ -36,8 +37,7 @@ set-version:
 # edited by hand. With V the commits that have no tag yet are named for the release being cut,
 # which is why `release` runs this before the release commit: `commit -am` picks the file up.
 #
-# Only $(MASTER) carries the crate's `v*` tags, so only there does the log divide into releases.
-# $(NU_OLD) takes the file by cherry-pick, as the rest of the docs do.
+# Only $(MASTER) carries releases, so the log divides into releases on that branch.
 changelog:
 	@if [ -n "$(V)" ]; then git-cliff --tag "v$(V)" -o CHANGELOG.md; else git-cliff -o CHANGELOG.md; fi
 
@@ -70,45 +70,31 @@ push-release:
 	  gh run watch "$$id" --exit-status || exit 1; \
 	done
 
-# Nothing is pushed until both branches are tagged.
+# Release only from $(MASTER); tag and publish both packages from the same commit.
 release:
-	@test -n "$(V)" -a -n "$(P_NEW)" -a -n "$(P_OLD)" || \
-	  { echo 'usage: make release V=<crate> P_NEW=<plugin on $(MASTER)> P_OLD=<plugin on $(NU_OLD)>' >&2; exit 1; }
-	git checkout $(MASTER)
-	$(MAKE) set-version V=$(V) P=$(P_NEW)
+	@test -n "$(V)" -a -n "$(P)" || \
+	  { echo 'usage: make release V=<crate> P=<plugin>' >&2; exit 1; }
+	@test "$$(git branch --show-current)" = "$(MASTER)" || \
+	  { echo 'release must run on $(MASTER)' >&2; exit 1; }
+	@test -z "$$(git status --porcelain)" || \
+	  { echo 'release requires a clean worktree' >&2; exit 1; }
+	$(MAKE) set-version V=$(V) P=$(P)
 	$(MAKE) changelog V=$(V)
 	$(MAKE) ci
-	git commit -am "seekzstdsep: zstdsep: release $(V) and $(P_NEW)"
+	git commit -am "seekzstdsep: release $(V) and $(P)"
 	$(MAKE) tag
-	git checkout $(NU_OLD)
-	$(MAKE) set-version V=$(V) P=$(P_OLD)
-	$(MAKE) ci
-	git commit -am "seekzstdsep: zstdsep: release $(V) and $(P_OLD)"
-	$(MAKE) tag
-	git checkout $(MASTER)
 	$(MAKE) push-release
-	git checkout $(NU_OLD)
-	$(MAKE) push-release
-	git checkout $(MASTER)
 
-# The plugin alone. The crate keeps its number, so `tag` finds `v*` already there and adds only
-# the plugin's, and `push-release` pushes only what points at HEAD. No changelog: the file is
-# divided by the crate's tags, and the plugin's commits land under the next one.
+# The plugin alone. The crate keeps its number, so `tag` adds only the plugin's tag.
+# No changelog: the file is divided by the crate's tags, and plugin commits land under the next one.
 release-plugin:
-	@test -n "$(P_NEW)" -a -n "$(P_OLD)" || \
-	  { echo 'usage: make release-plugin P_NEW=<plugin on $(MASTER)> P_OLD=<plugin on $(NU_OLD)>' >&2; exit 1; }
-	git checkout $(MASTER)
-	$(MAKE) set-version V=$$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[]|select(.name=="seekzstdsep").version') P=$(P_NEW)
+	@test -n "$(P)" || { echo 'usage: make release-plugin P=<plugin>' >&2; exit 1; }
+	@test "$$(git branch --show-current)" = "$(MASTER)" || \
+	  { echo 'release-plugin must run on $(MASTER)' >&2; exit 1; }
+	@test -z "$$(git status --porcelain)" || \
+	  { echo 'release-plugin requires a clean worktree' >&2; exit 1; }
+	$(MAKE) set-version V=$$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[]|select(.name=="seekzstdsep").version') P=$(P)
 	$(MAKE) ci
-	git commit -am "nu_plugin_zstdsep: release $(P_NEW)"
+	git commit -am "nu_plugin_zstdsep: release $(P)"
 	$(MAKE) tag
-	git checkout $(NU_OLD)
-	$(MAKE) set-version V=$$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[]|select(.name=="seekzstdsep").version') P=$(P_OLD)
-	$(MAKE) ci
-	git commit -am "nu_plugin_zstdsep: release $(P_OLD)"
-	$(MAKE) tag
-	git checkout $(MASTER)
 	$(MAKE) push-release
-	git checkout $(NU_OLD)
-	$(MAKE) push-release
-	git checkout $(MASTER)
