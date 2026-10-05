@@ -9,7 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # One plugin build serves one nushell minor.
-  NU_VERSION: 0.116.0
+  NU_VERSION: 0.116.1
 
 jobs:
   build:
