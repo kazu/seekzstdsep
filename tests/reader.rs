@@ -7,6 +7,8 @@ use common::{
     fixture_records, fixture_records_upto, incompressible_records,
 };
 use seekzstdsep::RecordReader;
+#[cfg(any(unix, windows))]
+use seekzstdsep::RecordReaderOpenOptions;
 use tempfile::tempdir;
 
 fn open_fixture(dir: &std::path::Path) -> RecordReader {
@@ -59,6 +61,100 @@ fn open_large_frames(dir: &std::path::Path) -> (Vec<Vec<u8>>, RecordReader) {
     let path = compress_frames(dir, "large", &groups);
     let reader = RecordReader::open(path, b"\n").expect("Failed to open the reader");
     (records, reader)
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_reuses_opened_reader_for_parallel_frames() {
+    let dir = tempdir().unwrap();
+    let (expected, opened) = open_large_frames(dir.path());
+    let per_frame = opened.records_per_frame();
+    let frame_count = opened.frame_count();
+    assert_eq!(per_frame, LARGE_FRAME_PER_FRAME);
+
+    // A worker must be able to start after the path is gone: it uses the open file.
+    #[cfg(unix)]
+    std::fs::remove_file(dir.path().join("large.seek.zst")).unwrap();
+
+    let workers: Vec<_> = (1..frame_count)
+        .map(|frame| {
+            RecordReader::open_with_opts(RecordReaderOpenOptions {
+                opened: &opened,
+                frame,
+            })
+            .unwrap()
+        })
+        .collect();
+    assert!(
+        RecordReader::open_with_opts(RecordReaderOpenOptions {
+            opened: &opened,
+            frame: frame_count,
+        })
+        .is_err()
+    );
+    let handles: Vec<_> = workers
+        .into_iter()
+        .map(|reader| {
+            std::thread::spawn(move || reader.into_records().collect::<anyhow::Result<Vec<_>>>())
+        })
+        .collect();
+    let mut actual = opened
+        .into_records()
+        .take(per_frame)
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    for handle in handles {
+        actual.extend(handle.join().unwrap().unwrap());
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_keeps_unterminated_tail_in_last_frame() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "tail",
+        &[b"a\nb\n".to_vec(), b"c\nd\ntail".to_vec()],
+    );
+    let opened = RecordReader::open(path, b"\n").unwrap();
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        opened: &opened,
+        frame: 1,
+    })
+    .unwrap();
+    let actual = worker
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(actual, [b"c\n".to_vec(), b"d\n".to_vec(), b"tail".to_vec()]);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_does_not_read_first_frame_again() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "corrupt-first",
+        &[b"a\nb\n".to_vec(), b"c\nd\n".to_vec()],
+    );
+    let opened = RecordReader::open(path.clone(), b"\n").unwrap();
+    let mut compressed = std::fs::read(&path).unwrap();
+    compressed[0] = 0;
+    std::fs::write(path, compressed).unwrap();
+
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        opened: &opened,
+        frame: 1,
+    })
+    .unwrap();
+    let actual = worker
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(actual, [b"c\n".to_vec(), b"d\n".to_vec()]);
 }
 
 fn assert_reads(reader: &mut RecordReader, records: &[Vec<u8>], index: usize) {

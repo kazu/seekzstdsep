@@ -231,6 +231,10 @@ impl<R: Read> Reader<R> {
         &mut self.window.get_mut().source
     }
 
+    pub(crate) fn source(&self) -> Ref<'_, R> {
+        Ref::map(self.window.borrow(), |window| &window.source)
+    }
+
     /// The source, leaving the window behind. For a caller that reads the rest another way.
     pub(crate) fn into_source(self) -> R {
         self.window.into_inner().source

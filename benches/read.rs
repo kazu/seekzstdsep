@@ -20,6 +20,8 @@ use std::hint::black_box;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
+#[cfg(any(unix, windows))]
+use seekzstdsep::RecordReaderOpenOptions;
 use seekzstdsep::seekzstdsep_lib::{
     cnt_of_separetor_in_frame, records_between_by_separator_in_frame, seek_table_decomp_frames,
 };
@@ -260,6 +262,26 @@ fn decoder(path: &PathBuf) -> Decoder<'static, std::fs::File> {
 fn read(c: &mut Criterion) {
     let (_dir, path) = fixture();
     let finder = Finder::new(SEPARATOR);
+
+    #[cfg(any(unix, windows))]
+    {
+        let opened = RecordReader::open(path.clone(), SEPARATOR).unwrap();
+        let frame = opened.frame_count() / 2;
+        c.bench_function("open/initial", |b| {
+            b.iter(|| black_box(RecordReader::open(black_box(path.clone()), SEPARATOR).unwrap()));
+        });
+        c.bench_function("open/with-opts-from-opened", |b| {
+            b.iter(|| {
+                black_box(
+                    RecordReader::open_with_opts(RecordReaderOpenOptions {
+                        opened: &opened,
+                        frame: black_box(frame),
+                    })
+                    .unwrap(),
+                );
+            });
+        });
+    }
 
     // The frame in the middle of the file, and how many records it holds.
     let frames = {
@@ -582,9 +604,44 @@ fn read(c: &mut Criterion) {
     }
 }
 
+fn open_with_opts_scaling(c: &mut Criterion) {
+    #[cfg(any(unix, windows))]
+    {
+        let mut group = c.benchmark_group("open_with_opts/frame_count");
+        for frame_count in [16usize, 16_384] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("many-frames.seek.zst");
+            let mut encoder = zeekstd::Encoder::new(std::fs::File::create(&path).unwrap()).unwrap();
+            for frame in 0..frame_count {
+                if frame > 0 {
+                    encoder.end_frame().unwrap();
+                }
+                encoder.write_all(b"a\nb\n").unwrap();
+            }
+            encoder.finish().unwrap();
+            let opened = RecordReader::open(path, SEPARATOR).unwrap();
+            assert_eq!(opened.frame_count(), frame_count);
+            group.bench_function(BenchmarkId::from_parameter(frame_count), |b| {
+                b.iter(|| {
+                    black_box(
+                        RecordReader::open_with_opts(RecordReaderOpenOptions {
+                            opened: &opened,
+                            frame: black_box(frame_count / 2),
+                        })
+                        .unwrap(),
+                    );
+                });
+            });
+        }
+        group.finish();
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = c;
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
-    targets = read
+    targets = read, open_with_opts_scaling
 }
 criterion_main!(benches);
