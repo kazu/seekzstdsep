@@ -1422,18 +1422,17 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
         self.original_frame_count.unwrap_or(self.frames.len())
     }
 
-    /// Decompressed byte length of a physical frame, indexed from this reader's first frame.
+    /// Decompressed byte length of a physical frame, indexed from the start of the file.
     /// Returns `None` when `frame` is out of range.
     pub fn frame_decompressed_size(&self, frame: usize) -> Option<u64> {
         if let Some(remaining) = self.original_frame_count {
-            if frame >= remaining {
+            let ends = self.lookup.window.frame_ends();
+            if frame > ends.len() {
                 return None;
             }
-            let ends = self.lookup.window.frame_ends();
             let first = ends.len() + 1 - remaining;
-            let index = first + frame;
-            let start = if index == 0 { 0 } else { ends[index - 1] };
-            let end = ends.get(index).copied().unwrap_or_else(|| {
+            let start = if frame == 0 { 0 } else { ends[frame - 1] };
+            let end = ends.get(frame).copied().unwrap_or_else(|| {
                 let base = if first == 0 { 0 } else { ends[first - 1] };
                 base + self.frames.last().unwrap().0 + self.frames.last().unwrap().1
             });

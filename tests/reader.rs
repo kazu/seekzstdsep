@@ -258,15 +258,16 @@ fn open_with_opts_verifying_checks_each_physical_frame() {
         start_frame: 1,
     })
     .unwrap();
-    assert_eq!(worker.frame_decompressed_size(0), Some(2));
-    assert_eq!(worker.frame_decompressed_size(1), Some(6));
-    assert_eq!(worker.frame_decompressed_size(2), None);
+    assert_eq!(worker.frame_decompressed_size(0), Some(4));
+    assert_eq!(worker.frame_decompressed_size(1), Some(2));
+    assert_eq!(worker.frame_decompressed_size(2), Some(6));
+    assert_eq!(worker.frame_decompressed_size(3), None);
     let mut verified = worker.verifying();
     assert_eq!(
-        (0..=2)
+        (0..=3)
             .map(|frame| verified.frame_decompressed_size(frame))
             .collect::<Vec<_>>(),
-        [Some(2), Some(6), None]
+        [Some(4), Some(2), Some(6), None]
     );
     let error = verified.records(0, 4).unwrap_err();
     assert!(error.to_string().contains("frame 0"), "{error}");
