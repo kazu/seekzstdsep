@@ -270,15 +270,61 @@ fn read(c: &mut Criterion) {
         c.bench_function("open/initial", |b| {
             b.iter(|| black_box(RecordReader::open(black_box(path.clone()), SEPARATOR).unwrap()));
         });
+        c.bench_function("open/with-opts-initial", |b| {
+            b.iter(|| {
+                black_box(
+                    RecordReader::open_with_opts(RecordReaderOpenOptions {
+                        path: Some(black_box(path.clone())),
+                        boundary: Some(seekzstdsep::find::Boundary::Separator(SEPARATOR.to_vec())),
+                        ..RecordReaderOpenOptions::new()
+                    })
+                    .unwrap(),
+                )
+            });
+        });
         c.bench_function("open/with-opts-from-opened", |b| {
             b.iter(|| {
                 black_box(
                     RecordReader::open_with_opts(RecordReaderOpenOptions {
-                        opened: &opened,
-                        frame: black_box(frame),
+                        path: None,
+                        boundary: None,
+                        reuse: Some(&opened),
+                        start_frame: black_box(frame),
                     })
                     .unwrap(),
                 );
+            });
+        });
+        let mut direct = RecordReader::open(path.clone(), SEPARATOR).unwrap();
+        let mut reused = RecordReader::open_with_opts(RecordReaderOpenOptions {
+            path: None,
+            boundary: None,
+            reuse: Some(&opened),
+            start_frame: frame,
+        })
+        .unwrap();
+        let per_frame = opened.records_per_frame();
+        let count = per_frame * 2;
+        c.bench_function("read/from-frame-direct", |b| {
+            b.iter(|| {
+                black_box(
+                    direct
+                        .records_from(frame * per_frame)
+                        .take(count)
+                        .map(|record| record.unwrap().len())
+                        .sum::<usize>(),
+                )
+            });
+        });
+        c.bench_function("read/from-frame-reused", |b| {
+            b.iter(|| {
+                black_box(
+                    reused
+                        .records_from(0)
+                        .take(count)
+                        .map(|record| record.unwrap().len())
+                        .sum::<usize>(),
+                )
             });
         });
     }
@@ -625,8 +671,10 @@ fn open_with_opts_scaling(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(
                         RecordReader::open_with_opts(RecordReaderOpenOptions {
-                            opened: &opened,
-                            frame: black_box(frame_count / 2),
+                            path: None,
+                            boundary: None,
+                            reuse: Some(&opened),
+                            start_frame: black_box(frame_count / 2),
                         })
                         .unwrap(),
                     );

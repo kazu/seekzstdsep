@@ -10,6 +10,7 @@
 
 use std::cell::{Ref, RefCell};
 use std::io::{Read, Seek, SeekFrom, Take, Write};
+use std::sync::Arc;
 
 use crate::seekzstdsep_lib::{READ_BUF_SIZE, READ_FRAME_BUF_SIZE};
 
@@ -164,7 +165,8 @@ struct Window<R> {
     /// Absolute decompressed position of the first byte in `buf`.
     offset: u64,
     /// Nonfinal frame ends. An unfinished record must not cross one.
-    frame_ends: Vec<u64>,
+    frame_ends: Arc<[u64]>,
+    frame_end_base: u64,
     next_frame_end: usize,
     /// What the source reads into, [`READ_FRAME_BUF_SIZE`] until a record longer than that grows
     /// it.
@@ -212,7 +214,8 @@ impl<R: Read> Reader<R> {
             window: RefCell::new(Window {
                 source,
                 offset: 0,
-                frame_ends: Vec::new(),
+                frame_ends: Arc::from([]),
+                frame_end_base: 0,
                 next_frame_end: 0,
                 buf: vec![0u8; READ_FRAME_BUF_SIZE],
                 filled: 0,
@@ -319,9 +322,21 @@ impl<S: Read + Seek> Reader<Take<S>> {
         self
     }
 
+    pub(crate) fn frame_ends(&self) -> Arc<[u64]> {
+        Arc::clone(&self.window.borrow().frame_ends)
+    }
+
+    pub(crate) fn use_frame_ends(&mut self, ends: Arc<[u64]>, base: u64, first: usize) {
+        let window = self.window.get_mut();
+        window.frame_ends = ends;
+        window.frame_end_base = base;
+        window.next_frame_end = first;
+    }
+
     pub(crate) fn without_frame_ends(&mut self) {
         let window = self.window.get_mut();
-        window.frame_ends.clear();
+        window.frame_ends = Arc::from([]);
+        window.frame_end_base = 0;
         window.next_frame_end = 0;
     }
 
@@ -333,7 +348,9 @@ impl<S: Read + Seek> Reader<Take<S>> {
         window.source.set_limit(len);
         window.clear();
         window.offset = start;
-        window.next_frame_end = window.frame_ends.partition_point(|end| *end <= start);
+        window.next_frame_end = window
+            .frame_ends
+            .partition_point(|end| *end <= start + window.frame_end_base);
         Ok(())
     }
 }
@@ -397,7 +414,7 @@ impl<R: Read> Window<R> {
         while self
             .frame_ends
             .get(self.next_frame_end)
-            .is_some_and(|end| *end == loaded_end)
+            .is_some_and(|end| *end - self.frame_end_base == loaded_end)
         {
             if self.pos != self.filled {
                 anyhow::bail!("incomplete record at nonfinal frame boundary");
@@ -418,7 +435,7 @@ impl<R: Read> Window<R> {
             .frame_ends
             .get(self.next_frame_end)
             .map_or(available, |end| {
-                (*end - loaded_end).min(available as u64) as usize
+                (*end - self.frame_end_base - loaded_end).min(available as u64) as usize
             });
         let read = self
             .source

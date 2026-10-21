@@ -1293,6 +1293,13 @@ pub fn old_cnt_of_separetor_in_frame_via_buf(
 pub fn seek_table_decomp_frames<'a, S: zeekstd::Seekable>(
     decoder: &Decoder<'a, S>,
 ) -> Option<Vec<(u64, u64)>> {
+    seek_table_decomp_frames_with(decoder, |_, _| {})
+}
+
+pub(crate) fn seek_table_decomp_frames_with<'a, S: zeekstd::Seekable>(
+    decoder: &Decoder<'a, S>,
+    mut on_frame: impl FnMut(u32, u64),
+) -> Option<Vec<(u64, u64)>> {
     let seek_table = decoder.seek_table();
     let n_u32 = seek_table.num_frames();
     if n_u32 == 0 {
@@ -1309,6 +1316,7 @@ pub fn seek_table_decomp_frames<'a, S: zeekstd::Seekable>(
         let start = prev_end;
         let len = end.saturating_sub(start);
         out.push((start, len));
+        on_frame(i, len);
         prev_end = end;
     }
     Some(out)
