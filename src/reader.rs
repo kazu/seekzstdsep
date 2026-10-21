@@ -7,15 +7,16 @@
 //! The reader inherits the same-count-per-frame invariant that it locates records by: a file
 //! compressed without it is read at the wrong offsets, and says so only under
 //! [`RecordReaderVerify`]. See `docs/format.md`.
+#[cfg(any(unix, windows))]
+use std::io;
 use std::{
     borrow::Borrow,
     cell::Ref,
     fs::File,
     io::{Read, Seek, SeekFrom, Take, Write},
     path::PathBuf,
+    sync::Arc,
 };
-#[cfg(any(unix, windows))]
-use std::{io, sync::Arc};
 
 use anyhow::Context;
 use memchr::memmem::Finder;
@@ -201,7 +202,8 @@ pub struct RecordReader<V: Verifier = NoVerify, S = File> {
 /// The returned reader owns its decoder and reads only `frame`. It does not borrow `opened`.
 #[cfg(any(unix, windows))]
 pub struct RecordReaderOpenOptions<'a> {
-    /// A reader already opened from a file with [`RecordReader::open`].
+    /// A reader already opened from a file with [`RecordReader::open`] or
+    /// [`RecordReader::open_with`].
     pub opened: &'a RecordReader,
     /// Zero-based frame number. The returned reader uses frame-local record indexes.
     pub frame: usize,
@@ -327,7 +329,7 @@ enum Boundary {
         finder: Finder<'static>,
         separator: Vec<u8>,
     },
-    Finder(BoxFinder),
+    Finder(Arc<dyn Fn(&[u8]) -> Option<usize> + Send + Sync>),
 }
 
 impl Boundary {
@@ -842,7 +844,8 @@ impl RecordReader<NoVerify> {
         Self::from_file(path, file, separator)
     }
 
-    /// Builds a frame-local reader from one already opened with [`Self::open`].
+    /// Builds a frame-local reader from one already opened with [`Self::open`] or
+    /// [`Self::open_with`].
     ///
     /// It reuses the open file and seek table, performs no path open, and decodes only the
     /// selected frame. Each returned reader has its own decoder and can be moved to a thread.
@@ -858,9 +861,12 @@ impl RecordReader<NoVerify> {
         let shared = opened.shared.as_ref().ok_or_else(|| {
             anyhow::anyhow!("open_with_opts requires a reader opened from a file")
         })?;
-        let separator = match &opened.boundary {
-            Boundary::Separator { separator, .. } => separator.clone(),
-            Boundary::Finder(_) => anyhow::bail!("open_with_opts requires a separator"),
+        let boundary = match &opened.boundary {
+            Boundary::Separator { separator, .. } => Boundary::Separator {
+                finder: Finder::new(separator).into_owned(),
+                separator: separator.clone(),
+            },
+            Boundary::Finder(find) => Boundary::Finder(Arc::clone(find)),
         };
         let frame = u32::try_from(opts.frame)?;
         let source = opened.lookup.window.source();
@@ -885,10 +891,7 @@ impl RecordReader<NoVerify> {
             label: opened.label.clone(),
             lookup: Lookup::new(decoder, &frames),
             frames,
-            boundary: Boundary::Separator {
-                finder: Finder::new(&separator).into_owned(),
-                separator,
-            },
+            boundary,
             sep_cnt: opened.sep_cnt,
             judge: (),
             shared: None,
@@ -988,7 +991,15 @@ impl RecordReader<NoVerify> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn from_file_with(path: PathBuf, file: File, find: BoxFinder) -> anyhow::Result<Self> {
-        Self::from_reader(file, &path.to_string_lossy(), find::Boundary::Finder(find))
+        #[cfg(any(unix, windows))]
+        let shared_file = Arc::new(file.try_clone()?);
+        let mut reader =
+            Self::from_reader(file, &path.to_string_lossy(), find::Boundary::Finder(find))?;
+        #[cfg(any(unix, windows))]
+        {
+            reader.shared = Some(SharedFile { file: shared_file });
+        }
+        Ok(reader)
     }
 }
 
@@ -1030,7 +1041,7 @@ impl<S: Read + Seek> RecordReader<NoVerify, S> {
                     separator,
                 }
             }
-            find::Boundary::Finder(find) => Boundary::Finder(find),
+            find::Boundary::Finder(find) => Boundary::Finder(Arc::from(find)),
         };
         let decoder = Decoder::new(source)
             .with_context(|| format!("failed to open {label} as a seekable zst"))?;

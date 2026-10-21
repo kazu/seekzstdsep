@@ -133,6 +133,28 @@ fn open_with_opts_keeps_unterminated_tail_in_last_frame() {
 
 #[test]
 #[cfg(any(unix, windows))]
+fn open_with_opts_accepts_finder_and_iterates_selected_frame() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "fixed-finder",
+        &[b"aaabbb".to_vec(), b"cccddd".to_vec()],
+    );
+    let opened = RecordReader::open_with(path, Box::new(seekzstdsep::find::by_fixed(3))).unwrap();
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        opened: &opened,
+        frame: 1,
+    })
+    .unwrap();
+    let actual = worker
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(actual, [b"ccc".to_vec(), b"ddd".to_vec()]);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
 fn open_with_opts_does_not_read_first_frame_again() {
     let dir = tempdir().unwrap();
     let path = compress_frames(
