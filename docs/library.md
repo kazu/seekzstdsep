@@ -1,7 +1,7 @@
 # Library
 
-The API in the order you meet it: compress, read back, edit in place. `examples/` holds the
-same calls as programs that are compiled by `cargo test`, so they are the copy that cannot rot.
+The API in the order you meet it: compress, read back, edit in place. `examples/`
+contains runnable versions of the main workflows, compiled by `cargo test`.
 
 ## Compress
 
@@ -34,9 +34,10 @@ frame 0 happens to hold, so it answers with the wrong records;
 read placed by a frame it never reaches is still answered with the wrong records: nothing counted
 that frame.
 
-## Read a record range, and the frame layout
+## Read records with `RecordReader`
 
-Reading a record range back needs a real file, because it seeks:
+`RecordReader` seeks within a file. Open it with a separator, then read a record range or inspect
+the physical frame layout:
 
 ```rust,no_run
 use seekzstdsep::{RecordReader, inspect};
@@ -45,14 +46,147 @@ use std::path::PathBuf;
 let path = PathBuf::from("events.jsonl.seek.zst");
 
 // Records starting at index 10000.
-let records: Vec<u8> = RecordReader::open(path.clone(), b"\n").unwrap().records(10000, 3).unwrap();
+let mut reader = RecordReader::open(path.clone(), b"\n").unwrap();
+let records: Vec<u8> = reader.records(10000, 3).unwrap();
 print!("{}", String::from_utf8_lossy(&records));
+
+println!("{} frames", reader.frame_count());
+println!("{} records per full frame", reader.records_per_frame());
+if let Some(bytes) = reader.frame_decompressed_size(0) {
+    println!("frame 0 expands to {bytes} bytes");
+}
 
 // Per-frame layout.
 for frame in inspect(path, b"\n").unwrap() {
     println!("{} records in {} compressed bytes", frame.cnt_of_sep, frame.comp_size);
 }
 ```
+
+`frame_count()` is the total number of physical frames in the original file.
+`frame_decompressed_size(frame)` takes an absolute, zero-based frame number and returns `None` if
+it is out of range. The size is the byte count after decompression; getting it does not decompress
+the frame. `records_per_frame()` is counted from frame 0 when the reader opens.
+
+### Iterate records
+
+Choose an iterator by whether it should borrow bytes from the reader or own each record:
+
+| Method | Items | Starting point |
+| --- | --- | --- |
+| `records_from(index)` | Borrowed record bytes | Record index from this reader's start |
+| `into_records_from(index)` | Owned `Vec<u8>` | Record index from this reader's start |
+| `into_records()` | Owned `Vec<u8>` | This reader's first frame |
+
+All three iterators read lazily. Use `take(n)` to stop after `n` records. A borrowed record from
+`records_from` must be dropped before requesting the next item; copy it if it must outlive the
+iteration. `into_records` also supports `rev()` for reading backwards. For a reader opened with
+`start_frame > 0`, record index 0 is the first record in that frame.
+
+```rust,no_run
+use seekzstdsep::RecordReader;
+use std::path::PathBuf;
+
+fn main() -> anyhow::Result<()> {
+    let path = PathBuf::from("events.jsonl.seek.zst");
+    let mut reader = RecordReader::open(path.clone(), b"\n")?;
+    for record in reader.records_from(10_000).take(3) {
+        println!("{}", String::from_utf8_lossy(&record?));
+    }
+
+    let owned: Vec<Vec<u8>> = RecordReader::open(path, b"\n")?
+        .into_records_from(10_000)
+        .take(3)
+        .collect::<anyhow::Result<_>>()?;
+    Ok(())
+}
+```
+
+### Reuse one open file across readers
+
+On Unix and Windows, `open_with_opts` accepts both a new file and an existing `RecordReader`.
+Open the file once, then create readers with independent read positions that share its open file
+and frame metadata. `start_frame` is an absolute, zero-based physical frame number. The new reader
+starts there and `into_records()` continues through the end of the file.
+
+The example below assumes full frames have a uniform record count, as with `true` in the
+compression example above. `records_per_frame()` reports frame 0's count; with varying counts,
+`take(per_frame)` does not necessarily stop at the next physical frame boundary.
+
+```rust,no_run
+use seekzstdsep::{RecordReader, RecordReaderOpenOptions, find::Boundary};
+use std::path::PathBuf;
+
+fn main() -> anyhow::Result<()> {
+    let opened = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: Some(PathBuf::from("events.jsonl.seek.zst")),
+        boundary: Some(Boundary::Separator(b"\n".to_vec())),
+        ..RecordReaderOpenOptions::new()
+    })?;
+
+    let start_frame = opened.frame_count() / 2;
+    let per_frame = opened.records_per_frame();
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame,
+    })?;
+    assert_eq!(worker.frame_count(), opened.frame_count());
+    assert_eq!(
+        worker.frame_decompressed_size(start_frame),
+        opened.frame_decompressed_size(start_frame),
+    );
+    assert_eq!(worker.frame_decompressed_size(0), opened.frame_decompressed_size(0));
+
+    // With uniform frame counts, `take` reads this frame's records.
+    // Omit it to read through EOF.
+    let records: Vec<Vec<u8>> = worker.into_records()
+        .take(per_frame)
+        .collect::<anyhow::Result<_>>()?;
+
+    let checked = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame,
+    })?.verifying();
+    let checked_records: Vec<Vec<u8>> = checked.into_records()
+        .take(per_frame)
+        .collect::<anyhow::Result<_>>()?;
+    assert_eq!(records, checked_records);
+
+    // Construct workers before sending them to threads; no reader lock is needed.
+    let workers = (0..opened.frame_count())
+        .map(|start_frame| RecordReader::open_with_opts(RecordReaderOpenOptions {
+            path: None,
+            boundary: None,
+            reuse: Some(&opened),
+            start_frame,
+        }))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let handles: Vec<_> = workers.into_iter().map(|worker| {
+        std::thread::spawn(move || {
+            worker.into_records().take(per_frame).collect::<anyhow::Result<Vec<_>>>()
+        })
+    }).collect();
+    for handle in handles {
+        let frame_records = handle.join().expect("worker panicked")?;
+        println!("{} records", frame_records.len());
+    }
+    Ok(())
+}
+```
+
+Create separate workers before moving them into threads. Each worker has its own decoder and read
+position; reusing a reader does not reopen the path or parse the seek table again. A new file can
+also set `start_frame` in the same options, or use a finder instead of a separator by setting
+`boundary` to `Boundary::Finder(Box::new(find::by_fixed(3)))`. Reused readers keep the original
+boundary; leave `path` and `boundary` as `None` when setting `reuse`. An out-of-range
+`start_frame` returns an error.
+
+Call `.verifying()` before iteration to check the record count and record ending at each physical
+frame boundary that the read reaches. This also works on a reused reader; verification state is
+private to each reader while the frame metadata stays shared.
 
 ## Truncate
 

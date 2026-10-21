@@ -7,6 +7,8 @@ use common::{
     fixture_records, fixture_records_upto, incompressible_records,
 };
 use seekzstdsep::RecordReader;
+#[cfg(any(unix, windows))]
+use seekzstdsep::RecordReaderOpenOptions;
 use tempfile::tempdir;
 
 fn open_fixture(dir: &std::path::Path) -> RecordReader {
@@ -59,6 +61,318 @@ fn open_large_frames(dir: &std::path::Path) -> (Vec<Vec<u8>>, RecordReader) {
     let path = compress_frames(dir, "large", &groups);
     let reader = RecordReader::open(path, b"\n").expect("Failed to open the reader");
     (records, reader)
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_reuses_opened_reader_for_parallel_frames() {
+    let dir = tempdir().unwrap();
+    let (expected, opened) = open_large_frames(dir.path());
+    let per_frame = opened.records_per_frame();
+    let frame_count = opened.frame_count();
+    assert_eq!(per_frame, LARGE_FRAME_PER_FRAME);
+
+    // A worker must be able to start after the path is gone: it uses the open file.
+    #[cfg(unix)]
+    std::fs::remove_file(dir.path().join("large.seek.zst")).unwrap();
+
+    let workers: Vec<_> = (1..frame_count)
+        .map(|frame| {
+            RecordReader::open_with_opts(RecordReaderOpenOptions {
+                path: None,
+                boundary: None,
+                reuse: Some(&opened),
+                start_frame: frame,
+            })
+            .unwrap()
+        })
+        .collect();
+    assert!(
+        RecordReader::open_with_opts(RecordReaderOpenOptions {
+            path: None,
+            boundary: None,
+            reuse: Some(&opened),
+            start_frame: frame_count,
+        })
+        .is_err()
+    );
+    let handles: Vec<_> = workers
+        .into_iter()
+        .map(|reader| {
+            std::thread::spawn(move || {
+                reader
+                    .into_records()
+                    .take(per_frame)
+                    .collect::<anyhow::Result<Vec<_>>>()
+            })
+        })
+        .collect();
+    let mut actual = opened
+        .into_records()
+        .take(per_frame)
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    for handle in handles {
+        actual.extend(handle.join().unwrap().unwrap());
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_keeps_unterminated_tail_in_last_frame() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "tail",
+        &[b"a\nb\n".to_vec(), b"c\nd\ntail".to_vec()],
+    );
+    let opened = RecordReader::open(path, b"\n").unwrap();
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame: 1,
+    })
+    .unwrap();
+    let actual = worker
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(actual, [b"c\n".to_vec(), b"d\n".to_vec(), b"tail".to_vec()]);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_accepts_finder_across_frames() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "fixed-finder",
+        &[b"aaabbb".to_vec(), b"cccddd".to_vec(), b"eeefff".to_vec()],
+    );
+    let opened = RecordReader::open_with(path, Box::new(seekzstdsep::find::by_fixed(3))).unwrap();
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame: 1,
+    })
+    .unwrap();
+    let actual = worker
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        actual,
+        [
+            b"ccc".to_vec(),
+            b"ddd".to_vec(),
+            b"eee".to_vec(),
+            b"fff".to_vec()
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_iterates_from_selected_frame_to_end() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "from-frame",
+        &[b"a\nb\n".to_vec(), b"c\nd\n".to_vec(), b"e\nf\n".to_vec()],
+    );
+    let opened = RecordReader::open(path, b"\n").unwrap();
+    let mut worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame: 1,
+    })
+    .unwrap();
+    assert_eq!(worker.frame_count(), 3);
+    assert_eq!(worker.records_per_frame(), 2);
+    assert_eq!(worker.record(2).unwrap(), Some(b"e\n".to_vec()));
+    let actual = worker
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        actual,
+        [
+            b"c\n".to_vec(),
+            b"d\n".to_vec(),
+            b"e\n".to_vec(),
+            b"f\n".to_vec()
+        ]
+    );
+    let reverse = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame: 1,
+    })
+    .unwrap()
+    .into_records()
+    .rev()
+    .collect::<anyhow::Result<Vec<_>>>()
+    .unwrap();
+    assert_eq!(reverse, actual.iter().rev().cloned().collect::<Vec<_>>());
+    let verified = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame: 1,
+    })
+    .unwrap()
+    .verifying()
+    .into_records()
+    .collect::<anyhow::Result<Vec<_>>>()
+    .unwrap();
+    assert_eq!(verified, actual);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_verifying_checks_each_physical_frame() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "verify-physical-frames",
+        &[b"a\nb\n".to_vec(), b"c\n".to_vec(), b"d\ne\nf\n".to_vec()],
+    );
+    let mut direct = RecordReader::open(path.clone(), b"\n").unwrap().verifying();
+    assert!(direct.records(2, 4).is_err());
+    let opened = RecordReader::open(path, b"\n").unwrap();
+    assert_eq!(
+        (0..=3)
+            .map(|frame| opened.frame_decompressed_size(frame))
+            .collect::<Vec<_>>(),
+        [Some(4), Some(2), Some(6), None]
+    );
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame: 1,
+    })
+    .unwrap();
+    assert_eq!(worker.frame_count(), 3);
+    assert_eq!(worker.frame_decompressed_size(0), Some(4));
+    assert_eq!(worker.frame_decompressed_size(1), Some(2));
+    assert_eq!(worker.frame_decompressed_size(2), Some(6));
+    assert_eq!(worker.frame_decompressed_size(3), None);
+    let mut verified = worker.verifying();
+    assert_eq!(verified.frame_count(), 3);
+    assert_eq!(
+        (0..=3)
+            .map(|frame| verified.frame_decompressed_size(frame))
+            .collect::<Vec<_>>(),
+        [Some(4), Some(2), Some(6), None]
+    );
+    let error = verified.records(0, 4).unwrap_err();
+    assert!(error.to_string().contains("frame 0"), "{error}");
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_opens_file_with_finder_then_frame() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "finder-options",
+        &[b"aaabbb".to_vec(), b"cccddd".to_vec()],
+    );
+    let opened = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: Some(path),
+        boundary: Some(seekzstdsep::find::Boundary::Finder(Box::new(
+            seekzstdsep::find::by_fixed(3),
+        ))),
+        ..RecordReaderOpenOptions::new()
+    })
+    .unwrap();
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame: 1,
+    })
+    .unwrap();
+    let actual = worker
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(actual, [b"ccc".to_vec(), b"ddd".to_vec()]);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_opens_file_with_separator() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "separator-options",
+        &[b"a\nb\n".to_vec(), b"c\nd\n".to_vec()],
+    );
+    let reader = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: Some(path.clone()),
+        boundary: Some(seekzstdsep::find::Boundary::Separator(b"\n".to_vec())),
+        ..RecordReaderOpenOptions::new()
+    })
+    .unwrap();
+    let actual = reader
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        actual,
+        [
+            b"a\n".to_vec(),
+            b"b\n".to_vec(),
+            b"c\n".to_vec(),
+            b"d\n".to_vec()
+        ]
+    );
+    let from_second = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: Some(path),
+        boundary: Some(seekzstdsep::find::Boundary::Separator(b"\n".to_vec())),
+        start_frame: 1,
+        ..RecordReaderOpenOptions::new()
+    })
+    .unwrap()
+    .into_records()
+    .collect::<anyhow::Result<Vec<_>>>()
+    .unwrap();
+    assert_eq!(from_second, [b"c\n".to_vec(), b"d\n".to_vec()]);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_does_not_read_first_frame_again() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "corrupt-first",
+        &[b"a\nb\n".to_vec(), b"c\nd\n".to_vec()],
+    );
+    let opened = RecordReader::open(path.clone(), b"\n").unwrap();
+    let mut compressed = std::fs::read(&path).unwrap();
+    compressed[0] = 0;
+    std::fs::write(path, compressed).unwrap();
+
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame: 1,
+    })
+    .unwrap();
+    let actual = worker
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(actual, [b"c\n".to_vec(), b"d\n".to_vec()]);
 }
 
 fn assert_reads(reader: &mut RecordReader, records: &[Vec<u8>], index: usize) {

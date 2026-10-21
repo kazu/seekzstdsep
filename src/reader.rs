@@ -7,20 +7,27 @@
 //! The reader inherits the same-count-per-frame invariant that it locates records by: a file
 //! compressed without it is read at the wrong offsets, and says so only under
 //! [`RecordReaderVerify`]. See `docs/format.md`.
+#[cfg(any(unix, windows))]
+use std::io;
 use std::{
     borrow::Borrow,
     cell::Ref,
     fs::File,
     io::{Read, Seek, SeekFrom, Take, Write},
     path::PathBuf,
+    sync::Arc,
 };
 
 use anyhow::Context;
 use memchr::memmem::Finder;
 use zeekstd::Decoder;
+#[cfg(any(unix, windows))]
+use zeekstd::{DecodeOptions, SeekTable};
 
 use crate::find::{self, BoxFinder};
 use crate::record;
+#[cfg(any(unix, windows))]
+use crate::seekzstdsep_lib::seek_table_decomp_frames_with;
 use crate::seekzstdsep_lib::{count_records_in_frame, seek_table_decomp_frames};
 
 /// The decoder, and the window records are read through.
@@ -39,6 +46,21 @@ impl<S: Read + Seek> Lookup<S> {
     fn new(decoder: Decoder<'static, S>, frames: &[(u64, u64)]) -> Self {
         Self {
             window: record::Reader::new(decoder.take(0)).with_frame_ends(frames),
+            frame: None,
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    fn with_shared_frame_ends(
+        decoder: Decoder<'static, S>,
+        ends: Arc<[u64]>,
+        base: u64,
+        first: usize,
+    ) -> Self {
+        let mut window = record::Reader::new(decoder.take(0));
+        window.use_frame_ends(ends, base, first);
+        Self {
+            window,
             frame: None,
         }
     }
@@ -187,7 +209,102 @@ pub struct RecordReader<V: Verifier = NoVerify, S = File> {
     /// Records in frame 0, taken as the record count of every frame. Never 0: every record range
     /// divides by it, and [`Self::from_reader`] refuses a boundary that leaves it 0.
     sep_cnt: usize,
+    original_frame_count: Option<usize>,
+    original_records_per_frame: Option<usize>,
     judge: V::Judge,
+    #[cfg(any(unix, windows))]
+    shared: Option<SharedFile>,
+    #[cfg(any(unix, windows))]
+    max_frame_comp: u64,
+    #[cfg(any(unix, windows))]
+    max_frame_decomp: u64,
+}
+
+/// Options for opening a file or reusing a reader from a frame onward.
+#[cfg(any(unix, windows))]
+pub struct RecordReaderOpenOptions<'a, S = File> {
+    /// File to open when `reuse` is absent.
+    pub path: Option<PathBuf>,
+    /// Record boundary for a newly opened file. Reused readers retain their boundary.
+    pub boundary: Option<find::Boundary>,
+    /// Reader whose file and seek table are reused without reopening the path.
+    pub reuse: Option<&'a RecordReader<NoVerify, S>>,
+    /// Zero-based first frame to read. Reading continues to the end of the file.
+    pub start_frame: usize,
+}
+
+#[cfg(any(unix, windows))]
+impl RecordReaderOpenOptions<'static, File> {
+    /// Creates options for opening a file; set `path` and `boundary` before use.
+    pub fn new() -> Self {
+        Self {
+            path: None,
+            boundary: None,
+            reuse: None,
+            start_frame: 0,
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
+struct SharedFile {
+    file: Arc<File>,
+}
+
+/// A positioned view of an already open file or a range of its frames.
+#[cfg(any(unix, windows))]
+pub struct FrameSource {
+    file: Arc<File>,
+    base: u64,
+    len: u64,
+    pos: u64,
+    first_frame_len: Option<u64>,
+}
+
+#[cfg(any(unix, windows))]
+impl Read for FrameSource {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let end = self
+            .first_frame_len
+            .filter(|&end| self.pos < end)
+            .unwrap_or(self.len);
+        let available = usize::try_from(end.saturating_sub(self.pos))
+            .unwrap_or(usize::MAX)
+            .min(buf.len());
+        if available == 0 {
+            return Ok(0);
+        }
+        let offset = self
+            .base
+            .checked_add(self.pos)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "file position overflow"))?;
+        #[cfg(unix)]
+        let count = {
+            use std::os::unix::fs::FileExt;
+            self.file.read_at(&mut buf[..available], offset)?
+        };
+        #[cfg(windows)]
+        let count = {
+            use std::os::windows::fs::FileExt;
+            self.file.seek_read(&mut buf[..available], offset)?
+        };
+        self.pos += count as u64;
+        Ok(count)
+    }
+}
+
+#[cfg(any(unix, windows))]
+impl Seek for FrameSource {
+    fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+        let target = match from {
+            SeekFrom::Start(pos) => i128::from(pos),
+            SeekFrom::Current(delta) => i128::from(self.pos) + i128::from(delta),
+            SeekFrom::End(delta) => i128::from(self.len) + i128::from(delta),
+        };
+        self.pos = u64::try_from(target)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid file position"))?;
+        Ok(self.pos)
+    }
 }
 
 /// A borrowed, forward-only iterator over records in a reader's reusable window.
@@ -254,7 +371,7 @@ enum Boundary {
         finder: Finder<'static>,
         separator: Vec<u8>,
     },
-    Finder(BoxFinder),
+    Finder(Arc<dyn Fn(&[u8]) -> Option<usize> + Send + Sync>),
 }
 
 impl Boundary {
@@ -389,7 +506,7 @@ impl Verifier for AsRead {
         start: u64,
         len: u64,
     ) -> record::Watch<'j> {
-        watch_span::<FrameJudge>(judge, frames, per_frame, from, start, len)
+        watch_verified_span(judge, frames, per_frame, from, start, len)
     }
 
     fn watch_owned(
@@ -400,7 +517,7 @@ impl Verifier for AsRead {
         start: u64,
         len: u64,
     ) -> record::Watch<'static> {
-        watch_span::<FrameJudge>(judge.clone(), frames, per_frame, from, start, len)
+        watch_verified_span(judge.clone(), frames, per_frame, from, start, len)
     }
 
     fn watch_nothing<'j>() -> record::Watch<'j> {
@@ -449,6 +566,15 @@ pub struct FrameJudge {
     label: String,
     last: usize,
     per_frame: u64,
+    physical: Option<PhysicalFrameEnds>,
+}
+
+#[derive(Clone)]
+struct PhysicalFrameEnds {
+    ends: Arc<[u64]>,
+    first: usize,
+    base: u64,
+    final_end: u64,
 }
 
 impl Judge for FrameJudge {
@@ -457,6 +583,7 @@ impl Judge for FrameJudge {
             label,
             last,
             per_frame,
+            physical: None,
         }
     }
 
@@ -529,6 +656,35 @@ fn watch_span<'j, J: Judge>(
         return record::Watch::nothing();
     }
     watch_frames::<J>(judge, first, frame_ends_from(frames, first, start, len))
+}
+
+fn watch_verified_span<'j>(
+    judge: impl Borrow<FrameJudge> + 'j,
+    frames: &[(u64, u64)],
+    per_frame: usize,
+    from: usize,
+    start: u64,
+    len: u64,
+) -> record::Watch<'j> {
+    if judge.borrow().physical.is_some() {
+        let (first, ends) = {
+            let borrowed = judge.borrow();
+            let physical = borrowed.physical.as_ref().unwrap();
+            let absolute_start = physical.base + start;
+            let absolute_end = absolute_start.saturating_add(len);
+            let first = physical.ends.partition_point(|&end| end <= absolute_start);
+            let ends = physical.ends[first..]
+                .iter()
+                .copied()
+                .chain(std::iter::once(physical.final_end))
+                .take_while(|&end| end <= absolute_end)
+                .map(|end| end - absolute_start)
+                .collect();
+            (first - physical.first, ends)
+        };
+        return watch_frames::<FrameJudge>(judge, first, ends);
+    }
+    watch_span::<FrameJudge>(judge, frames, per_frame, from, start, len)
 }
 
 /// What judges the frames a read walks past, frame `first` being the one the walk starts in.
@@ -769,6 +925,172 @@ impl RecordReader<NoVerify> {
         Self::from_file(path, file, separator)
     }
 
+    #[cfg(any(unix, windows))]
+    /// Opens a file or reuses an open reader starting at `start_frame`.
+    ///
+    /// Reuse does not reopen the path or reload the seek table. Records on the returned reader
+    /// are numbered from zero at the selected frame.
+    ///
+    /// ```no_run
+    /// use std::path::PathBuf;
+    /// use seekzstdsep::{RecordReader, RecordReaderOpenOptions, find::Boundary};
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let opened = RecordReader::open_with_opts(RecordReaderOpenOptions {
+    ///     path: Some(PathBuf::from("records.seek.zst")),
+    ///     boundary: Some(Boundary::Separator(b"\n".to_vec())),
+    ///     ..RecordReaderOpenOptions::new()
+    /// })?;
+    /// let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+    ///     path: None,
+    ///     boundary: None,
+    ///     reuse: Some(&opened),
+    ///     start_frame: 2,
+    /// })?;
+    /// for record in worker.into_records() {
+    ///     println!("{:?}", record?);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn open_with_opts<S: Read + Seek>(
+        opts: RecordReaderOpenOptions<'_, S>,
+    ) -> anyhow::Result<RecordReader<NoVerify, FrameSource>> {
+        if let Some(opened) = opts.reuse {
+            if opts.path.is_some() || opts.boundary.is_some() {
+                anyhow::bail!("path and boundary cannot be set when reusing a reader");
+            }
+            return Self::open_from_frame(opened, opts.start_frame);
+        }
+        let path = opts
+            .path
+            .ok_or_else(|| anyhow::anyhow!("path is required"))?;
+        let boundary = opts
+            .boundary
+            .ok_or_else(|| anyhow::anyhow!("boundary is required"))?;
+        let file =
+            File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
+        let len = file.metadata()?.len();
+        let file = Arc::new(file);
+        let source = FrameSource {
+            file: Arc::clone(&file),
+            base: 0,
+            len,
+            pos: 0,
+            first_frame_len: None,
+        };
+        let mut reader = RecordReader::from_reader(source, &path.to_string_lossy(), boundary)?;
+        reader.shared = Some(SharedFile { file });
+        if opts.start_frame == 0 {
+            Ok(reader)
+        } else {
+            Self::open_from_frame(&reader, opts.start_frame)
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    fn open_from_frame<S: Read + Seek>(
+        opened: &RecordReader<NoVerify, S>,
+        start_frame: usize,
+    ) -> anyhow::Result<RecordReader<NoVerify, FrameSource>> {
+        if start_frame >= opened.frames.len() {
+            anyhow::bail!("frame {} is out of range", start_frame);
+        }
+        let shared = opened.shared.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("open_with_opts requires a reader opened from a file")
+        })?;
+        let boundary = match &opened.boundary {
+            Boundary::Separator { separator, .. } => Boundary::Separator {
+                finder: Finder::new(separator).into_owned(),
+                separator: separator.clone(),
+            },
+            Boundary::Finder(find) => Boundary::Finder(Arc::clone(find)),
+        };
+        let frame = u32::try_from(start_frame)?;
+        let source = opened.lookup.window.source();
+        let seek_table = source.get_ref().seek_table();
+        let base = seek_table.frame_start_comp(frame)?;
+        let last = u32::try_from(opened.frames.len() - 1)?;
+        let compressed_end =
+            seek_table.frame_start_comp(last)? + seek_table.frame_size_comp(last)?;
+        let compressed_len = compressed_end - base;
+        let decompressed_len = opened.frames.last().unwrap().0 + opened.frames.last().unwrap().1
+            - opened.frames[start_frame].0;
+        let remaining = opened.frames.len() - start_frame;
+        let limit = u32::MAX as u64;
+        let group_size = if compressed_len <= limit && decompressed_len <= limit {
+            remaining
+        } else {
+            let by_comp = limit / opened.max_frame_comp;
+            let by_decomp = limit / opened.max_frame_decomp;
+            usize::try_from(by_comp.min(by_decomp))?.max(1)
+        };
+        let mut table = SeekTable::new();
+        let frames = if group_size == remaining {
+            table.log_frame(
+                u32::try_from(compressed_len)?,
+                u32::try_from(decompressed_len)?,
+            )?;
+            vec![(0, decompressed_len)]
+        } else {
+            let mut frames = Vec::with_capacity(remaining.div_ceil(group_size));
+            let mut at = start_frame;
+            let mut comp_start = base;
+            let mut decomp_start = opened.frames[start_frame].0;
+            while at < opened.frames.len() {
+                let end = at.saturating_add(group_size).min(opened.frames.len());
+                let comp_end = if end == opened.frames.len() {
+                    compressed_end
+                } else {
+                    seek_table.frame_start_comp(u32::try_from(end)?)?
+                };
+                let decomp_end = if end == opened.frames.len() {
+                    opened.frames.last().unwrap().0 + opened.frames.last().unwrap().1
+                } else {
+                    opened.frames[end].0
+                };
+                let comp_size = comp_end - comp_start;
+                let decomp_size = decomp_end - decomp_start;
+                table.log_frame(u32::try_from(comp_size)?, u32::try_from(decomp_size)?)?;
+                frames.push((decomp_start - opened.frames[start_frame].0, decomp_size));
+                at = end;
+                comp_start = comp_end;
+                decomp_start = decomp_end;
+            }
+            frames
+        };
+        let source = FrameSource {
+            file: Arc::clone(&shared.file),
+            base,
+            len: compressed_len,
+            pos: 0,
+            first_frame_len: Some(seek_table.frame_size_comp(frame)? as u64),
+        };
+        let decoder = Decoder::with_opts(DecodeOptions::new(source).seek_table(table))?;
+        let lookup = Lookup::with_shared_frame_ends(
+            decoder,
+            opened.lookup.window.frame_ends(),
+            opened.frames[start_frame].0,
+            start_frame,
+        );
+        Ok(RecordReader {
+            label: opened.label.clone(),
+            lookup,
+            frames,
+            boundary,
+            sep_cnt: opened
+                .sep_cnt
+                .checked_mul(group_size)
+                .ok_or_else(|| anyhow::anyhow!("record count overflow"))?,
+            original_frame_count: Some(remaining),
+            original_records_per_frame: Some(opened.records_per_frame()),
+            judge: (),
+            shared: None,
+            max_frame_comp: 0,
+            max_frame_decomp: 0,
+        })
+    }
+
     /// [`Self::open`] with the record boundary as a finder.
     ///
     /// # Errors
@@ -821,11 +1143,18 @@ impl RecordReader<NoVerify> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn from_file(path: PathBuf, file: File, separator: &[u8]) -> anyhow::Result<Self> {
-        Self::from_reader(
+        #[cfg(any(unix, windows))]
+        let shared_file = Arc::new(file.try_clone()?);
+        let mut reader = Self::from_reader(
             file,
             &path.to_string_lossy(),
             find::Boundary::Separator(separator.to_vec()),
-        )
+        )?;
+        #[cfg(any(unix, windows))]
+        {
+            reader.shared = Some(SharedFile { file: shared_file });
+        }
+        Ok(reader)
     }
 
     /// [`Self::from_file`] with the record boundary as a finder.
@@ -855,7 +1184,15 @@ impl RecordReader<NoVerify> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn from_file_with(path: PathBuf, file: File, find: BoxFinder) -> anyhow::Result<Self> {
-        Self::from_reader(file, &path.to_string_lossy(), find::Boundary::Finder(find))
+        #[cfg(any(unix, windows))]
+        let shared_file = Arc::new(file.try_clone()?);
+        let mut reader =
+            Self::from_reader(file, &path.to_string_lossy(), find::Boundary::Finder(find))?;
+        #[cfg(any(unix, windows))]
+        {
+            reader.shared = Some(SharedFile { file: shared_file });
+        }
+        Ok(reader)
     }
 }
 
@@ -897,10 +1234,36 @@ impl<S: Read + Seek> RecordReader<NoVerify, S> {
                     separator,
                 }
             }
-            find::Boundary::Finder(find) => Boundary::Finder(find),
+            find::Boundary::Finder(find) => Boundary::Finder(Arc::from(find)),
         };
         let decoder = Decoder::new(source)
             .with_context(|| format!("failed to open {label} as a seekable zst"))?;
+        #[cfg(any(unix, windows))]
+        let (frames, max_frame_comp, max_frame_decomp) = {
+            let table = decoder.seek_table();
+            let last = table
+                .num_frames()
+                .checked_sub(1)
+                .ok_or_else(|| anyhow::anyhow!("no frames in {label}"))?;
+            let compressed_end = table.frame_end_comp(last)?;
+            let decompressed_end = table.frame_end_decomp(last)?;
+            let huge = compressed_end > u32::MAX as u64 || decompressed_end > u32::MAX as u64;
+            if huge {
+                let mut max_comp = 0;
+                let mut max_decomp = 0;
+                let frames = seek_table_decomp_frames_with(&decoder, |i, len| {
+                    max_comp = max_comp.max(table.frame_size_comp(i).unwrap());
+                    max_decomp = max_decomp.max(len);
+                })
+                .ok_or_else(|| anyhow::anyhow!("no frames in {label}"))?;
+                (frames, max_comp, max_decomp)
+            } else {
+                let frames = seek_table_decomp_frames(&decoder)
+                    .ok_or_else(|| anyhow::anyhow!("no frames in {label}"))?;
+                (frames, 0, 0)
+            }
+        };
+        #[cfg(not(any(unix, windows)))]
         let frames = seek_table_decomp_frames(&decoder)
             .ok_or_else(|| anyhow::anyhow!("no frames in {label}"))?;
         let mut reader = Self {
@@ -909,7 +1272,15 @@ impl<S: Read + Seek> RecordReader<NoVerify, S> {
             frames,
             boundary,
             sep_cnt: 0,
+            original_frame_count: None,
+            original_records_per_frame: None,
             judge: (),
+            #[cfg(any(unix, windows))]
+            shared: None,
+            #[cfg(any(unix, windows))]
+            max_frame_comp,
+            #[cfg(any(unix, windows))]
+            max_frame_decomp,
         };
         let (start, len) = reader.frames[0];
         reader.sep_cnt = with_find!(&reader.boundary, |find| count_records_in_frame(
@@ -957,21 +1328,42 @@ impl<S: Read + Seek> RecordReader<NoVerify, S> {
     /// ```
     pub fn verifying(self) -> RecordReader<AsRead, S> {
         let mut lookup = self.lookup;
-        // The verifying watcher reports frame count and fragments with its historical errors.
-        // The lightweight boundary guard is for unverified reads only.
-        lookup.window.without_frame_ends();
-        let judge = FrameJudge::new(
+        let mut judge = FrameJudge::new(
             self.label.clone(),
-            self.frames.len() - 1,
-            self.sep_cnt as u64,
+            self.original_frame_count.unwrap_or(self.frames.len()) - 1,
+            self.original_records_per_frame.unwrap_or(self.sep_cnt) as u64,
         );
+        if let Some(remaining) = self.original_frame_count {
+            let ends = lookup.window.frame_ends();
+            let first = ends.len() + 1 - remaining;
+            let base = if first == 0 { 0 } else { ends[first - 1] };
+            judge.physical = Some(PhysicalFrameEnds {
+                ends,
+                first,
+                base,
+                final_end: base + self.frames.last().unwrap().0 + self.frames.last().unwrap().1,
+            });
+        }
+        // The verifying watcher reports frame count and fragments with its historical errors.
+        // Reused readers also retain the shared guard against reading into the next frame.
+        if self.original_frame_count.is_none() {
+            lookup.window.without_frame_ends();
+        }
         RecordReader {
             label: self.label,
             lookup,
             frames: self.frames,
             boundary: self.boundary,
             sep_cnt: self.sep_cnt,
+            original_frame_count: self.original_frame_count,
+            original_records_per_frame: self.original_records_per_frame,
             judge,
+            #[cfg(any(unix, windows))]
+            shared: self.shared,
+            #[cfg(any(unix, windows))]
+            max_frame_comp: self.max_frame_comp,
+            #[cfg(any(unix, windows))]
+            max_frame_decomp: self.max_frame_decomp,
         }
     }
 }
@@ -1008,7 +1400,7 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
         self.boundary.separator()
     }
 
-    /// How many frames the file holds.
+    /// How many physical frames the file holds, including any before this reader's start frame.
     ///
     /// # Examples
     ///
@@ -1027,7 +1419,31 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn frame_count(&self) -> usize {
-        self.frames.len()
+        if self.original_frame_count.is_some() {
+            self.lookup.window.frame_ends().len() + 1
+        } else {
+            self.frames.len()
+        }
+    }
+
+    /// Decompressed byte length of a physical frame, indexed from the start of the file.
+    /// Returns `None` when `frame` is out of range.
+    pub fn frame_decompressed_size(&self, frame: usize) -> Option<u64> {
+        if let Some(remaining) = self.original_frame_count {
+            let ends = self.lookup.window.frame_ends();
+            if frame > ends.len() {
+                return None;
+            }
+            let first = ends.len() + 1 - remaining;
+            let start = if frame == 0 { 0 } else { ends[frame - 1] };
+            let end = ends.get(frame).copied().unwrap_or_else(|| {
+                let base = if first == 0 { 0 } else { ends[first - 1] };
+                base + self.frames.last().unwrap().0 + self.frames.last().unwrap().1
+            });
+            Some(end - start)
+        } else {
+            self.frames.get(frame).map(|&(_, len)| len)
+        }
     }
 
     /// Records in frame 0, which the invariant makes the record count of every frame but the last.
@@ -1049,7 +1465,7 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn records_per_frame(&self) -> usize {
-        self.sep_cnt
+        self.original_records_per_frame.unwrap_or(self.sep_cnt)
     }
 
     /// How many records the file holds, including a nonempty unterminated final record.
