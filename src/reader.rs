@@ -1400,7 +1400,7 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
         self.boundary.separator()
     }
 
-    /// How many frames the file holds.
+    /// How many physical frames the file holds, including any before this reader's start frame.
     ///
     /// # Examples
     ///
@@ -1419,7 +1419,11 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn frame_count(&self) -> usize {
-        self.original_frame_count.unwrap_or(self.frames.len())
+        if self.original_frame_count.is_some() {
+            self.lookup.window.frame_ends().len() + 1
+        } else {
+            self.frames.len()
+        }
     }
 
     /// Decompressed byte length of a physical frame, indexed from the start of the file.

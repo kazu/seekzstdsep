@@ -191,7 +191,7 @@ fn open_with_opts_iterates_from_selected_frame_to_end() {
         start_frame: 1,
     })
     .unwrap();
-    assert_eq!(worker.frame_count(), 2);
+    assert_eq!(worker.frame_count(), 3);
     assert_eq!(worker.records_per_frame(), 2);
     assert_eq!(worker.record(2).unwrap(), Some(b"e\n".to_vec()));
     let actual = worker
@@ -258,11 +258,13 @@ fn open_with_opts_verifying_checks_each_physical_frame() {
         start_frame: 1,
     })
     .unwrap();
+    assert_eq!(worker.frame_count(), 3);
     assert_eq!(worker.frame_decompressed_size(0), Some(4));
     assert_eq!(worker.frame_decompressed_size(1), Some(2));
     assert_eq!(worker.frame_decompressed_size(2), Some(6));
     assert_eq!(worker.frame_decompressed_size(3), None);
     let mut verified = worker.verifying();
+    assert_eq!(verified.frame_count(), 3);
     assert_eq!(
         (0..=3)
             .map(|frame| verified.frame_decompressed_size(frame))
