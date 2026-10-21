@@ -209,6 +209,43 @@ pub struct RecordReaderOpenOptions<'a> {
     pub frame: usize,
 }
 
+/// Options for opening a file with either a separator or a finder.
+pub struct RecordReaderFileOpenOptions {
+    /// Path to the seekable zstd file.
+    pub path: PathBuf,
+    /// Record boundary used to read the file.
+    pub boundary: find::Boundary,
+}
+
+/// Input accepted by [`RecordReader::open_with_opts`].
+pub trait RecordReaderOpenOption {
+    /// Input type owned by the returned reader's decoder.
+    type Source: Read + Seek;
+
+    /// Opens the reader described by these options.
+    fn open(self) -> anyhow::Result<RecordReader<NoVerify, Self::Source>>;
+}
+
+impl RecordReaderOpenOption for RecordReaderFileOpenOptions {
+    type Source = File;
+
+    fn open(self) -> anyhow::Result<RecordReader<NoVerify, File>> {
+        match self.boundary {
+            find::Boundary::Separator(separator) => RecordReader::open(self.path, &separator),
+            find::Boundary::Finder(finder) => RecordReader::open_with(self.path, finder),
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
+impl RecordReaderOpenOption for RecordReaderOpenOptions<'_> {
+    type Source = FrameSource;
+
+    fn open(self) -> anyhow::Result<RecordReader<NoVerify, FrameSource>> {
+        RecordReader::open_frame_with_opts(self)
+    }
+}
+
 #[cfg(any(unix, windows))]
 struct SharedFile {
     file: Arc<File>,
@@ -844,14 +881,19 @@ impl RecordReader<NoVerify> {
         Self::from_file(path, file, separator)
     }
 
-    /// Builds a frame-local reader from one already opened with [`Self::open`] or
-    /// [`Self::open_with`].
+    /// Opens a file with [`RecordReaderFileOpenOptions`] or a frame with
+    /// [`RecordReaderOpenOptions`].
     ///
-    /// It reuses the open file and seek table, performs no path open, and decodes only the
-    /// selected frame. Each returned reader has its own decoder and can be moved to a thread.
-    /// Record indexes on the returned reader start at zero within the selected frame.
+    /// The frame form reuses the open file and seek table. Its records are numbered from zero
+    /// within the selected frame.
+    pub fn open_with_opts<O: RecordReaderOpenOption>(
+        opts: O,
+    ) -> anyhow::Result<RecordReader<NoVerify, O::Source>> {
+        opts.open()
+    }
+
     #[cfg(any(unix, windows))]
-    pub fn open_with_opts(
+    fn open_frame_with_opts(
         opts: RecordReaderOpenOptions<'_>,
     ) -> anyhow::Result<RecordReader<NoVerify, FrameSource>> {
         let opened = opts.opened;

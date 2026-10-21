@@ -8,7 +8,7 @@ use common::{
 };
 use seekzstdsep::RecordReader;
 #[cfg(any(unix, windows))]
-use seekzstdsep::RecordReaderOpenOptions;
+use seekzstdsep::{RecordReaderFileOpenOptions, RecordReaderOpenOptions};
 use tempfile::tempdir;
 
 fn open_fixture(dir: &std::path::Path) -> RecordReader {
@@ -151,6 +151,48 @@ fn open_with_opts_accepts_finder_and_iterates_selected_frame() {
         .collect::<anyhow::Result<Vec<_>>>()
         .unwrap();
     assert_eq!(actual, [b"ccc".to_vec(), b"ddd".to_vec()]);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_opens_file_with_finder_then_frame() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "finder-options",
+        &[b"aaabbb".to_vec(), b"cccddd".to_vec()],
+    );
+    let opened = RecordReader::open_with_opts(RecordReaderFileOpenOptions {
+        path,
+        boundary: seekzstdsep::find::Boundary::Finder(Box::new(seekzstdsep::find::by_fixed(3))),
+    })
+    .unwrap();
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        opened: &opened,
+        frame: 1,
+    })
+    .unwrap();
+    let actual = worker
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(actual, [b"ccc".to_vec(), b"ddd".to_vec()]);
+}
+
+#[test]
+fn open_with_opts_opens_file_with_separator() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(dir.path(), "separator-options", &[b"a\nb\n".to_vec()]);
+    let reader = RecordReader::open_with_opts(RecordReaderFileOpenOptions {
+        path,
+        boundary: seekzstdsep::find::Boundary::Separator(b"\n".to_vec()),
+    })
+    .unwrap();
+    let actual = reader
+        .into_records()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(actual, [b"a\n".to_vec(), b"b\n".to_vec()]);
 }
 
 #[test]
