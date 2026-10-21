@@ -258,12 +258,17 @@ pub struct FrameSource {
     base: u64,
     len: u64,
     pos: u64,
+    first_frame_len: Option<u64>,
 }
 
 #[cfg(any(unix, windows))]
 impl Read for FrameSource {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let available = usize::try_from(self.len.saturating_sub(self.pos))
+        let end = self
+            .first_frame_len
+            .filter(|&end| self.pos < end)
+            .unwrap_or(self.len);
+        let available = usize::try_from(end.saturating_sub(self.pos))
             .unwrap_or(usize::MAX)
             .min(buf.len());
         if available == 0 {
@@ -501,7 +506,7 @@ impl Verifier for AsRead {
         start: u64,
         len: u64,
     ) -> record::Watch<'j> {
-        watch_span::<FrameJudge>(judge, frames, per_frame, from, start, len)
+        watch_verified_span(judge, frames, per_frame, from, start, len)
     }
 
     fn watch_owned(
@@ -512,7 +517,7 @@ impl Verifier for AsRead {
         start: u64,
         len: u64,
     ) -> record::Watch<'static> {
-        watch_span::<FrameJudge>(judge.clone(), frames, per_frame, from, start, len)
+        watch_verified_span(judge.clone(), frames, per_frame, from, start, len)
     }
 
     fn watch_nothing<'j>() -> record::Watch<'j> {
@@ -561,6 +566,15 @@ pub struct FrameJudge {
     label: String,
     last: usize,
     per_frame: u64,
+    physical: Option<PhysicalFrameEnds>,
+}
+
+#[derive(Clone)]
+struct PhysicalFrameEnds {
+    ends: Arc<[u64]>,
+    first: usize,
+    base: u64,
+    final_end: u64,
 }
 
 impl Judge for FrameJudge {
@@ -569,6 +583,7 @@ impl Judge for FrameJudge {
             label,
             last,
             per_frame,
+            physical: None,
         }
     }
 
@@ -641,6 +656,35 @@ fn watch_span<'j, J: Judge>(
         return record::Watch::nothing();
     }
     watch_frames::<J>(judge, first, frame_ends_from(frames, first, start, len))
+}
+
+fn watch_verified_span<'j>(
+    judge: impl Borrow<FrameJudge> + 'j,
+    frames: &[(u64, u64)],
+    per_frame: usize,
+    from: usize,
+    start: u64,
+    len: u64,
+) -> record::Watch<'j> {
+    if judge.borrow().physical.is_some() {
+        let (first, ends) = {
+            let borrowed = judge.borrow();
+            let physical = borrowed.physical.as_ref().unwrap();
+            let absolute_start = physical.base + start;
+            let absolute_end = absolute_start.saturating_add(len);
+            let first = physical.ends.partition_point(|&end| end <= absolute_start);
+            let ends = physical.ends[first..]
+                .iter()
+                .copied()
+                .chain(std::iter::once(physical.final_end))
+                .take_while(|&end| end <= absolute_end)
+                .map(|end| end - absolute_start)
+                .collect();
+            (first - physical.first, ends)
+        };
+        return watch_frames::<FrameJudge>(judge, first, ends);
+    }
+    watch_span::<FrameJudge>(judge, frames, per_frame, from, start, len)
 }
 
 /// What judges the frames a read walks past, frame `first` being the one the walk starts in.
@@ -933,6 +977,7 @@ impl RecordReader<NoVerify> {
             base: 0,
             len,
             pos: 0,
+            first_frame_len: None,
         };
         let mut reader = RecordReader::from_reader(source, &path.to_string_lossy(), boundary)?;
         reader.shared = Some(SharedFile { file });
@@ -1019,6 +1064,7 @@ impl RecordReader<NoVerify> {
             base,
             len: compressed_len,
             pos: 0,
+            first_frame_len: Some(seek_table.frame_size_comp(frame)? as u64),
         };
         let decoder = Decoder::with_opts(DecodeOptions::new(source).seek_table(table))?;
         let lookup = Lookup::with_shared_frame_ends(
@@ -1282,14 +1328,27 @@ impl<S: Read + Seek> RecordReader<NoVerify, S> {
     /// ```
     pub fn verifying(self) -> RecordReader<AsRead, S> {
         let mut lookup = self.lookup;
-        // The verifying watcher reports frame count and fragments with its historical errors.
-        // The lightweight boundary guard is for unverified reads only.
-        lookup.window.without_frame_ends();
-        let judge = FrameJudge::new(
+        let mut judge = FrameJudge::new(
             self.label.clone(),
-            self.frames.len() - 1,
-            self.sep_cnt as u64,
+            self.original_frame_count.unwrap_or(self.frames.len()) - 1,
+            self.original_records_per_frame.unwrap_or(self.sep_cnt) as u64,
         );
+        if let Some(remaining) = self.original_frame_count {
+            let ends = lookup.window.frame_ends();
+            let first = ends.len() + 1 - remaining;
+            let base = if first == 0 { 0 } else { ends[first - 1] };
+            judge.physical = Some(PhysicalFrameEnds {
+                ends,
+                first,
+                base,
+                final_end: base + self.frames.last().unwrap().0 + self.frames.last().unwrap().1,
+            });
+        }
+        // The verifying watcher reports frame count and fragments with its historical errors.
+        // Reused readers also retain the shared guard against reading into the next frame.
+        if self.original_frame_count.is_none() {
+            lookup.window.without_frame_ends();
+        }
         RecordReader {
             label: self.label,
             lookup,
@@ -1361,6 +1420,27 @@ impl<V: Verifier, S: Read + Seek> RecordReader<V, S> {
     /// ```
     pub fn frame_count(&self) -> usize {
         self.original_frame_count.unwrap_or(self.frames.len())
+    }
+
+    /// Decompressed byte length of a physical frame, indexed from this reader's first frame.
+    /// Returns `None` when `frame` is out of range.
+    pub fn frame_decompressed_size(&self, frame: usize) -> Option<u64> {
+        if let Some(remaining) = self.original_frame_count {
+            if frame >= remaining {
+                return None;
+            }
+            let ends = self.lookup.window.frame_ends();
+            let first = ends.len() + 1 - remaining;
+            let index = first + frame;
+            let start = if index == 0 { 0 } else { ends[index - 1] };
+            let end = ends.get(index).copied().unwrap_or_else(|| {
+                let base = if first == 0 { 0 } else { ends[first - 1] };
+                base + self.frames.last().unwrap().0 + self.frames.last().unwrap().1
+            });
+            Some(end - start)
+        } else {
+            self.frames.get(frame).map(|&(_, len)| len)
+        }
     }
 
     /// Records in frame 0, which the invariant makes the record count of every frame but the last.

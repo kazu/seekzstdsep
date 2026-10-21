@@ -219,6 +219,57 @@ fn open_with_opts_iterates_from_selected_frame_to_end() {
     .collect::<anyhow::Result<Vec<_>>>()
     .unwrap();
     assert_eq!(reverse, actual.iter().rev().cloned().collect::<Vec<_>>());
+    let verified = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame: 1,
+    })
+    .unwrap()
+    .verifying()
+    .into_records()
+    .collect::<anyhow::Result<Vec<_>>>()
+    .unwrap();
+    assert_eq!(verified, actual);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn open_with_opts_verifying_checks_each_physical_frame() {
+    let dir = tempdir().unwrap();
+    let path = compress_frames(
+        dir.path(),
+        "verify-physical-frames",
+        &[b"a\nb\n".to_vec(), b"c\n".to_vec(), b"d\ne\nf\n".to_vec()],
+    );
+    let mut direct = RecordReader::open(path.clone(), b"\n").unwrap().verifying();
+    assert!(direct.records(2, 4).is_err());
+    let opened = RecordReader::open(path, b"\n").unwrap();
+    assert_eq!(
+        (0..=3)
+            .map(|frame| opened.frame_decompressed_size(frame))
+            .collect::<Vec<_>>(),
+        [Some(4), Some(2), Some(6), None]
+    );
+    let worker = RecordReader::open_with_opts(RecordReaderOpenOptions {
+        path: None,
+        boundary: None,
+        reuse: Some(&opened),
+        start_frame: 1,
+    })
+    .unwrap();
+    assert_eq!(worker.frame_decompressed_size(0), Some(2));
+    assert_eq!(worker.frame_decompressed_size(1), Some(6));
+    assert_eq!(worker.frame_decompressed_size(2), None);
+    let mut verified = worker.verifying();
+    assert_eq!(
+        (0..=2)
+            .map(|frame| verified.frame_decompressed_size(frame))
+            .collect::<Vec<_>>(),
+        [Some(2), Some(6), None]
+    );
+    let error = verified.records(0, 4).unwrap_err();
+    assert!(error.to_string().contains("frame 0"), "{error}");
 }
 
 #[test]

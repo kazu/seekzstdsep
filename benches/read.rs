@@ -327,6 +327,39 @@ fn read(c: &mut Criterion) {
                 )
             });
         });
+        let mut direct_verified = RecordReader::open(path.clone(), SEPARATOR)
+            .unwrap()
+            .verifying();
+        let mut reused_verified = RecordReader::open_with_opts(RecordReaderOpenOptions {
+            path: None,
+            boundary: None,
+            reuse: Some(&opened),
+            start_frame: frame,
+        })
+        .unwrap()
+        .verifying();
+        c.bench_function("read/verified-from-frame-direct", |b| {
+            b.iter(|| {
+                black_box(
+                    direct_verified
+                        .records_from(frame * per_frame)
+                        .take(per_frame)
+                        .map(|record| record.unwrap().len())
+                        .sum::<usize>(),
+                )
+            });
+        });
+        c.bench_function("read/verified-from-frame-reused", |b| {
+            b.iter(|| {
+                black_box(
+                    reused_verified
+                        .records_from(0)
+                        .take(per_frame)
+                        .map(|record| record.unwrap().len())
+                        .sum::<usize>(),
+                )
+            });
+        });
     }
 
     // The frame in the middle of the file, and how many records it holds.
@@ -679,6 +712,20 @@ fn open_with_opts_scaling(c: &mut Criterion) {
                         .unwrap(),
                     );
                 });
+            });
+            group.bench_function(BenchmarkId::new("verifying", frame_count), |b| {
+                b.iter_with_setup(
+                    || {
+                        RecordReader::open_with_opts(RecordReaderOpenOptions {
+                            path: None,
+                            boundary: None,
+                            reuse: Some(&opened),
+                            start_frame: frame_count / 2,
+                        })
+                        .unwrap()
+                    },
+                    |reader| black_box(reader.verifying()),
+                );
             });
         }
         group.finish();
