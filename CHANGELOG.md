@@ -11,6 +11,7 @@ Only the crate's own tags (`v*`) mark a release here. The nushell plugin is vers
 ### Changed
 
 - edit: avoid copying append record groups
+- seekzstdsep: release 0.11.1 and 0.9.1
 
 ## [0.11.0] - 2026-10-24
 
