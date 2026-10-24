@@ -1,6 +1,6 @@
 [package]
 name = "nu_plugin_zstdsep"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2024"
 rust-version = "1.96.1"
 authors = ["Kazuhisa TAKEI <kazuhisa@gmail.com>"]
