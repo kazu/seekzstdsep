@@ -27,9 +27,9 @@ use std::hint::black_box;
 use std::path::PathBuf;
 
 use seekzstdsep::{
-    Alignment, CompressOptions, CompressionLevel, OnMissingSeparator, RangeCheck, SeparatorCheck,
-    append_frames, append_records, append_records_with_opts, compress_to_seekable_zst_with_opts,
-    copy_range, count_frames,
+    Alignment, AppendOptions, CompressOptions, CompressionLevel, OnMissingSeparator, RangeCheck,
+    SeparatorCheck, append_frames, append_records, append_records_with_opts,
+    compress_to_seekable_zst_with_opts, copy_range, count_frames,
 };
 use zeekstd::SeekTable;
 
@@ -223,9 +223,71 @@ fn append_to(c: &mut Criterion) {
                     OnMissingSeparator::Refuse,
                     CompressionLevel::default(),
                     Some(RECORDS_PER_FRAME),
-                    true,
+                    AppendOptions::new().trust_records_per_frame(true),
                 )
                 .expect("failed to append records with trusted count")
+            },
+            BatchSize::PerIteration,
+        )
+    });
+
+    group.bench_function("records_partial", |b| {
+        b.iter_batched(
+            || {
+                let mut f = fresh();
+                append_records(
+                    &mut f,
+                    b"partial\n".as_slice(),
+                    SEPARATOR,
+                    OnMissingSeparator::Refuse,
+                    CompressionLevel::default(),
+                    Some(RECORDS_PER_FRAME),
+                )
+                .expect("failed to prepare a partial last frame");
+                f
+            },
+            |mut f| {
+                append_records(
+                    &mut f,
+                    body.as_slice(),
+                    SEPARATOR,
+                    OnMissingSeparator::Refuse,
+                    CompressionLevel::default(),
+                    Some(RECORDS_PER_FRAME),
+                )
+                .expect("failed to append to a partial last frame")
+            },
+            BatchSize::PerIteration,
+        )
+    });
+
+    group.bench_function("records_reused", |b| {
+        b.iter_batched(
+            || {
+                let mut f = fresh();
+                let previous = append_records_with_opts(
+                    &mut f,
+                    b"partial\n".as_slice(),
+                    SEPARATOR,
+                    OnMissingSeparator::Refuse,
+                    CompressionLevel::default(),
+                    Some(RECORDS_PER_FRAME),
+                    AppendOptions::new(),
+                )
+                .expect("failed to prepare a reusable append result");
+                (f, previous)
+            },
+            |(mut f, previous)| {
+                append_records_with_opts(
+                    &mut f,
+                    body.as_slice(),
+                    SEPARATOR,
+                    OnMissingSeparator::Refuse,
+                    CompressionLevel::default(),
+                    Some(RECORDS_PER_FRAME),
+                    AppendOptions::new().with_previous(&previous),
+                )
+                .expect("failed to append with a previous result")
             },
             BatchSize::PerIteration,
         )
@@ -315,8 +377,9 @@ fn append_copy_trusted(c: &mut Criterion) {
                                 OnMissingSeparator::Refuse,
                                 CompressionLevel::default(),
                                 Some(RECORDS_PER_FRAME),
-                                true,
+                                AppendOptions::new().trust_records_per_frame(true),
                             )
+                            .map(|_| ())
                         };
                         if copy {
                             assert_eq!(

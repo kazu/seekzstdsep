@@ -7,9 +7,8 @@ use std::path::PathBuf;
 use seekzstdsep::cli::{BoundaryArgs, ConvertArgs, CopyRangeArgs, run_compress, run_copy_range};
 use seekzstdsep::find::Boundary;
 use seekzstdsep::{
-    AppendInput, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck, RecordReader,
-    append, append_frames_with, append_records_with_finder_opts, append_records_with_opts,
-    copy_and_replace,
+    AppendInput, AppendOptions, CompressionLevel, InspectOptions, OnMissingSeparator, RangeCheck,
+    RecordReader, append, append_frames_with, append_records_with_opts, copy_and_replace,
     seekzstdsep_lib::{inspect_records_with_opts, inspect_with_opts},
     truncate, truncate_records,
 };
@@ -229,8 +228,9 @@ fn main() -> anyhow::Result<()> {
                         on_missing,
                         level,
                         args.records_per_frame,
-                        args.trust_records_per_frame,
-                    )?,
+                        AppendOptions::new().trust_records_per_frame(args.trust_records_per_frame),
+                    )
+                    .map(|_| ())?,
                     Boundary::Separator(sep) => {
                         let input: AppendInput<Box<dyn Read>> = AppendInput::Frames {
                             input: opened.as_ref().expect("--input-seekable requires INPUT"),
@@ -248,15 +248,18 @@ fn main() -> anyhow::Result<()> {
                         &*find,
                         check,
                     )?,
-                    Boundary::Finder(find) => append_records_with_finder_opts(
+                    Boundary::Finder(find) => append_records_with_opts(
                         file,
                         records_input(opened),
-                        &*find,
+                        b"",
                         on_missing,
                         level,
                         args.records_per_frame,
-                        args.trust_records_per_frame,
-                    )?,
+                        AppendOptions::new()
+                            .with_finder(&*find)
+                            .trust_records_per_frame(args.trust_records_per_frame),
+                    )
+                    .map(|_| ())?,
                 }
                 Ok(())
             };

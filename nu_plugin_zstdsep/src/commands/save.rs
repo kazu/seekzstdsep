@@ -10,10 +10,9 @@ use nu_protocol::{
 };
 use seekzstdsep::find::Boundary;
 use seekzstdsep::{
-    CompressOptions, CompressionLevel, OnMissingSeparator, append_records_with_finder_opts,
-    append_records_with_opts, compress_records_to_seekable_zst_with_opts,
-    compress_to_seekable_zst_with_opts, convert_records_to_seekable_zst_reader_with_opts,
-    convert_to_seekable_zst_reader_with_opts,
+    AppendOptions, CompressOptions, CompressionLevel, OnMissingSeparator, append_records_with_opts,
+    compress_records_to_seekable_zst_with_opts, compress_to_seekable_zst_with_opts,
+    convert_records_to_seekable_zst_reader_with_opts, convert_to_seekable_zst_reader_with_opts,
 };
 use tempfile::spooled_tempfile;
 
@@ -221,16 +220,18 @@ impl PluginCommand for Save {
                     on_missing,
                     level,
                     records_per_frame,
-                    trust,
+                    AppendOptions::new().trust_records_per_frame(trust),
                 ),
-                Boundary::Finder(find) => append_records_with_finder_opts(
+                Boundary::Finder(find) => append_records_with_opts(
                     &mut file,
                     records,
-                    &*find,
+                    b"",
                     on_missing,
                     level,
                     records_per_frame,
-                    trust,
+                    AppendOptions::new()
+                        .with_finder(&*find)
+                        .trust_records_per_frame(trust),
                 ),
             }
             .map_err(|e| failed(&path, &e.to_string(), call))?;

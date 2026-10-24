@@ -20,10 +20,10 @@ callgrind instead, over a fixture the section that quotes them describes.
 
 ## Existing append performance after adding the trusted-count option
 
-Status on 2026-09-22: **a wall-clock regression remains possible; it has not been
-established or ruled out.** The `#[inline(always)]` attributes on
-`append_records_with_opts` and `append_records_with_finder_opts` are accepted as
-the current mitigation, not proof that elapsed-time performance is unchanged.
+Status on 2026-09-22: **a wall-clock regression remained possible; it had not been
+established or ruled out.** The `#[inline(always)]` attributes on the then-separate
+`append_records_with_opts` and `append_records_with_finder_opts` were accepted as
+mitigation, not proof that elapsed-time performance was unchanged.
 
 Commit `9da297b` added the option to trust a supplied record count. Even callers
 that keep counting frame 0 now pass through the option-taking wrappers. Inlining

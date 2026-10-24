@@ -243,6 +243,39 @@ only one or two frames. `None` retains count inference and its three-frame minim
 The validation scope and last-frame rules are documented on
 [`append_records`](https://docs.rs/seekzstdsep/latest/seekzstdsep/fn.append_records.html).
 
+`append_records_with_opts` takes a separator and `AppendOptions`. A finder set through
+`AppendOptions::with_finder` takes precedence over the separator. The function returns an
+`AppendResult` that can be passed to the next append on the same unchanged file when using the
+same separator or an equivalent finder.
+This reuses the validated frame count and last-frame state. When the last frame already holds `n`
+complete records, its compressed bytes are retained as they are.
+
+```rust,no_run
+use seekzstdsep::{AppendOptions, OnMissingSeparator, append_records_with_opts};
+use std::fs::File;
+
+let mut f = File::options().read(true).write(true).open("events.jsonl.seek.zst")?;
+let previous = append_records_with_opts(
+    &mut f, File::open("more-1.jsonl")?, b"\n", OnMissingSeparator::Refuse,
+    0, Some(1000), AppendOptions::new(),
+)?;
+append_records_with_opts(
+    &mut f, File::open("more-2.jsonl")?, b"\n", OnMissingSeparator::Refuse,
+    0, Some(1000), AppendOptions::new().with_previous(&previous),
+)?;
+# Ok::<(), anyhow::Error>(())
+```
+
+For fixed-size records, pass `b""` as the separator and use
+`AppendOptions::new().with_finder(seekzstdsep::find::by_fixed(9))` as the options. A finder cannot
+use `OnMissingSeparator::Insert` because it supplies no bytes to insert.
+
+Use `AppendOptions::new().trust_records_per_frame(true)` with `Some(n)` only when every preceding
+data frame is known to contain exactly `n` whole records. This skips counting those frames; without
+a reusable `AppendResult`, the last data frame is still checked.
+`AppendResult::records_per_frame()` returns the count used, and `last_frame_records()` returns the
+last frame's record count when known.
+
 `AppendInput::Frames` joins another seekable file instead, copying its frames as compressed bytes:
 
 ```rust,no_run

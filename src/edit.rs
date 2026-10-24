@@ -326,8 +326,94 @@ pub fn append_records(
         on_missing,
         level,
         records_per_frame,
-        false,
+        AppendOptions::new(),
     )
+    .map(|_| ())
+}
+
+/// State returned by [`append_records_with_opts`] for a subsequent append to the same unchanged
+/// file using the same record boundary definition.
+///
+/// Passing it back avoids checking the same frames again. Its frame details are checked against
+/// the current seek table before they are reused.
+#[derive(Clone, Copy, Debug)]
+pub struct AppendResult {
+    records_per_frame: usize,
+    count_validated: bool,
+    frame_count: u32,
+    last_frame: u32,
+    last_comp: u64,
+    last_decomp: u64,
+    last_records: Option<usize>,
+    last_whole: bool,
+    checksum: bool,
+}
+
+/// Controls append behavior. When no finder is set, the supplied separator is used.
+pub struct AppendOptions<'a, F = fn(&[u8]) -> Option<usize>> {
+    previous: Option<&'a AppendResult>,
+    finder: Option<F>,
+    trust_records_per_frame: bool,
+}
+
+impl<'a> AppendOptions<'a> {
+    /// Uses the separator and validates existing record counts.
+    pub fn new() -> Self {
+        Self {
+            previous: None,
+            finder: None,
+            trust_records_per_frame: false,
+        }
+    }
+}
+
+impl Default for AppendOptions<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a, F> AppendOptions<'a, F> {
+    /// Reuses the result of an append to the same unchanged file with the same separator or an
+    /// equivalent finder. Changing record boundaries invalidates the cached record counts.
+    pub fn with_previous(mut self, previous: &'a AppendResult) -> Self {
+        self.previous = Some(previous);
+        self
+    }
+
+    /// Trusts the supplied records-per-frame count for existing frames.
+    pub fn trust_records_per_frame(mut self, trust: bool) -> Self {
+        self.trust_records_per_frame = trust;
+        self
+    }
+
+    /// Uses a custom record boundary finder in place of the separator.
+    pub fn with_finder<G: Fn(&[u8]) -> Option<usize>>(self, finder: G) -> AppendOptions<'a, G> {
+        AppendOptions {
+            previous: self.previous,
+            finder: Some(finder),
+            trust_records_per_frame: self.trust_records_per_frame,
+        }
+    }
+}
+
+impl AppendResult {
+    /// Records per frame used for the append.
+    pub fn records_per_frame(&self) -> usize {
+        self.records_per_frame
+    }
+
+    /// Records in the last data frame, when known.
+    pub fn last_frame_records(&self) -> Option<usize> {
+        self.last_records
+    }
+
+    fn matches(&self, table: &SeekTable, last: u32) -> anyhow::Result<bool> {
+        Ok(self.frame_count == table.num_frames()
+            && self.last_frame == last
+            && self.last_comp == table.frame_size_comp(last)?
+            && self.last_decomp == table.frame_size_decomp(last)?)
+    }
 }
 
 /// [`append_records`] with an option to trust the supplied records per frame.
@@ -338,38 +424,78 @@ pub fn append_records(
 /// preceding frames contain exactly `n` whole records. No data frames are read for empty input
 /// when the count is trusted.
 ///
+/// Pass the returned result as `previous` on the next append to the same unchanged file using
+/// the same separator or an equivalent finder to reuse the validated frame count and last-frame
+/// state. A mismatched seek table causes normal
+/// validation instead. Use [`AppendOptions::with_finder`] for a finder; it cannot insert separator
+/// bytes at a missing join.
+///
 /// ```
-/// use seekzstdsep::{append_records_with_opts, OnMissingSeparator};
+/// use seekzstdsep::{append_records_with_opts, AppendOptions, OnMissingSeparator};
 /// # let mut file = tempfile::tempfile()?;
 /// # seekzstdsep::convert_to_seekable_zst_reader(
 /// #     &b"a\nb\n"[..], &mut file, 16, true, b"\n", None)?;
+/// let first = append_records_with_opts(
+///     &mut file, &b"c\n"[..], b"\n", OnMissingSeparator::Refuse,
+///     0, Some(2), AppendOptions::new().trust_records_per_frame(true),
+/// )?;
 /// append_records_with_opts(
-///     &mut file, &b"c\n"[..], b"\n", OnMissingSeparator::Refuse, 0, Some(2), true,
+///     &mut file, &b"d\n"[..], b"\n", OnMissingSeparator::Refuse,
+///     0, Some(2), AppendOptions::new().trust_records_per_frame(true).with_previous(&first),
 /// )?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 #[inline(always)]
-pub fn append_records_with_opts(
+pub fn append_records_with_opts<F: Fn(&[u8]) -> Option<usize>>(
     f: &mut File,
     data: impl Read,
     separator: &[u8],
     on_missing: OnMissingSeparator,
     level: i32,
     records_per_frame: Option<usize>,
-    trust_records_per_frame: bool,
-) -> anyhow::Result<()> {
-    record::check_separator(separator)?;
-    let finder = Finder::new(separator);
-    append_records_inner(
-        f,
-        data,
-        find::by_separator(&finder),
-        Some(separator),
-        on_missing,
-        level,
-        records_per_frame,
+    options: AppendOptions<'_, F>,
+) -> anyhow::Result<AppendResult> {
+    let AppendOptions {
+        previous,
+        finder,
         trust_records_per_frame,
-    )
+    } = options;
+    match finder {
+        None => {
+            record::check_separator(separator)?;
+            let finder = Finder::new(separator);
+            append_records_inner(
+                f,
+                data,
+                find::by_separator(&finder),
+                Some(separator),
+                on_missing,
+                level,
+                records_per_frame,
+                trust_records_per_frame,
+                previous,
+            )
+        }
+        Some(find) => {
+            if on_missing == OnMissingSeparator::Insert {
+                bail!(
+                    "refusing to insert a separator at the join: the file was opened by a record finder \
+                     rather than by a separator, so there is nothing to insert"
+                );
+            }
+            append_records_inner(
+                f,
+                data,
+                find,
+                None,
+                on_missing,
+                level,
+                records_per_frame,
+                trust_records_per_frame,
+                previous,
+            )
+        }
+    }
 }
 
 /// [`append_records`] with the record boundary as a finder.
@@ -408,50 +534,16 @@ pub fn append_records_with<F: Fn(&[u8]) -> Option<usize>>(
     level: i32,
     records_per_frame: Option<usize>,
 ) -> anyhow::Result<()> {
-    append_records_with_finder_opts(f, data, find, on_missing, level, records_per_frame, false)
-}
-
-/// [`append_records_with_opts`] with the record boundary as a finder.
-///
-/// Like [`append_records_with`], refuses [`OnMissingSeparator::Insert`]. The caller is
-/// responsible for the supplied count when `trust_records_per_frame` is true.
-///
-/// ```
-/// use seekzstdsep::{append_records_with_finder_opts, find::by_fixed, OnMissingSeparator};
-/// # let mut file = tempfile::tempfile()?;
-/// # seekzstdsep::convert_to_seekable_zst_reader(
-/// #     &b"a\nb\n"[..], &mut file, 16, true, b"\n", None)?;
-/// append_records_with_finder_opts(
-///     &mut file, &b"c\n"[..], by_fixed(2), OnMissingSeparator::Refuse, 0, Some(2), true,
-/// )?;
-/// # Ok::<(), anyhow::Error>(())
-/// ```
-#[inline(always)]
-pub fn append_records_with_finder_opts<F: Fn(&[u8]) -> Option<usize>>(
-    f: &mut File,
-    data: impl Read,
-    find: F,
-    on_missing: OnMissingSeparator,
-    level: i32,
-    records_per_frame: Option<usize>,
-    trust_records_per_frame: bool,
-) -> anyhow::Result<()> {
-    if on_missing == OnMissingSeparator::Insert {
-        bail!(
-            "refusing to insert a separator at the join: the file was opened by a record finder \
-             rather than by a separator, so there is nothing to insert"
-        );
-    }
-    append_records_inner(
+    append_records_with_opts(
         f,
         data,
-        find,
-        None,
+        b"",
         on_missing,
         level,
         records_per_frame,
-        trust_records_per_frame,
+        AppendOptions::new().with_finder(find),
     )
+    .map(|_| ())
 }
 
 /// The append both entry points make. `separator` is what [`OnMissingSeparator::Insert`] writes,
@@ -465,7 +557,8 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
     level: i32,
     records_per_frame: Option<usize>,
     trust_records_per_frame: bool,
-) -> anyhow::Result<()> {
+    previous: Option<&AppendResult>,
+) -> anyhow::Result<AppendResult> {
     if trust_records_per_frame && records_per_frame.is_none() {
         bail!("trust_records_per_frame requires a records per frame count");
     }
@@ -479,17 +572,26 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
     let mut reader = FrameReader::new(&*f, &table)?;
     // Replace the frame the last record is in; the set_len below drops the empty frames with it.
     let last = last_data_frame(&table)?;
+    let previous = previous.filter(|result| {
+        result.matches(&table, last).unwrap_or(false)
+            && records_per_frame.is_none_or(|n| n == result.records_per_frame)
+    });
+    let count_validated =
+        !trust_records_per_frame || previous.is_some_and(|result| result.count_validated);
     let n = match records_per_frame {
         Some(n) => {
             if table.frame_size_decomp(last)? == 0 {
                 bail!("refusing to append to a file with no data frames");
             }
-            if !trust_records_per_frame {
+            if !trust_records_per_frame && !previous.is_some_and(|result| result.count_validated) {
                 validate_records_per_frame(&mut reader, &find, last, n)?;
             }
             n
         }
-        None => validate_separator(&mut reader, &find)? as usize,
+        None => match previous.filter(|result| result.count_validated) {
+            Some(result) => result.records_per_frame,
+            None => validate_separator(&mut reader, &find)? as usize,
+        },
     };
 
     // Before anything is decoded, so that appending nothing costs one read and rewrites nothing.
@@ -505,7 +607,24 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
         read += got;
     }
     if read == 0 {
-        return Ok(());
+        return match previous {
+            Some(result) => Ok(AppendResult {
+                records_per_frame: n,
+                count_validated,
+                ..*result
+            }),
+            None => Ok(AppendResult {
+                records_per_frame: n,
+                count_validated,
+                frame_count: table.num_frames(),
+                last_frame: last,
+                last_comp: table.frame_size_comp(last)?,
+                last_decomp: table.frame_size_decomp(last)?,
+                last_records: None,
+                last_whole: false,
+                checksum: false,
+            }),
+        };
     }
     head.truncate(read);
 
@@ -522,10 +641,38 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
         );
     }
 
-    let checksum = frame_has_checksum(f, &table, last)?;
-    let mut tail = reader.read_frame(last)?;
+    let checksum = match previous.and_then(|result| result.last_records.map(|_| result.checksum)) {
+        Some(checksum) => checksum,
+        None => frame_has_checksum(f, &table, last)?,
+    };
+    let previously_full = previous
+        .and_then(|result| {
+            result
+                .last_records
+                .map(|count| count == n && result.last_whole)
+        })
+        .unwrap_or(false);
+    let mut tail = if previously_full {
+        Vec::new()
+    } else {
+        reader.read_frame(last)?
+    };
     drop(reader);
-    if !record::ends_whole(&tail, &find) {
+    let (old_count, old_whole) = if let Some(state) =
+        previous.and_then(|result| result.last_records.map(|count| (count, result.last_whole)))
+    {
+        state
+    } else {
+        let mut count = 0;
+        let mut end = 0;
+        for found in record::ends(&tail, &find) {
+            count += 1;
+            end = found;
+        }
+        (count, end == tail.len())
+    };
+    let mut inserted = false;
+    if !old_whole {
         match on_missing {
             OnMissingSeparator::Refuse => bail!(
                 "refusing to append to a file that does not end with a whole record: the first \
@@ -533,6 +680,7 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
             ),
             OnMissingSeparator::Insert => {
                 tail.extend_from_slice(separator.expect("Insert is refused without a separator"));
+                inserted = true;
                 if !record::ends_whole(&tail, &find) {
                     bail!(
                         "refusing to append: writing a separator leaves the fragment the file \
@@ -542,11 +690,19 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
             }
         }
     }
-    if trust_records_per_frame {
-        let count = record::count(&tail, &find);
+    if trust_records_per_frame && !previously_full {
+        let count = if inserted {
+            record::count(&tail, &find)
+        } else {
+            old_count
+        };
         if count > n {
             bail!("last data frame holds {count} records, which exceeds the supplied count {n}");
         }
+    }
+    let preserve_last = old_whole && old_count == n;
+    if preserve_last {
+        tail.clear();
     }
     tail.extend_from_slice(&head);
 
@@ -556,18 +712,27 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
     // The first frame holds the records the file already has, and they exist nowhere else between
     // the set_len below and the write that follows it. Compress it first, so that window is a
     // write rather than a compression.
-    let (first, whole) = match cutter.next_group()? {
-        Some(group) => (group, true),
-        None => (cutter.take_remainder(), false),
+    let (first, whole, mut last_records, mut last_whole) = match cutter.next_group()? {
+        Some(group) => (group, true, n, true),
+        None => {
+            let count = cutter.found;
+            let whole = cutter.stream.last_end() == cutter.stream.buffered().len();
+            (cutter.take_remainder(), false, count, whole)
+        }
     };
     let (first_bytes, first_comp, first_decomp) = encode_frame(&first, checksum, level)?;
 
-    let cut = table.frame_start_comp(last)?;
+    let kept_frames = last + u32::from(preserve_last);
+    let cut = if preserve_last {
+        table.frame_end_comp(last)?
+    } else {
+        table.frame_start_comp(last)?
+    };
     cut_at(f, cut)?;
     f.write_all(&first_bytes)?;
 
     let mut out = SeekTable::new();
-    log_frames(&mut out, &table, last)?;
+    log_frames(&mut out, &table, kept_frames)?;
     out.log_frame(first_comp, first_decomp)?;
 
     if whole {
@@ -578,8 +743,12 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
             encoder.end_frame()?;
             frames += 1;
         }
+        let remainder_count = cutter.found;
+        let remainder_whole = cutter.stream.last_end() == cutter.stream.buffered().len();
         let remainder = cutter.take_remainder();
         if !remainder.is_empty() {
+            last_records = remainder_count;
+            last_whole = remainder_whole;
             encoder.write_all(&remainder)?;
             encoder.end_frame()?;
             frames += 1;
@@ -598,7 +767,20 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
         }
     }
 
-    write_seek_table(f, out)
+    let new_last = out.num_frames() - 1;
+    let result = AppendResult {
+        records_per_frame: n,
+        count_validated,
+        frame_count: out.num_frames(),
+        last_frame: new_last,
+        last_comp: out.frame_size_comp(new_last)?,
+        last_decomp: out.frame_size_decomp(new_last)?,
+        last_records: Some(last_records),
+        last_whole,
+        checksum,
+    };
+    write_seek_table(f, out)?;
+    Ok(result)
 }
 
 /// Appends `cnt` records of `input`, starting at record `from`, to `f` as the frames they already

@@ -1,25 +1,28 @@
 mod common;
 
 use common::{assert_decompresses_to, assert_framing, compress_frames};
-use seekzstdsep::{OnMissingSeparator, append_records_with_finder_opts, append_records_with_opts};
+use seekzstdsep::{AppendOptions, OnMissingSeparator, append_records_with_opts};
 use std::fs::File;
 use std::path::Path;
 
 fn append(path: &Path, count: Option<usize>, trust: bool, finder: bool) -> anyhow::Result<()> {
     let mut file = File::options().read(true).write(true).open(path)?;
     if finder {
-        append_records_with_finder_opts(
+        append_records_with_opts(
             &mut file,
             &b"d\ne\n"[..],
-            |data| {
-                assert!(!data.contains(&b'a'), "read a frame before the tail");
-                data.iter().position(|&b| b == b'\n').map(|i| i + 1)
-            },
+            b"\n",
             OnMissingSeparator::Refuse,
             0,
             count,
-            trust,
+            AppendOptions::new()
+                .with_finder(|data: &[u8]| {
+                    assert!(!data.contains(&b'a'), "read a frame before the tail");
+                    data.iter().position(|&b| b == b'\n').map(|i| i + 1)
+                })
+                .trust_records_per_frame(trust),
         )
+        .map(|_| ())
     } else {
         append_records_with_opts(
             &mut file,
@@ -28,8 +31,9 @@ fn append(path: &Path, count: Option<usize>, trust: bool, finder: bool) -> anyho
             OnMissingSeparator::Refuse,
             0,
             count,
-            trust,
+            AppendOptions::new().trust_records_per_frame(trust),
         )
+        .map(|_| ())
     }
 }
 
@@ -116,7 +120,7 @@ fn inserting_separator_cannot_exceed_trusted_count() {
         OnMissingSeparator::Insert,
         0,
         Some(2),
-        true,
+        AppendOptions::new().trust_records_per_frame(true),
     )
     .unwrap_err();
     assert!(error.to_string().contains("exceeds"), "{error}");
