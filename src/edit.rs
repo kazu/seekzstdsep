@@ -712,15 +712,16 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
     // The first frame holds the records the file already has, and they exist nowhere else between
     // the set_len below and the write that follows it. Compress it first, so that window is a
     // write rather than a compression.
-    let (first, whole, mut last_records, mut last_whole) = match cutter.next_group()? {
-        Some(group) => (group, true, n, true),
+    let (first_end, whole, mut last_records, mut last_whole) = match cutter.next_group()? {
+        Some(end) => (end, true, n, true),
         None => {
             let count = cutter.found;
             let whole = cutter.stream.last_end() == cutter.stream.buffered().len();
-            (cutter.take_remainder(), false, count, whole)
+            (cutter.stream.buffered().len(), false, count, whole)
         }
     };
-    let (first_bytes, first_comp, first_decomp) = encode_frame(&first, checksum, level)?;
+    let (first_bytes, first_comp, first_decomp) =
+        encode_frame(&cutter.stream.buffered()[..first_end], checksum, level)?;
 
     let kept_frames = last + u32::from(preserve_last);
     let cut = if preserve_last {
@@ -738,8 +739,8 @@ fn append_records_inner<F: Fn(&[u8]) -> Option<usize>>(
     if whole {
         let mut encoder = frame_encoder(&mut *f, checksum, level)?;
         let mut frames = 0;
-        while let Some(group) = cutter.next_group()? {
-            encoder.write_all(&group)?;
+        while let Some(end) = cutter.next_group()? {
+            encoder.write_all(&cutter.stream.buffered()[..end])?;
             encoder.end_frame()?;
             frames += 1;
         }
@@ -1093,15 +1094,16 @@ impl<R: Read, F: Fn(&[u8]) -> Option<usize>> Cutter<R, F> {
     }
 
     /// The next group, or `None` once what is left cannot fill one.
-    fn next_group(&mut self) -> anyhow::Result<Option<Vec<u8>>> {
+    fn next_group(&mut self) -> anyhow::Result<Option<usize>> {
+        if self.found == self.records {
+            self.stream.drop_to_last_end();
+            self.found = 0;
+        }
         loop {
             while let Some(end) = self.stream.next_end() {
                 self.found += 1;
                 if self.found == self.records {
-                    let group = self.stream.buffered()[..end].to_vec();
-                    self.stream.drop_to_last_end();
-                    self.found = 0;
-                    return Ok(Some(group));
+                    return Ok(Some(end));
                 }
             }
             if !self.stream.fill()? {

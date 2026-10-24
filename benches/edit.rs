@@ -212,6 +212,28 @@ fn append_to(c: &mut Criterion) {
         )
     });
 
+    let many_frames = body.repeat(16);
+    group.throughput(Throughput::Bytes(many_frames.len() as u64));
+    group.bench_function("records_many_frames", |b| {
+        b.iter_batched(
+            fresh,
+            |mut f| {
+                append_records_with_opts(
+                    &mut f,
+                    many_frames.as_slice(),
+                    SEPARATOR,
+                    OnMissingSeparator::Refuse,
+                    CompressionLevel::default(),
+                    Some(RECORDS_PER_FRAME),
+                    AppendOptions::new().trust_records_per_frame(true),
+                )
+                .expect("failed to append many frames")
+            },
+            BatchSize::PerIteration,
+        )
+    });
+    group.throughput(Throughput::Bytes(body.len() as u64));
+
     group.bench_function("records_trusted", |b| {
         b.iter_batched(
             fresh,
