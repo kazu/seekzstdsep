@@ -4739,7 +4739,7 @@ dependencies = [
 
 [[package]]
 name = "seekzstdsep"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "anyhow",
  "clap",
