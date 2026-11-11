@@ -9,7 +9,7 @@
 
 REMOTE ?= gh
 MASTER ?= master
-RUSTUP_TOOLCHAIN ?= 1.96.1
+RUSTUP_TOOLCHAIN ?= 1.97.1
 export RUSTUP_TOOLCHAIN
 
 .PHONY: ci hook changelog set-version tag push-release release release-plugin

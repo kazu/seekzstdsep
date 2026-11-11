@@ -6,8 +6,8 @@
 
 **Reads any record out of a compressed file without decompressing what comes before it.**
 
-`master` is the sole release branch and targets nushell 0.116. Historical plugin compatibility is
-marked by `nu_v.*` tags.
+`master` is the sole release branch and targets nushell 0.117. Historical plugin compatibility is
+marked by `nu_plugin_zstdsep-v*` tags.
 
 JSONL, CSV, TSV, logfmt — anything whose records are delimited by a fixed string. It ships as a
 command line tool and as a Rust library.

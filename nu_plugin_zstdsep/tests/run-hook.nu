@@ -11,10 +11,10 @@
 
 const TESTS = (path self | path dirname)
 
-# Where `cargo build` puts the plugin, release before debug.
+# Where `cargo build` puts the plugin. `make hook` builds debug, so prefer it.
 def plugin-binary []: nothing -> path {
     let target = (^cargo metadata --format-version 1 --no-deps | from json | get target_directory)
-    let candidates = ([release, debug] | each {|profile| $target | path join $profile nu_plugin_zstdsep })
+    let candidates = ([debug, release] | each {|profile| $target | path join $profile nu_plugin_zstdsep })
     let built = ($candidates | where {|bin| $bin | path exists })
     if ($built | is-empty) {
         error make { msg: $"no plugin binary at ($candidates | str join ' or '): cargo build -p nu_plugin_zstdsep first" }
